@@ -1,4 +1,3 @@
-
 console.log('[P2P] Loading Pluribit WebTorrent P2P module...');
 
 import WebTorrent from 'webtorrent';
@@ -6,35 +5,40 @@ import { Buffer } from 'buffer';
 import crypto from 'crypto-browserify';
 import pako from 'pako';
 
-// Ensure Buffer is available globally for WebTorrent
+// Ensure Buffer is available globally for WebTorrent, which expects it.
 if (typeof window !== 'undefined') {
     window.Buffer = Buffer;
 }
 
+/**
+ * PluribitP2P class manages the WebTorrent-based peer-to-peer network,
+ * handling block/snapshot distribution and real-time messaging for consensus.
+ */
 class PluribitP2P {
     constructor() {
         console.log('[P2P] Constructor called');
         this.client = null;
         this.handlers = new Map();
-        this.blockTorrents = new Map(); // height -> torrent
-        this.masterIndexTorrent = null;
+        this.blockTorrents = new Map();
         this.peerId = null;
-        this.knownBlocks = new Map(); // height -> magnetURI
+        this.knownBlocks = new Map();
+        this.knownSnapshots = new Map();
         this.pendingBlocks = new Set();
-        this.connectedWires = new Set(); // Track active wire connections
-        this.messageQueue = []; // Queue messages until wire protocol is ready
-        this.indexUpdateInterval = null;
+        this.connectedWires = new Set();
         this.peerDiscoveryInterval = null;
     }
 
+    /**
+     * Initializes the WebTorrent client and starts periodic tasks.
+     * This is the main entry point for activating the P2P layer.
+     * @returns {Promise<string>} A promise that resolves with the client's peer ID.
+     */
     async start() {
         console.log('[P2P] Starting WebTorrent-based P2P network...');
-        
         try {
-            // Create WebTorrent client with optimized settings
             this.client = new WebTorrent({
                 dht: true,
-                maxConns: 55,
+                maxConns: 55, // Default is 55
                 tracker: {
                     rtcConfig: {
                         iceServers: [
@@ -46,35 +50,26 @@ class PluribitP2P {
                 }
             });
 
-            // Generate a unique peer ID
             this.peerId = this.client.peerId.toString('hex');
             console.log('[P2P] WebTorrent client started with peer ID:', this.peerId);
 
-            // Set up error handling
-            this.client.on('error', (err) => {
-                console.error('[P2P] WebTorrent error:', err);
-                this.handleError(err);
-            });
+            // Set up global event listeners for the client
+            this.client.on('error', (err) => this.handleError(err));
+            this.client.on('torrent', (torrent) => this.setupTorrentHandlers(torrent));
 
-            // Set up torrent handlers
-            this.client.on('torrent', (torrent) => {
-                console.log('[P2P] Torrent ready:', torrent.name || torrent.infoHash);
-                this.setupTorrentHandlers(torrent);
-            });
-
-            // Join the master index torrent
-            await this.joinMasterIndex();
-
-            // Start periodic tasks
             this.startPeriodicTasks();
-
             return this.peerId;
+
         } catch (error) {
             console.error('[P2P] Failed to start WebTorrent client:', error);
             throw error;
         }
     }
-
+    
+    /**
+     * Returns a list of public WebTorrent trackers for peer discovery.
+     * @returns {string[]} An array of tracker URLs.
+     */
     getTrackers() {
         return [
             'wss://tracker.btorrent.xyz',
@@ -83,763 +78,345 @@ class PluribitP2P {
             'wss://tracker.files.fm:7073/announce'
         ];
     }
-
-    async joinMasterIndex() {
-        console.log('[P2P] Joining master index torrent...');
-        
-        // Well-known info hash for the master index
-        const MASTER_INDEX_INFOHASH = this.sha1('pluribit-block-index-v1');
-        const magnetURI = `magnet:?xt=urn:btih:${MASTER_INDEX_INFOHASH}&dn=pluribit-block-index-v1&tr=${this.getTrackers().map(t => encodeURIComponent(t)).join('&tr=')}`;
-        
-        return new Promise((resolve, reject) => {
-            const timeout = setTimeout(() => {
-                console.log('[P2P] Master index timeout - creating new index');
-                this.seedEmptyIndex();
-                resolve();
-            }, 10000); // 10 second timeout
-
-            this.masterIndexTorrent = this.client.add(magnetURI, {
-                path: '/tmp/pluribit-index',
-                destroyStoreOnDestroy: false
-            }, (torrent) => {
-                clearTimeout(timeout);
-                console.log('[P2P] Connected to master index torrent');
-                this.setupMasterIndexHandlers(torrent);
-                resolve();
-            });
-
-            this.masterIndexTorrent.on('error', (err) => {
-                clearTimeout(timeout);
-                console.error('[P2P] Master index error:', err);
-                this.seedEmptyIndex();
-                resolve();
-            });
-        });
-    }
-
-    setupMasterIndexHandlers(torrent) {
-        torrent.on('done', () => {
-            console.log('[P2P] Master index download complete');
-            this.loadBlockIndex();
-        });
-
-        torrent.on('download', (bytes) => {
-            console.log('[P2P] Master index progress:', (torrent.progress * 100).toFixed(1) + '%');
-        });
-
-        torrent.on('wire', (wire, addr) => {
-            console.log('[P2P] Master index peer connected:', addr || 'WebRTC');
-            this.setupWireProtocol(wire);
-        });
-
-        // If we already have the file, load it
-        if (torrent.done) {
-            this.loadBlockIndex();
-        }
-    }
-
-    seedEmptyIndex() {
-        const emptyIndex = {
-            version: 1,
-            blocks: {},
-            lastUpdate: Date.now(),
-            genesisHash: 'pluribit-genesis-2025'
-        };
-
-        const indexBuffer = Buffer.from(JSON.stringify(emptyIndex, null, 2));
-        const blob = new Blob([indexBuffer], { type: 'application/json' });
-        
-        // Create file for seeding
-        const file = new File([blob], 'index.json', { 
-            type: 'application/json',
-            lastModified: Date.now()
-        });
-        
-        // Seed with proper metadata
-        this.masterIndexTorrent = this.client.seed(file, {
-            name: 'pluribit-block-index-v1',
-            announce: this.getTrackers(),
-            private: false
-        }, (torrent) => {
-            console.log('[P2P] Seeding empty master index:', torrent.magnetURI);
-            this.setupMasterIndexHandlers(torrent);
-        });
-    }
-
-     async loadBlockIndex() {
-        if (!this.masterIndexTorrent || !this.masterIndexTorrent.files || !this.masterIndexTorrent.files[0]) {
-            console.log('[P2P] No index file available yet');
-            return;
-        }
-        const file = this.masterIndexTorrent.files[0];
-
-        // This helper function avoids code duplication
-        const processIndexBuffer = (buffer) => {
-            try {
-                const index = JSON.parse(buffer.toString());
-                console.log('[P2P] Loaded block index v' + index.version + ' with', Object.keys(index.blocks).length, 'blocks');
-                
-                Object.entries(index.blocks).forEach(([height, magnetURI]) => {
-                    const heightNum = parseInt(height);
-                    if (!this.knownBlocks.has(heightNum)) {
-                        this.knownBlocks.set(heightNum, magnetURI);
-                    }
-                });
-
-                const handler = this.handlers.get('BLOCK_HEIGHTS_KNOWN');
-                if (handler) {
-                    const heights = Array.from(this.knownBlocks.keys()).sort((a, b) => a - b);
-                    handler(heights);
-                }
-                this.syncMissingBlocks();
-            } catch (e) {
-                console.error('[P2P] Failed to parse index:', e);
-            }
-        };
-
-        // Check which type of file object we have
-        if (typeof file.getBuffer === 'function') {
-            // SCENARIO 1: We are a downloader (leecher)
-            console.log('[P2P] Reading index via getBuffer()...');
-            file.getBuffer((err, buffer) => {
-                if (err) return console.error('[P2P] Failed to read index via getBuffer:', err);
-                processIndexBuffer(buffer);
-            });
-        } else {
-            // SCENARIO 2: We are the original seeder
-            try {
-                console.log('[P2P] Reading index via arrayBuffer()...');
-                const buffer = await file.arrayBuffer(); // Use standard File API
-                processIndexBuffer(Buffer.from(buffer)); // Convert ArrayBuffer to Node.js-style Buffer
-            } catch (err) {
-                console.error('[P2P] Failed to read index via arrayBuffer:', err);
-            }
-        }
-    }
-
-    syncMissingBlocks() {
-        // Download any missing blocks in parallel (max 5 at a time)
-        const missingBlocks = [];
-        this.knownBlocks.forEach((magnetURI, height) => {
-            if (!this.blockTorrents.has(height) && !this.pendingBlocks.has(height)) {
-                missingBlocks.push({ height, magnetURI });
-            }
-        });
-
-        // Download in batches
-        const BATCH_SIZE = 5;
-        for (let i = 0; i < Math.min(BATCH_SIZE, missingBlocks.length); i++) {
-            const { height, magnetURI } = missingBlocks[i];
-            this.downloadBlock(height, magnetURI);
-        }
-    }
-
+    
+    /**
+     * Attaches generic event handlers to any new torrent instance.
+     * @param {object} torrent - The WebTorrent torrent instance.
+     */
     setupTorrentHandlers(torrent) {
-        torrent.on('wire', (wire, addr) => {
-            console.log('[P2P] Peer connected:', addr || 'WebRTC peer');
-            this.setupWireProtocol(wire);
-        });
-
-        torrent.on('error', (err) => {
-            console.error('[P2P] Torrent error:', err);
-        });
+        // The 'wire' event is the entry point for real-time communication
+        torrent.on('wire', (wire) => this.setupWireProtocol(wire));
+        torrent.on('error', (err) => console.error(`[P2P] Torrent error (${torrent.name}):`, err));
     }
 
+    /**
+     * Sets up the custom real-time message protocol on a new peer connection.
+     * @param {object} wire - The WebTorrent wire object representing a direct connection to a peer.
+     */
     setupWireProtocol(wire) {
-        // Implement custom wire protocol for real-time messages
-        const self = this;
+        if (this.connectedWires.has(wire)) return;
         
-        // Extended handshake for custom protocol
-        wire.use(function(wire) {
-            const name = 'pluribit_protocol';
-            
-            // Store reference to P2P instance
-            wire._p2p = self;
-            
-            wire.extendedHandshake.pluribit_protocol = {
-                version: 1,
-                peerId: self.peerId,
-                knownBlocks: Array.from(self.knownBlocks.keys())
-            };
+        const self = this;
+        const EXTENSION_NAME = 'pluribit_protocol_v2';
 
-            wire.on('extended', function(ext, buf) {
-                if (ext === 'pluribit_protocol') {
+        wire.use(function(wire) {
+            wire.on('extended', function(extensionName, buffer) {
+                if (extensionName === EXTENSION_NAME) {
                     try {
-                        const message = JSON.parse(buf.toString());
+                        const message = JSON.parse(buffer.toString());
                         self.handleWireMessage(message, wire);
                     } catch (e) {
-                        console.error('[P2P] Failed to parse wire message:', e);
+                        console.error('[P2P] Failed to parse incoming wire message:', e);
                     }
                 }
             });
 
-            // Send queued messages
-            if (self.messageQueue.length > 0) {
-                self.messageQueue.forEach(msg => {
-                    self.sendWireMessage(wire, msg);
-                });
-                self.messageQueue = [];
-            }
-
-            // Track this wire
-            self.connectedWires.add(wire);
-            
-            wire.on('close', () => {
-                self.connectedWires.delete(wire);
-            });
-
-            // Send initial block announcements
-            const announcements = {
-                type: 'BLOCK_ANNOUNCEMENTS',
-                blocks: Array.from(self.knownBlocks.entries())
+            // Bootstrap new peers by sending them our current state.
+            const syncMessage = {
+                type: 'INDEX_SYNC',
+                knownBlocks: Object.fromEntries(self.knownBlocks),
+                knownSnapshots: Object.fromEntries(self.knownSnapshots)
             };
-            self.sendWireMessage(wire, announcements);
+            self.sendWireMessage(wire, syncMessage, EXTENSION_NAME);
         });
+
+        this.connectedWires.add(wire);
+        wire.on('close', () => this.connectedWires.delete(wire));
     }
 
-    sendWireMessage(wire, message) {
-        if (!wire.destroyed) {
-            try {
-                const buf = Buffer.from(JSON.stringify(message));
-                wire.extended('pluribit_protocol', buf);
-            } catch (e) {
-                console.error('[P2P] Failed to send wire message:', e);
-            }
+    /**
+     * A low-level utility to send a JSON message to a specific peer.
+     * @param {object} wire - The wire connection to send the message over.
+     * @param {object} message - The JavaScript object to be sent.
+     * @param {string} extensionName - The name of the wire protocol extension.
+     */
+    sendWireMessage(wire, message, extensionName = 'pluribit_protocol_v2') {
+        if (wire.destroyed) return;
+        try {
+            wire.extended(extensionName, Buffer.from(JSON.stringify(message)));
+        } catch (e) {
+            console.error('[P2P] Failed to serialize and send wire message:', e);
         }
     }
-
+    
+    /**
+     * The central router for all incoming custom P2P messages.
+     * @param {object} message - The parsed JSON message from a peer.
+     * @param {object} wire - The wire connection the message came from.
+     */
     handleWireMessage(message, wire) {
-        console.log('[P2P] Received wire message:', message.type);
-        
         switch (message.type) {
-            case 'NEW_BLOCK':
+            case 'INDEX_SYNC':
+                // A peer sent its full index, let's sync up.
+                for (const [heightStr, magnetURI] of Object.entries(message.knownBlocks)) {
+                    const height = parseInt(heightStr);
+                    if (!this.knownBlocks.has(height)) {
+                        this.knownBlocks.set(height, magnetURI);
+                        this.downloadBlock(height, magnetURI);
+                    }
+                }
+                if (message.knownSnapshots) {
+                    for (const [heightStr, snapshotInfo] of Object.entries(message.knownSnapshots)) {
+                        const height = parseInt(heightStr);
+                        if (!this.knownSnapshots.has(height)) {
+                            this.knownSnapshots.set(height, snapshotInfo);
+                            console.log(`[P2P] Discovered UTXO snapshot for height #${height}.`);
+                        }
+                    }
+                }
+                break;
+
+            case 'BLOCK_ANNOUNCEMENT':
+                // A peer announced a single new block.
                 if (!this.knownBlocks.has(message.height)) {
                     this.knownBlocks.set(message.height, message.magnetURI);
                     this.downloadBlock(message.height, message.magnetURI);
                 }
                 break;
-                
-            case 'BLOCK_REQUEST':
-                message.heights.forEach(height => {
-                    if (this.knownBlocks.has(height)) {
-                        this.sendWireMessage(wire, {
-                            type: 'NEW_BLOCK',
-                            height: height,
-                            magnetURI: this.knownBlocks.get(height)
-                        });
-                    }
-                });
+
+            case 'SNAPSHOT_ANNOUNCEMENT':
+                 // A peer announced a single new UTXO snapshot.
+                 if (!this.knownSnapshots.has(message.height)) {
+                    this.knownSnapshots.set(message.height, message);
+                    console.log(`[P2P] Received announcement for new UTXO snapshot at height ${message.height}.`);
+                }
                 break;
-                
+
             case 'TRANSACTION':
-                const txHandler = this.handlers.get('TRANSACTION');
-                if (txHandler) txHandler(message);
-                break;
-                
-            case 'BLOCK_ANNOUNCEMENTS':
-                message.blocks.forEach(([height, magnetURI]) => {
-                    if (!this.knownBlocks.has(height)) {
-                        this.knownBlocks.set(height, magnetURI);
-                        this.downloadBlock(height, magnetURI);
-                    }
-                });
-                break;
-                
             case 'CANDIDATE':
-                const candidateHandler = this.handlers.get('CANDIDATE');
-                if (candidateHandler) candidateHandler(message);
-                break;
-                
             case 'VOTE':
-                const voteHandler = this.handlers.get('VOTE');
-                if (voteHandler) voteHandler(message);
+                // Delegate these messages to the main application logic in worker.js.
+                const handler = this.handlers.get(message.type);
+                if (handler) {
+                    handler(message);
+                } else {
+                    console.warn(`[P2P] No handler registered for message type: ${message.type}`);
+                }
                 break;
+            
+            default:
+                console.warn(`[P2P] Received unknown wire message type: ${message.type}`);
         }
     }
 
+    /**
+     * Creates and seeds a torrent for a new block, then announces it.
+     * @param {object} block - The full block object to be seeded.
+     * @returns {Promise<object>} A promise that resolves with the torrent object.
+     */
     async seedBlock(block) {
-        console.log('[P2P] Seeding block', block.height);
-
         const blockData = Buffer.from(JSON.stringify(block));
-        const blob = new Blob([blockData], { type: 'application/json' });
-        const file = new File([blob], `block-${block.height}.json`, { 
-            type: 'application/json',
-            lastModified: Date.now()
-        });
+        const file = new File([blockData], `block-${block.height}.json`, { type: 'application/json' });
         
-        return new Promise((resolve, reject) => {
-            const torrent = this.client.seed(file, {
-                name: `pluribit-block-${block.height}`,
-                announce: this.getTrackers(),
-                private: false
-            }, (torrent) => {
-                const magnetURI = torrent.magnetURI;
-                console.log('[P2P] Block', block.height, 'seeding with magnet:', magnetURI);
-                
-                // Store in our maps
+        return new Promise((resolve) => {
+            this.client.seed(file, { name: `pluribit-block-${block.height}`, announce: this.getTrackers() }, 
+            (torrent) => {
                 this.blockTorrents.set(block.height, torrent);
-                this.knownBlocks.set(block.height, magnetURI);
-                
-                // Update master index
-                this.updateMasterIndex(block.height, magnetURI);
-                
-                // Announce to connected peers
-                this.broadcastNewBlock(block.height, magnetURI);
-                
-                // Setup handlers
+                this.knownBlocks.set(block.height, torrent.magnetURI);
+                this.broadcast({ type: 'BLOCK_ANNOUNCEMENT', height: block.height, magnetURI: torrent.magnetURI });
                 this.setupTorrentHandlers(torrent);
-                
                 resolve(torrent);
             });
-
-            torrent.on('error', (err) => {
-                console.error('[P2P] Failed to seed block:', err);
-                reject(err);
-            });
         });
     }
 
+    /**
+     * Downloads a block from the network given its magnet URI.
+     * @param {number} height - The height of the block to download.
+     * @param {string} magnetURI - The magnet link for the block's torrent.
+     */
     async downloadBlock(height, magnetURI) {
-        if (this.blockTorrents.has(height) || this.pendingBlocks.has(height)) {
-            return; // Already have or downloading
-        }
+        if (this.blockTorrents.has(height) || this.pendingBlocks.has(height)) return;
 
-        console.log('[P2P] Downloading block', height);
         this.pendingBlocks.add(height);
-
-        const torrent = this.client.add(magnetURI, {
-            path: '/tmp/pluribit-blocks',
-            destroyStoreOnDestroy: false
-        });
-
-        torrent.on('ready', () => {
-            console.log('[P2P] Started downloading block', height);
-        });
+        const torrent = this.client.add(magnetURI, { path: '/tmp/pluribit-blocks' });
 
         torrent.on('done', () => {
-            console.log('[P2P] Block', height, 'download complete');
-            
+            this.pendingBlocks.delete(height);
             torrent.files[0].getBuffer((err, buffer) => {
-                if (err) {
-                    console.error('[P2P] Failed to read block:', err);
-                    this.pendingBlocks.delete(height);
-                    return;
-                }
-
+                if (err) return console.error('[P2P] Failed to read downloaded block:', err);
                 try {
                     const block = JSON.parse(buffer.toString());
                     this.blockTorrents.set(height, torrent);
-                    this.pendingBlocks.delete(height);
-
-                    // Notify handler
                     const handler = this.handlers.get('BLOCK_DOWNLOADED');
-                    if (handler) {
-                        handler({ block });
-                    }
-
-                    // Continue seeding
-                    console.log('[P2P] Now seeding block', height);
-                    
-                    // Setup handlers for this torrent
-                    this.setupTorrentHandlers(torrent);
-                    
-                    // Check for more blocks to download
-                    this.syncMissingBlocks();
+                    if (handler) handler({ block });
                 } catch (e) {
-                    console.error('[P2P] Failed to parse block:', e);
-                    this.pendingBlocks.delete(height);
+                    console.error('[P2P] Failed to parse downloaded block:', e);
                 }
             });
         });
 
         torrent.on('error', (err) => {
-            console.error('[P2P] Block download error:', err);
+            console.error(`[P2P] Error downloading block #${height}:`, err);
             this.pendingBlocks.delete(height);
         });
     }
 
-    broadcastNewBlock(height, magnetURI) {
-        const message = {
-            type: 'NEW_BLOCK',
-            height: height,
-            magnetURI: magnetURI,
-            timestamp: Date.now()
-        };
-
-        // Send to all connected wires
-        this.connectedWires.forEach(wire => {
-            this.sendWireMessage(wire, message);
-        });
-
-        console.log('[P2P] Broadcast new block to', this.connectedWires.size, 'peers');
-    }
-
+    /**
+     * Broadcasts a message to all currently connected peers.
+     * @param {object} data - The message object to broadcast.
+     */
     async broadcast(data) {
         const message = { ...data, timestamp: Date.now() };
-        
-        // If no wires connected yet, queue the message
-        if (this.connectedWires.size === 0) {
-            this.messageQueue.push(message);
-            console.log('[P2P] No peers connected, queued message');
-            return;
-        }
-
-        // Send to all connected wires
-        let sentCount = 0;
-        this.connectedWires.forEach(wire => {
-            if (!wire.destroyed) {
-                this.sendWireMessage(wire, message);
-                sentCount++;
-            }
-        });
-
-        console.log(`[P2P] Broadcast ${message.type} to ${sentCount} peers`);
+        if (this.connectedWires.size === 0) return;
+        this.connectedWires.forEach(wire => this.sendWireMessage(wire, message));
     }
 
-    updateMasterIndex(height, magnetURI) {
-        if (!this.masterIndexTorrent || !this.masterIndexTorrent.files[0]) {
-            console.log('[P2P] Master index not ready for update');
-            return;
-        }
-
-        // Read current index
-        this.masterIndexTorrent.files[0].getBuffer((err, buffer) => {
-            if (err) {
-                console.error('[P2P] Failed to read index for update:', err);
-                return;
-            }
-
-            try {
-                const index = JSON.parse(buffer.toString());
-                index.blocks[height] = magnetURI;
-                index.lastUpdate = Date.now();
-
-                // Create updated file
-                const updatedBuffer = Buffer.from(JSON.stringify(index, null, 2));
-                const blob = new Blob([updatedBuffer], { type: 'application/json' });
-                const file = new File([blob], 'index.json', { 
-                    type: 'application/json',
-                    lastModified: Date.now()
-                });
-
-                // Destroy old torrent
-                this.masterIndexTorrent.destroy(() => {
-                    // Re-seed with updated index
-                    this.masterIndexTorrent = this.client.seed(file, {
-                        name: 'pluribit-block-index-v1',
-                        announce: this.getTrackers(),
-                        private: false
-                    }, (torrent) => {
-                        console.log('[P2P] Master index updated with block', height);
-                        this.setupMasterIndexHandlers(torrent);
-                    });
-                });
-            } catch (e) {
-                console.error('[P2P] Failed to update index:', e);
-            }
-        });
-    }
-
+    /**
+     * Starts periodic tasks for network maintenance.
+     */
     startPeriodicTasks() {
-        // Periodic peer discovery
         this.peerDiscoveryInterval = setInterval(() => {
             const peerCount = this.getPeerCount();
+            // This log is still useful for monitoring.
             console.log('[P2P] Connected to', peerCount, 'unique peers');
             
-            // Re-announce torrents if peer count is low
-            if (peerCount < 3) {
-                [this.masterIndexTorrent, ...this.blockTorrents.values()].forEach(torrent => {
-                    if (torrent && !torrent.destroyed && typeof torrent.announce === 'function') {
-                        torrent.announce();
-                    }
-                });
+            // The WebTorrent client handles re-announcing automatically.
+            // The manual loop was incorrect and has been removed.
+            if (peerCount === 0) {
+                console.log('[P2P] No peers currently connected. Client will continue to announce to trackers automatically.');
             }
-        }, 30000); // Every 30 seconds
-
-        // Periodic index save
-        this.indexUpdateInterval = setInterval(() => {
-            if (this.masterIndexTorrent && this.masterIndexTorrent.files[0]) {
-                // Force a piece verification to ensure integrity
-                this.masterIndexTorrent.verify();
-            }
-        }, 60000); // Every minute
+        }, 30000);
     }
-
+    
+    /**
+     * Allows the main application (worker.js) to register callback handlers for message types.
+     * @param {string} type - The message type (e.g., 'TRANSACTION').
+     * @param {function} handler - The function to call when a message of that type is received.
+     */
     onMessage(type, handler) {
-        console.log('[P2P] Registering handler for:', type);
         this.handlers.set(type, handler);
     }
 
+    /**
+     * Gets the current number of unique connected peers.
+     * @returns {number} The count of unique peers.
+     */
     getPeerCount() {
         const uniquePeers = new Set();
-        
-        // Collect all unique peer IDs
-        const torrents = [this.masterIndexTorrent, ...this.blockTorrents.values()];
-        torrents.forEach(torrent => {
-            if (torrent && torrent.wires) {
-                torrent.wires.forEach(wire => {
-                    if (wire.peerId) {
-                        uniquePeers.add(wire.peerId.toString('hex'));
-                    }
-                });
-            }
-        });
-
+        this.client.torrents.forEach(t => t.wires.forEach(w => uniquePeers.add(w.peerId.toString('hex'))));
         return uniquePeers.size;
     }
 
-    sha1(str) {
-        return crypto.createHash('sha1').update(str).digest('hex');
-    }
-
+    /**
+     * A simple error handler for non-critical WebRTC/tracker issues.
+     * @param {Error} err - The error object.
+     */
     handleError(err) {
-        // Handle specific error types
-        if (err.message && err.message.includes('Ice connection failed')) {
-            console.log('[P2P] WebRTC connection failed, will retry via DHT');
-        } else if (err.message && err.message.includes('Signaling server')) {
-            console.log('[P2P] Tracker connection failed, continuing with DHT');
+        const msg = err.message || 'Unknown error';
+        if (msg.includes('Ice connection failed') || msg.includes('Signaling server')) {
+            console.warn('[P2P] A non-critical WebRTC/tracker connection issue occurred.');
+        } else {
+            console.error('[P2P] A critical WebTorrent error occurred:', err);
         }
     }
 
+    /**
+     * Gracefully stops the P2P client and all associated tasks.
+     * @returns {Promise<void>}
+     */
     async stop() {
         console.log('[P2P] Stopping P2P network...');
-        
-        // Clear intervals
-        if (this.peerDiscoveryInterval) {
-            clearInterval(this.peerDiscoveryInterval);
-        }
-        if (this.indexUpdateInterval) {
-            clearInterval(this.indexUpdateInterval);
-        }
-
-        // Destroy all torrents
+        if (this.peerDiscoveryInterval) clearInterval(this.peerDiscoveryInterval);
         if (this.client) {
-            await new Promise((resolve) => {
-                this.client.destroy((err) => {
-                    if (err) {
-                        console.error('[P2P] Error destroying client:', err);
-                    }
-                    console.log('[P2P] WebTorrent client stopped');
-                    resolve();
-                });
-            });
+            return new Promise(resolve => this.client.destroy(err => {
+                if (err) console.error('[P2P] Error destroying client:', err);
+                console.log('[P2P] WebTorrent client stopped');
+                resolve();
+            }));
         }
     }
-    
+
+    /**
+     * Creates and seeds a torrent for a new UTXO snapshot, then announces it.
+     * @param {object} snapshot - The full snapshot object.
+     * @returns {Promise<string>} A promise that resolves with the snapshot's magnet URI.
+     */
     async seedUTXOSnapshot(snapshot) {
-        console.log(`[P2P] Seeding UTXO snapshot at height ${snapshot.height}`);
+        const compressed = pako.deflate(JSON.stringify(snapshot));
+        const file = new File([compressed], `utxo-snapshot-${snapshot.height}.json.gz`, { type: 'application/gzip' });
         
-        // Compress the snapshot data
-        const snapshotData = JSON.stringify(snapshot);
-        const compressed = pako.deflate(snapshotData);
-        
-        // Create deterministic filename
-        const filename = `utxo-snapshot-${snapshot.height}.json.gz`;
-        const file = new File([compressed], filename, {
-            type: 'application/gzip',
-            lastModified: Date.now()
-        });
-        
-        // Seed with deterministic info hash
-        const infoHashBase = `pluribit-utxo-snapshot-${snapshot.height}`;
-        const infoHash = this.sha1(infoHashBase);
-        
-        return new Promise((resolve, reject) => {
-            const torrent = this.client.seed(file, {
-                name: `pluribit-utxo-${snapshot.height}`,
-                infoHash: infoHash,
-                announce: this.getTrackers(),
-                private: false
-            }, (torrent) => {
-                console.log(`[P2P] UTXO snapshot seeding: ${torrent.magnetURI}`);
-                
-                // Update master index with snapshot info
-                this.updateMasterIndexWithSnapshot(snapshot.height, torrent.magnetURI, {
-                    merkle_root: Array.from(snapshot.merkle_root),
+        return new Promise((resolve) => {
+            this.client.seed(file, { name: `pluribit-utxo-${snapshot.height}`, announce: this.getTrackers() }, 
+            (torrent) => {
+                const snapshotInfo = {
+                    type: 'SNAPSHOT_ANNOUNCEMENT',
+                    magnetURI: torrent.magnetURI,
+                    height: snapshot.height,
                     utxo_count: snapshot.utxos.length,
-                    compressed_size: compressed.byteLength,
-                    timestamp: snapshot.timestamp
-                });
-                
+                    timestamp: snapshot.timestamp,
+                    merkle_root: snapshot.merkle_root
+                };
+                this.knownSnapshots.set(snapshot.height, snapshotInfo);
+                this.broadcast(snapshotInfo);
                 this.setupTorrentHandlers(torrent);
                 resolve(torrent.magnetURI);
             });
-            
-            torrent.on('error', (err) => {
-                console.error('[P2P] Failed to seed UTXO snapshot:', err);
-                reject(err);
-            });
         });
     }
 
+    /**
+     * Gets the height of the latest snapshot this peer knows about.
+     * @returns {Promise<number>}
+     */
+    async getLatestSnapshotHeight() {
+        if (this.knownSnapshots.size === 0) return 0;
+        return Math.max(0, ...Array.from(this.knownSnapshots.keys()));
+    }
+
+    /**
+     * Gets the metadata for a snapshot at a specific height.
+     * @param {number} height - The height of the snapshot to look up.
+     * @returns {Promise<object|null>} The snapshot metadata or null if not found.
+     */
+    async getUTXOSnapshotInfo(height) {
+        return this.knownSnapshots.get(height) || null;
+    }
+
+    /**
+     * Downloads and decompresses a UTXO snapshot torrent.
+     * @param {number} height - The height of the snapshot to download.
+     * @returns {Promise<object>} A promise that resolves with the parsed snapshot object.
+     */
     async downloadUTXOSnapshot(height) {
-        console.log(`[P2P] Downloading UTXO snapshot at height ${height}`);
-        
-        // Get snapshot info from master index
-        const snapshotInfo = await this.getUTXOSnapshotInfo(height);
+        const snapshotInfo = this.knownSnapshots.get(height);
         if (!snapshotInfo) {
-            throw new Error(`No UTXO snapshot found for height ${height}`);
+            throw new Error(`No metadata found for snapshot at height ${height}.`);
         }
         
         return new Promise((resolve, reject) => {
-            const torrent = this.client.add(snapshotInfo.magnetURI, {
-                path: '/tmp/pluribit-snapshots',
-                destroyStoreOnDestroy: false
-            });
-            
-            torrent.on('ready', () => {
-                console.log(`[P2P] Started downloading UTXO snapshot ${height}`);
-            });
-            
+            const torrent = this.client.add(snapshotInfo.magnetURI, { path: '/tmp/pluribit-snapshots' });
             torrent.on('done', () => {
-                console.log(`[P2P] UTXO snapshot ${height} download complete`);
-                
                 torrent.files[0].getBuffer((err, buffer) => {
-                    if (err) {
-                        console.error('[P2P] Failed to read snapshot:', err);
-                        reject(err);
-                        return;
-                    }
-                    
+                    if (err) return reject(err);
                     try {
-                        // Decompress
                         const decompressed = pako.inflate(buffer, { to: 'string' });
                         const snapshot = JSON.parse(decompressed);
-                        
-                        // Verify merkle root matches
-                        const expectedRoot = new Uint8Array(snapshotInfo.merkle_root);
-                        const actualRoot = new Uint8Array(snapshot.merkle_root);
-                        
-                        if (!this.arraysEqual(expectedRoot, actualRoot)) {
-                            throw new Error('UTXO snapshot merkle root mismatch');
-                        }
-                        
-                        console.log(`[P2P] UTXO snapshot verified: ${snapshot.utxos.length} UTXOs`);
                         resolve(snapshot);
-                    } catch (e) {
-                        console.error('[P2P] Failed to parse snapshot:', e);
+                    } catch(e) {
                         reject(e);
                     }
                 });
             });
-            
-            torrent.on('error', (err) => {
-                console.error('[P2P] Snapshot download error:', err);
-                reject(err);
-            });
+            torrent.on('error', reject);
         });
     }
-
-      async updateMasterIndex(height, magnetURI) {
-        if (!this.masterIndexTorrent || !this.masterIndexTorrent.files[0]) {
-            console.log('[P2P] Master index not ready for update');
-            return;
-        }
-        const file = this.masterIndexTorrent.files[0];
-
-        // Helper function to process the update logic, avoiding duplication
-        const processUpdate = (buffer) => {
-            try {
-                const index = JSON.parse(buffer.toString());
-                index.blocks[height] = magnetURI;
-                index.lastUpdate = Date.now();
-
-                const updatedBuffer = Buffer.from(JSON.stringify(index, null, 2));
-                const blob = new Blob([updatedBuffer], { type: 'application/json' });
-                const updatedFile = new File([blob], 'index.json', {
-                    type: 'application/json',
-                    lastModified: Date.now()
-                });
-
-                // Destroy the old torrent and re-seed with the updated index
-                this.masterIndexTorrent.destroy(() => {
-                    this.masterIndexTorrent = this.client.seed(updatedFile, {
-                        name: 'pluribit-block-index-v1',
-                        announce: this.getTrackers(),
-                        private: false
-                    }, (torrent) => {
-                        console.log('[P2P] Master index updated with block', height);
-                        this.setupMasterIndexHandlers(torrent);
-                    });
-                });
-            } catch (e) {
-                console.error('[P2P] Failed to process index update:', e);
-            }
-        };
-        
-        // Check which type of file object we have
-        if (typeof file.getBuffer === 'function') {
-            // SCENARIO 1: We are a downloader (leecher)
-            file.getBuffer((err, buffer) => {
-                if (err) return console.error('[P2P] Failed to read index for update:', err);
-                processUpdate(buffer);
-            });
-        } else {
-            // SCENARIO 2: We are the original seeder
-            try {
-                const buffer = await file.arrayBuffer(); // Use standard File API
-                processUpdate(Buffer.from(buffer)); // Convert ArrayBuffer to Node.js-style Buffer
-            } catch (err) {
-                console.error('[P2P] Failed to read index for update via arrayBuffer:', err);
-            }
-        }
+    
+    /**
+     * A utility function to generate a SHA1 hash.
+     * @param {string} str - The input string.
+     * @returns {string} The SHA1 hash as a hex string.
+     */
+    sha1(str) {
+        return crypto.createHash('sha1').update(str).digest('hex');
     }
 
-    async getUTXOSnapshotInfo(height) {
-        if (!this.masterIndexTorrent || !this.masterIndexTorrent.files[0]) {
-            return null;
-        }
-        
-        return new Promise((resolve) => {
-            this.masterIndexTorrent.files[0].getBuffer((err, buffer) => {
-                if (err) {
-                    console.error('[P2P] Failed to read index:', err);
-                    resolve(null);
-                    return;
-                }
-                
-                try {
-                    const index = JSON.parse(buffer.toString());
-                    const snapshotInfo = index.utxo_snapshots?.[height];
-                    
-                    if (snapshotInfo) {
-                        resolve({
-                            magnetURI: snapshotInfo.magnet,
-                            ...snapshotInfo
-                        });
-                    } else {
-                        resolve(null);
-                    }
-                } catch (e) {
-                    console.error('[P2P] Failed to parse index:', e);
-                    resolve(null);
-                }
-            });
-        });
-    }
-
-    async getLatestSnapshotHeight() {
-        if (!this.masterIndexTorrent || !this.masterIndexTorrent.files[0]) {
-            return 0;
-        }
-        
-        return new Promise((resolve) => {
-            this.masterIndexTorrent.files[0].getBuffer((err, buffer) => {
-                if (err) {
-                    resolve(0);
-                    return;
-                }
-                
-                try {
-                    const index = JSON.parse(buffer.toString());
-                    resolve(index.latest_snapshot || 0);
-                } catch (e) {
-                    resolve(0);
-                }
-            });
-        });
-    }
-
+    /**
+     * A utility function to compare two Uint8Arrays.
+     * @param {Uint8Array} a - The first array.
+     * @param {Uint8Array} b - The second array.
+     * @returns {boolean} True if the arrays are equal.
+     */
     arraysEqual(a, b) {
         if (a.length !== b.length) return false;
         for (let i = 0; i < a.length; i++) {
@@ -847,9 +424,6 @@ class PluribitP2P {
         }
         return true;
     }
-    
-    
 }
 
-// Export the class as default
 export default PluribitP2P;

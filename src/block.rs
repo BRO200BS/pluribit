@@ -55,7 +55,7 @@ impl Block {
             vdf_proof: VDFProof { y: vec![], pi: vec![], l: vec![], r: vec![] },
             timestamp: 0,
             nonce: 0,
-            miner_id: "genesis".into(),
+            miner_id: "00000000000000000000656b995c9fec9ff94b554dc4aad46c06b71f94088c3c/2025-06-16 00:57:38 GMT +10//GENESIS".into(),
             difficulty: 1,
             finalization_data: None,
         }
