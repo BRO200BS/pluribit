@@ -143,7 +143,7 @@ impl Wallet {
                 inputs_to_spend.push(TransactionInput {
                     commitment: commitment_bytes,
                     merkle_proof,
-                    source_height: utxo.block_height, 
+                    source_height: current_height, 
                 });
                 input_utxos.push(utxo.clone());
                 false // Remove from available UTXOs
@@ -185,8 +185,8 @@ impl Wallet {
         }
 
         // 3. Create the Transaction Kernel
-        // The kernel excess is the difference between output and input blinding factors
-        let kernel_blinding = blinding_sum_out - blinding_sum_in;
+        // The kernel excess is the difference between input and output blinding factors
+        let kernel_blinding = blinding_sum_in - blinding_sum_out; 
         let kernel = TransactionKernel::new(kernel_blinding, fee)?;
 
         // 4. Assemble the final transaction

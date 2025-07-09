@@ -71,6 +71,8 @@ worker.on('message', (event) => {
             console.error(chalk.red.bold(`\n[WORKER ERROR] ${error}`));
             rl.prompt(true);
             break;
+            
+            
     }
 });
 
@@ -166,6 +168,15 @@ async function handleCommand(command, args) {
                 console.log(chalk.red('Error: No wallet loaded.'));
             } else {
                 worker.postMessage({ action: 'getBalance', walletId: loadedWalletId });
+            }
+            break;
+        case 'validator':
+            if (args[0] === 'on' && loadedWalletId) {
+                worker.postMessage({ action: 'setValidatorActive', active: true, validatorId: loadedWalletId });
+            } else if (args[0] === 'off') {
+                worker.postMessage({ action: 'setValidatorActive', active: false });
+            } else {
+                console.log('Usage: validator <on|off>');
             }
             break;
         default:

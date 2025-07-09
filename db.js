@@ -81,6 +81,34 @@ export async function loadWallet(walletId) {
     }
 }
 
+// --- VALIDATOR STATE FUNCTIONS ---
+export async function saveValidators(validators) {
+    await metaDb.put('validators', validators);
+}
+
+export async function loadValidators() {
+    try {
+        return await metaDb.get('validators');
+    } catch (error) {
+        if (error.code === 'LEVEL_NOT_FOUND') {
+            return null; // No validators saved yet
+        }
+        throw error;
+    }
+}
+
+export async function clearValidators() {
+    try {
+        await metaDb.del('validators');
+    } catch (error) {
+        if (error.code === 'LEVEL_NOT_FOUND') {
+            return; // Already cleared
+        }
+        throw error;
+    }
+}
+
+
 export async function walletExists(walletId) {
     return (await loadWallet(walletId)) !== null;
 }

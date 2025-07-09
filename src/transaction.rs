@@ -403,7 +403,8 @@ mod tests {
     fn test_transaction_roundtrip() {
         let _guard = TEST_MUTEX.lock().unwrap();
         // 0. Setup a clean environment for this test.
-        UTXO_SET.lock().unwrap().clear();
+        crate::blockchain::UTXO_SET.lock().unwrap().clear();
+
         let mut chain = crate::blockchain::Blockchain::new();
         let sender_wallet = Wallet::new();
         let recipient_wallet = Wallet::new();
@@ -448,7 +449,7 @@ mod tests {
 
         // c. Generate the Merkle proof for the input UTXO against the correct blockchain state.
         let proof = {
-            let utxo_set_map = UTXO_SET.lock().unwrap();
+            let utxo_set_map = crate::blockchain::UTXO_SET.lock().unwrap();
             let utxo_vec: Vec<(Vec<u8>, TransactionOutput)> = utxo_set_map.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
             crate::merkle::generate_utxo_proof(&input_utxo.commitment.to_bytes(), &utxo_vec).unwrap()
         }; // Lock is released here
@@ -526,50 +527,67 @@ fn test_transaction_hash() {
     tx3.kernel.fee = 20;
     assert_ne!(tx1.hash(), tx3.hash());
 }
-  #[test]
-fn test_verify_with_valid_merkle_proof() {
-    let _guard = TEST_MUTEX.lock().unwrap(); 
-    let mut chain = crate::blockchain::Blockchain::new();
-    let recipient_wallet = Wallet::new();
-    let recipient_pubkey_bytes = recipient_wallet.scan_pub.compress().to_bytes().to_vec();
 
-    // 2. Create a coinbase transaction with the CORRECT reward amount.
-    let correct_reward = crate::blockchain::get_current_base_reward(1);
-    let coinbase_tx = Transaction::create_coinbase(vec![(recipient_pubkey_bytes, correct_reward)]).unwrap();
+    #[test]
+    fn test_verify_with_valid_merkle_proof() {
+        // Helper function to clear globals if you have one, otherwise clear manually.
+        // This is good practice even for single test runs.
+        crate::blockchain::UTXO_SET.lock().unwrap().clear();
+        crate::blockchain::UTXO_ROOTS.lock().unwrap().clear();
+        *crate::BLOCKCHAIN.lock().unwrap() = crate::blockchain::Blockchain::new();
 
-    let mut block1 = crate::block::Block::genesis();
-    block1.height = 1;
-    block1.prev_hash = chain.get_latest_block().hash();
-    block1.transactions.push(coinbase_tx.clone());
+        let _guard = TEST_MUTEX.lock().unwrap();
 
-    let vdf = crate::vdf::VDF::new(2048).unwrap();
-    block1.vdf_proof = vdf.compute_with_proof(block1.prev_hash.as_bytes(), 10).unwrap();
-    for _ in 0..100000 {
-        if block1.is_valid_pow() {
-            break;
+        // 1. Lock the GLOBAL blockchain instance. Do not create a new local one.
+        let mut chain = crate::BLOCKCHAIN.lock().unwrap();
+
+        let recipient_wallet = Wallet::new();
+        let recipient_pubkey_bytes = recipient_wallet.scan_pub.compress().to_bytes().to_vec();
+
+        // Create the coinbase transaction
+        let correct_reward = crate::blockchain::get_current_base_reward(1);
+        let coinbase_tx = Transaction::create_coinbase(vec![(recipient_pubkey_bytes, correct_reward)]).unwrap();
+
+        let mut block1 = crate::block::Block::genesis();
+        block1.height = 1;
+        // 2. Use the global chain's tip to get the previous hash
+        block1.prev_hash = chain.get_latest_block().hash();
+        block1.transactions.push(coinbase_tx.clone());
+
+        // --- Mining logic ---
+        let vdf = crate::vdf::VDF::new(2048).unwrap();
+        block1.vdf_proof = vdf.compute_with_proof(block1.prev_hash.as_bytes(), 10).unwrap();
+        for _ in 0..100000 {
+            if block1.is_valid_pow() { break; }
+            block1.nonce += 1;
         }
-        block1.nonce += 1;
+        assert!(block1.is_valid_pow(), "Failed to find valid PoW in reasonable time");
+        // --- End Mining ---
+
+        // 3. Add the block to the GLOBAL chain instance. Its height will now be 1.
+        chain.add_block(block1.clone()).unwrap();
+
+        // 4. Setup the wallet and scan the blocks from the GLOBAL chain
+        let mut utxo_wallet = Wallet::new();
+        utxo_wallet.scan_priv = recipient_wallet.scan_priv;
+        utxo_wallet.spend_priv = recipient_wallet.spend_priv;
+        utxo_wallet.scan_pub = recipient_wallet.scan_pub;
+        utxo_wallet.spend_pub = recipient_wallet.spend_pub;
+        for block in &chain.blocks {
+            utxo_wallet.scan_block(block);
+        }
+        assert_eq!(utxo_wallet.balance(), correct_reward);
+
+        // 5. Release the lock on the global chain before creating the next transaction
+        drop(chain);
+
+        // 6. This call will now correctly read current_height=1 from the global chain
+        let spending_tx = utxo_wallet.create_transaction(correct_reward - 100, 10, &Wallet::new().scan_pub).unwrap();
+
+        // 7. Verification should now succeed
+        let utxo_set = crate::blockchain::UTXO_SET.lock().unwrap();
+        assert!(spending_tx.verify(None, Some(&utxo_set)).is_ok(), "Transaction with a valid merkle proof should be verified");
     }
-    assert!(block1.is_valid_pow(), "Failed to find valid PoW in reasonable time");
-    chain.add_block(block1).unwrap();
-
-    let mut utxo_wallet = Wallet::new();
-    utxo_wallet.scan_priv = recipient_wallet.scan_priv;
-    utxo_wallet.spend_priv = recipient_wallet.spend_priv;
-    utxo_wallet.scan_pub = recipient_wallet.scan_pub;
-    utxo_wallet.spend_pub = recipient_wallet.spend_pub;
-    for block in &chain.blocks {
-        utxo_wallet.scan_block(block);
-    }
-    // Assert the wallet has the correct, larger balance.
-    assert_eq!(utxo_wallet.balance(), correct_reward);
-
-    // Spend from the larger balance.
-    let spending_tx = utxo_wallet.create_transaction(correct_reward - 100, 10, &Wallet::new().scan_pub).unwrap();
-
-    let utxo_set = crate::blockchain::UTXO_SET.lock().unwrap();
-    assert!(spending_tx.verify(None, Some(&utxo_set)).is_ok(), "Transaction with a valid merkle proof should be verified");
-}
 
     #[test]
     fn test_verify_fails_with_invalid_merkle_proof() {

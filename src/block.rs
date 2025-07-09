@@ -35,9 +35,9 @@ pub struct ValidatorVote {
 pub struct Block {
     pub height: u64,
     pub prev_hash: String,
-    #[serde(default)]
+    //#[serde(default)]
     pub transactions: Vec<Transaction>,
-    #[serde(default)] 
+    //#[serde(default)] 
     pub vdf_proof: VDFProof,
     pub timestamp: u64,
     pub nonce: u64,

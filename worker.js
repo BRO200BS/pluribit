@@ -125,6 +125,12 @@ export async function main() {
                         log(`Could not get balance: ${e}`, 'error');
                     }
                     break;
+                case 'setValidatorActive':
+                    workerState.validatorActive = params.active;
+                    workerState.validatorId = params.active ? params.validatorId : null;
+                    log(`Validator mode ${params.active ? `activated for ${params.validatorId}` : 'deactivated'}.`, 'info');
+                    parentPort.postMessage({ type: 'validatorStatus', payload: { active: params.active } });
+                    break;
             }
         } catch (error) {
             log(`Error handling action '${action}': ${error.message}`, 'error');
@@ -167,6 +173,21 @@ async function initializeNetwork() {
         }
     }
     
+    // --- START FIX: LOAD AND RESTORE VALIDATOR STATE ---
+    log('Loading validator state from database...', 'info');
+    try {
+        const savedValidators = await db.loadValidators();
+        if (savedValidators && savedValidators.length > 0) {
+            await pluribit.restore_validators_from_persistence(savedValidators);
+            log(`Restored ${savedValidators.length} active validators.`, 'success');
+        } else {
+            log('No saved validators found. Starting with empty validator set.', 'info');
+        }
+    } catch (error) {
+        log(`Failed to load validator state: ${error.message}`, 'error');
+    }
+    // --- END FIX ---
+    
     await pluribit.calibrateVDF();
     await pluribit.init_vdf_clock(BigInt(TICKS_PER_CYCLE));
 
@@ -188,6 +209,17 @@ async function initializeNetwork() {
 
     parentPort.postMessage({ type: 'networkInitialized' });
     log('Network initialization complete.', 'success');
+}
+
+// Add helper function to save validator state whenever it changes
+async function saveValidatorState() {
+    try {
+        const validators = await pluribit.get_validators_for_persistence();
+        await db.saveValidators(validators);
+        log('Validator state saved to database.', 'info');
+    } catch (error) {
+        log(`Failed to save validator state: ${error.message}`, 'error');
+    }
 }
 
 async function handleRemoteTransaction({ tx }) {
@@ -293,7 +325,8 @@ async function startMining() {
 
     try {
         await acquireLock();
-        const nextHeight = (await pluribit.get_blockchain_state()).current_height + 1;
+        const nextHeight = Number((await pluribit.get_blockchain_state()).current_height) + 1;
+
         const submissionCheck = await pluribit.check_block_submission(BigInt(nextHeight));
         
         if (!submissionCheck.can_submit) {
@@ -332,7 +365,8 @@ async function startMining() {
                 log(`Finalizing bootstrap block #${currentHeight}...`, 'info');
                 try {
                     const newChainState = await pluribit.add_block_to_chain(miningResult.block);
-                    await db.saveChainState(newChainState);
+                    await db.saveBlock(miningResult.block);
+
                     log(`Block #${currentHeight} added to chain. New height: ${newChainState.current_height}`, 'success');
 
                     const minerWallet = workerState.wallets.get(workerState.minerId);
@@ -374,7 +408,8 @@ async function handleProvisionalCommitment() {
     
     try {
         const chainState = await pluribit.get_blockchain_state();
-        const targetHeight = chainState.current_height + 1;
+        const targetHeight = Number(chainState.current_height) + 1;
+
         
         const candidateHashes = validationState.candidateBlocks
             .filter(b => b.height === targetHeight)
@@ -388,7 +423,7 @@ async function handleProvisionalCommitment() {
         log(`Creating commitment for ${candidateHashes.length} candidate blocks...`, 'info');
         const commitment = await pluribit.create_candidate_commitment(
             workerState.validatorId,
-            targetHeight,
+            BigInt(targetHeight),
             candidateHashes
         );
 
@@ -405,46 +440,54 @@ async function handleProvisionalCommitment() {
 
 async function handleReconciliation() {
     if (!workerState.validatorActive || validationState.reconciled) return;
-    log('Validation: In Reconciliation sub-phase.', 'info');
-    
+
     try {
         const chainState = await pluribit.get_blockchain_state();
-        const targetHeight = chainState.current_height + 1;
+        const targetHeight = Number(chainState.current_height) + 1;
 
-        const candidatesAtHeight = validationState.candidateBlocks
-            .filter(b => b.height === targetHeight);
-        
-        if (candidatesAtHeight.length === 0) {
-            log('Reconciliation: No candidates to select from.', 'warn');
-            validationState.reconciled = true;
+
+        // 1. Get ALL unique block hashes that ANY validator has committed to.
+        // This is the crucial change to align with the whitepaper's reconciliation phase.
+        const allKnownHashes = new Set(await pluribit.get_all_known_blocks_from_commitments(BigInt(targetHeight)));
+        if (allKnownHashes.size === 0) {
+            log('Reconciliation: No candidate commitments received from network yet.', 'warn');
+            validationState.reconciled = true; // Mark as done for this cycle if no candidates exist.
             return;
         }
         
-        // Find the block with highest difficulty
-        let bestBlock = candidatesAtHeight[0];
-        let highestDifficulty = bestBlock.difficulty;
-        
-        for (const block of candidatesAtHeight) {
-            if (block.difficulty > highestDifficulty) {
-                bestBlock = block;
-                highestDifficulty = block.difficulty;
-            } else if (block.difficulty === highestDifficulty) {
-                // Tie-breaker: use lexicographically lowest hash
-                if (block.hash() < bestBlock.hash()) {
-                    bestBlock = block;
+        // 2. Filter our locally-known candidate blocks to only include those in the global set.
+        const reconcilableCandidates = validationState.candidateBlocks.filter(b => 
+            b.height === targetHeight && allKnownHashes.has(b.hash)
+        );
+
+        if (reconcilableCandidates.length === 0) {
+            log('Reconciliation: None of our local candidates are in the public commitment set.', 'warn');
+            validationState.reconciled = true;
+            return;
+        }
+
+        // 3. Find the best block from the RECONCILED set using the whitepaper's scoring.
+        // The scoring function is highest difficulty, with lowest hash as the tie-breaker.
+        let bestBlock = reconcilableCandidates[0];
+        for (let i = 1; i < reconcilableCandidates.length; i++) {
+            const candidate = reconcilableCandidates[i];
+            if (candidate.difficulty > bestBlock.difficulty) {
+                bestBlock = candidate;
+            } else if (candidate.difficulty === bestBlock.difficulty) {
+                if (candidate.hash < bestBlock.hash) {
+                    bestBlock = candidate;
                 }
             }
         }
         
-        validationState.selectedBlock = bestBlock.hash();
+        validationState.selectedBlock = bestBlock.hash;
+        log(`Reconciliation complete. Selected best global candidate: ${bestBlock.hash.substring(0, 16)}...`, 'success');
 
-        log(`Reconciliation complete. Selected block with difficulty ${highestDifficulty}: ${bestBlock.hash().substring(0, 16)}...`, 'success');
-        
     } catch(e) {
         log(`Error during reconciliation: ${e}`, 'error');
+    } finally {
+        validationState.reconciled = true;
     }
-    
-    validationState.reconciled = true;
 }
 
 async function handleVDFVoting() {
@@ -614,6 +657,7 @@ async function handleCreateStake({ walletId, amount }) {
         const lock_duration = 100; 
         log(`Creating stake lock for '${walletId}' with amount ${amount}...`, 'info');
         await pluribit.create_stake_lock(walletId, BigInt(amount), BigInt(lock_duration));
+        await saveValidatorState();
         log('Stake lock created and is pending activation. Run "activate_stake" to compute VDF and finalize.', 'success');
     } catch (e) {
         log(`Failed to create stake lock: ${e}`, 'error');
@@ -639,6 +683,9 @@ async function handleActivateStake({ walletId }) {
             spendPubKey,
             spendPrivKey
         );
+
+        await saveValidatorState();
+
         log(`Stake for '${walletId}' is now active!`, 'success');
 
     } catch (e) {
@@ -661,11 +708,31 @@ async function handleInitWallet({ walletId }) {
 
 async function handleLoadWallet({ walletId }) {
     const walletData = await db.loadWallet(walletId);
-    if (!walletData) return log(`Wallet '${walletId}' not found.`, 'error');
-    const walletJson = JSON.stringify(walletData);
+    if (!walletData) {
+        return log(`Wallet '${walletId}' not found.`, 'error');
+    }
+
+    let walletJson = JSON.stringify(walletData);
+
+    // --- START FIX ---
+    // After loading, scan the entire blockchain to update the wallet's state.
+    log(`Scanning blockchain for wallet '${walletId}'...`, 'info');
+    const allBlocks = await db.getAllBlocks();
+    for (const block of allBlocks) {
+        // The wallet_scan_block function from Rust returns the *updated* wallet JSON string.
+        walletJson = await pluribit.wallet_scan_block(walletJson, block);
+    }
+    // --- END FIX ---
+
+    // Save the newly synced wallet state back to the database.
+    const updatedWalletData = JSON.parse(walletJson);
+    await db.saveWallet(walletId, updatedWalletData);
+    
+    // Store the updated state in the worker and get the final balance.
     workerState.wallets.set(walletId, walletJson);
     const balance = await pluribit.wallet_get_balance(walletJson);
     const address = await pluribit.wallet_get_stealth_address(walletJson);
+    
     parentPort.postMessage({
         type: 'walletLoaded',
         payload: { walletId, balance, address }
