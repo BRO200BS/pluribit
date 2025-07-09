@@ -33,6 +33,9 @@ lazy_static! {
     /// Global UTXO set: maps compressed commitment bytes to their TransactionOutput
     pub static ref UTXO_SET: Mutex<HashMap<Vec<u8>, TransactionOutput>> =
         Mutex::new(HashMap::new());
+    /// Maps block height to UTXO merkle root at that height
+    pub static ref UTXO_ROOTS: Mutex<HashMap<u64, [u8; 32]>> = 
+        Mutex::new(HashMap::new());
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -181,6 +184,15 @@ impl Blockchain {
                     utxos.insert(out.commitment.clone(), out.clone());
                 }
             }
+            
+            // Calculate and store UTXO merkle root after this block
+            let utxo_vec: Vec<(Vec<u8>, TransactionOutput)> = utxos.iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect();
+            let merkle_root = Block::calculate_utxo_merkle_root(&utxo_vec);
+            
+            let mut roots = UTXO_ROOTS.lock().unwrap();
+            roots.insert(self.current_height + 1, merkle_root);
         }
 
         // 7. Append block & update maps/height
@@ -344,6 +356,7 @@ impl Blockchain {
         
         Ok(())
     }
+
     /// Calculate the total block reward based on consensus rules.
     fn calculate_block_reward(&self, height: u64, difficulty: u8, total_fees: u64) -> u64 {
         let base_reward = get_current_base_reward(height);
@@ -365,6 +378,40 @@ impl Blockchain {
         }
     }
 
+    /// Verify a block can be added at the current state
+    pub fn can_accept_block(&self, block: &Block) -> Result<(), PluribitError> {
+        // Height check
+        if block.height != self.current_height + 1 {
+            return Err(PluribitError::InvalidBlock(format!(
+                "Expected height {}, got {}",
+                self.current_height + 1,
+                block.height
+            )));
+        }
+        
+        // Parent check
+        if block.prev_hash != self.get_latest_block().hash() {
+            return Err(PluribitError::InvalidBlock(
+                "Block does not extend current chain tip".to_string()
+            ));
+        }
+        
+        // PoW check
+        if !block.is_valid_pow() {
+            return Err(PluribitError::InvalidBlock(
+                "Invalid proof of work".to_string()
+            ));
+        }
+        
+        // VDF check
+        if !block.has_valid_vdf_proof() {
+            return Err(PluribitError::InvalidBlock(
+                "Invalid VDF proof".to_string()
+            ));
+        }
+        
+        Ok(())
+    }
     
 }
 

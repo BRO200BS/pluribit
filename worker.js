@@ -24,8 +24,14 @@ const acquireLock = async () => {
 const releaseLock = () => {
     isLocked = false;
 };
-setLockFunctions(acquireLock, rel); // Note: 'rel' was a typo, should be releaseLock. Correcting it.
-function rel() { releaseLock(); } // Keep for compatibility with older p2p.js if needed.
+
+const reorgState = {
+    pendingForks: new Map(), // height -> Map(hash -> block)
+    requestedBlocks: new Set(), // hashes we've requested
+};
+
+setLockFunctions(acquireLock, rel); 
+function rel() { releaseLock(); } 
 
 
 // --- STATE ---
@@ -167,11 +173,13 @@ async function initializeNetwork() {
     workerState.p2p = new PluribitP2P(log);
     workerState.p2p.onMessage('CANDIDATE', handleRemoteCandidate);
     workerState.p2p.onMessage('CANDIDATE_COMMITMENT', handleRemoteCommitment);
-    workerState.p2p.onMessage('VOTE', handleRemoteVote);
+    workerState.p2p.onMessage('VOTE', handleRemoteVote);    
     workerState.p2p.onMessage('BLOCK_ANNOUNCEMENT', handleRemoteBlockAnnouncement);
     workerState.p2p.onMessage('BLOCK_DOWNLOADED', handleRemoteBlockDownloaded);
+    workerState.p2p.onMessage('BLOCK_REQUEST', handleBlockRequest);
+    workerState.p2p.onMessage('BLOCK_RESPONSE', handleBlockResponse);    
     workerState.p2p.onMessage('TRANSACTION', handleRemoteTransaction);
-
+       
     await workerState.p2p.start();
     log('P2P Network Started.', 'success');
 
@@ -570,21 +578,32 @@ async function handleRemoteBlockAnnouncement({ height, magnetURI }) {
 async function handleRemoteBlockDownloaded({ block }) {
     try {
         await acquireLock();
-        log(`Downloaded block #${block.height} from network.`, 'info');
-        const newChainState = await pluribit.add_block_to_chain(block);
-        await db.saveChainState(newChainState);
-        log(`Remote block #${block.height} added to chain. New height: ${newChainState.current_height}`, 'success');
+        
+        // First check if this might trigger a reorg
+        await handlePotentialReorg(block);
+        
+        const chainState = await pluribit.get_blockchain_state();
+        
+        // Only add if it extends our current chain
+        if (block.height === chainState.current_height + 1 && 
+            block.prev_hash === chainState.blocks[chainState.current_height].hash) {
+            
+            log(`Downloaded block #${block.height} from network.`, 'info');
+            const newChainState = await pluribit.add_block_to_chain(block);
+            await db.saveBlock(block);
+            log(`Remote block #${block.height} added to chain. New height: ${newChainState.current_height}`, 'success');
 
-        for (const [walletId, walletJson] of workerState.wallets.entries()) {
-             const updatedWalletJson = await pluribit.wallet_scan_block(walletJson, block);
-             if (updatedWalletJson !== walletJson) {
-                 workerState.wallets.set(walletId, updatedWalletJson);
-                 const newBalance = await pluribit.wallet_get_balance(updatedWalletJson);
-                 parentPort.postMessage({ type: 'walletBalance', payload: { wallet_id: walletId, balance: newBalance }});
-             }
+            for (const [walletId, walletJson] of workerState.wallets.entries()) {
+                const updatedWalletJson = await pluribit.wallet_scan_block(walletJson, block);
+                if (updatedWalletJson !== walletJson) {
+                    workerState.wallets.set(walletId, updatedWalletJson);
+                    const newBalance = await pluribit.wallet_get_balance(updatedWalletJson);
+                    parentPort.postMessage({ type: 'walletBalance', payload: { wallet_id: walletId, balance: newBalance }});
+                }
+            }
         }
     } catch (e) {
-        log(`Failed to add downloaded block: ${e}`, 'error');
+        log(`Failed to process downloaded block: ${e}`, 'error');
     } finally {
         releaseLock();
     }
@@ -661,40 +680,259 @@ async function handlePotentialReorg(newBlock) {
         const currentTip = chainState.blocks[chainState.blocks.length - 1];
         
         // Check if this creates a fork
-        if (newBlock.prev_hash !== currentTip.hash) {
-            log(`Fork detected at height ${newBlock.height}. Evaluating...`, 'warn');
+        if (newBlock.height <= chainState.current_height && 
+            newBlock.hash !== chainState.blocks[newBlock.height].hash) {
             
-            // Find common ancestor
-            let commonAncestorHeight = newBlock.height - 1;
-            while (commonAncestorHeight > 0) {
-                const ourBlock = chainState.blocks[commonAncestorHeight];
-                // We'd need to request blocks from peer here
-                // For now, assume we have the fork chain
-                commonAncestorHeight--;
+            log(`Fork detected at height ${newBlock.height}. Block hash: ${newBlock.hash.substring(0, 16)}...`, 'warn');
+            
+            // Store this fork block
+            if (!reorgState.pendingForks.has(newBlock.height)) {
+                reorgState.pendingForks.set(newBlock.height, new Map());
             }
+            reorgState.pendingForks.get(newBlock.height).set(newBlock.hash, newBlock);
             
-            // Calculate work for both chains
-            const ourWork = await pluribit.get_chain_work(chainState.blocks);
-            // const forkWork = await pluribit.get_chain_work(forkChain);
+            // Request parent blocks until we find common ancestor
+            await requestForkChain(newBlock);
+        } else if (newBlock.prev_hash !== currentTip.hash && newBlock.height === currentTip.height + 1) {
+            // This is a competing block at the next height
+            log(`Competing block received at height ${newBlock.height}`, 'info');
             
-            // if (forkWork > ourWork) {
-            //     log(`Reorganizing to chain with more work: ${forkWork} > ${ourWork}`, 'warn');
-            //     await performReorganization(commonAncestorHeight, forkChain);
-            // }
+            // Store as potential fork
+            if (!reorgState.pendingForks.has(newBlock.height)) {
+                reorgState.pendingForks.set(newBlock.height, new Map());
+            }
+            reorgState.pendingForks.get(newBlock.height).set(newBlock.hash, newBlock);
+            
+            // Request the parent to build the fork chain
+            await requestForkChain(newBlock);
         }
+    } catch (e) {
+        log(`Error in handlePotentialReorg: ${e}`, 'error');
     } finally {
         releaseLock();
     }
 }
 
-async function performReorganization(commonHeight, newChain) {
-    // This is complex - would need to:
-    // 1. Rewind blocks from current chain
-    // 2. Apply blocks from new chain
-    // 3. Update all wallets
-    // 4. Save to database
-    log(`Reorganization from height ${commonHeight} complete`, 'success');
+async function requestForkChain(tipBlock) {
+    let currentBlock = tipBlock;
+    const chainState = await pluribit.get_blockchain_state();
+    
+    while (currentBlock.height > 0) {
+        // Check if we have this block in our main chain
+        if (currentBlock.height <= chainState.current_height) {
+            const ourBlock = chainState.blocks[currentBlock.height];
+            if (ourBlock && ourBlock.hash === currentBlock.hash) {
+                // Found common ancestor
+                log(`Found common ancestor at height ${currentBlock.height}`, 'info');
+                await evaluateFork(currentBlock.height, tipBlock);
+                return;
+            }
+        }
+        
+        // Request parent if we don't have it
+        if (!reorgState.requestedBlocks.has(currentBlock.prev_hash)) {
+            reorgState.requestedBlocks.add(currentBlock.prev_hash);
+            if (workerState.p2p) {
+                workerState.p2p.broadcast({
+                    type: 'BLOCK_REQUEST',
+                    hash: currentBlock.prev_hash,
+                    height: currentBlock.height - 1
+                });
+            }
+            return; // Wait for response
+        }
+        
+        // Check if we have the parent in our fork cache
+        const parentBlocks = reorgState.pendingForks.get(currentBlock.height - 1);
+        if (parentBlocks && parentBlocks.has(currentBlock.prev_hash)) {
+            currentBlock = parentBlocks.get(currentBlock.prev_hash);
+        } else {
+            // Parent not yet received, wait
+            return;
+        }
+    }
 }
+
+async function evaluateFork(commonAncestorHeight, forkTip) {
+    try {
+        const chainState = await pluribit.get_blockchain_state();
+        
+        // Build the fork chain from common ancestor to tip
+        const forkChain = [];
+        let currentBlock = forkTip;
+        
+        while (currentBlock.height > commonAncestorHeight) {
+            forkChain.unshift(currentBlock);
+            
+            const parentBlocks = reorgState.pendingForks.get(currentBlock.height - 1);
+            if (!parentBlocks || !parentBlocks.has(currentBlock.prev_hash)) {
+                log(`Fork chain incomplete, missing block at height ${currentBlock.height - 1}`, 'error');
+                return;
+            }
+            currentBlock = parentBlocks.get(currentBlock.prev_hash);
+        }
+        
+        // Calculate work for both chains
+        const ourChainSegment = chainState.blocks.slice(commonAncestorHeight + 1);
+        const ourWork = await pluribit.get_chain_work(ourChainSegment);
+        const forkWork = await pluribit.get_chain_work(forkChain);
+        
+        log(`Chain work comparison - Our chain: ${ourWork}, Fork: ${forkWork}`, 'info');
+        
+        if (forkWork > ourWork) {
+            log(`Fork has more work (${forkWork} > ${ourWork}). Initiating reorganization...`, 'warn');
+            await performReorganization(commonAncestorHeight, forkChain);
+        } else {
+            log(`Our chain has more work. Keeping current chain.`, 'info');
+            // Clean up fork blocks we don't need
+            cleanupForkCache(commonAncestorHeight);
+        }
+    } catch (e) {
+        log(`Error evaluating fork: ${e}`, 'error');
+    }
+}
+
+async function performReorganization(commonAncestorHeight, newChain) {
+    try {
+        log(`Starting reorganization from height ${commonAncestorHeight}`, 'warn');
+        
+        const chainState = await pluribit.get_blockchain_state();
+        const blocksToRewind = [];
+        
+        // 1. Collect blocks to rewind
+        for (let height = chainState.current_height; height > commonAncestorHeight; height--) {
+            const block = chainState.blocks[height];
+            if (block) {
+                blocksToRewind.push(block);
+            }
+        }
+        
+        // 2. Rewind the chain in Rust
+        log(`Rewinding ${blocksToRewind.length} blocks...`, 'info');
+        for (const block of blocksToRewind) {
+            await pluribit.rewind_block(block);
+            
+            // Update wallets - remove any UTXOs from this block
+            for (const [walletId, walletJson] of workerState.wallets.entries()) {
+                const updatedWallet = await pluribit.wallet_unscan_block(walletJson, block);
+                if (updatedWallet !== walletJson) {
+                    workerState.wallets.set(walletId, updatedWallet);
+                    const newBalance = await pluribit.wallet_get_balance(updatedWallet);
+                    parentPort.postMessage({ 
+                        type: 'walletBalance', 
+                        payload: { wallet_id: walletId, balance: newBalance }
+                    });
+                }
+            }
+        }
+        
+        // 3. Apply new blocks from fork
+        log(`Applying ${newChain.length} blocks from fork...`, 'info');
+        for (const block of newChain) {
+            const result = await pluribit.add_block_to_chain(block);
+            await db.saveBlock(block);
+            
+            // Update wallets - scan for new UTXOs
+            for (const [walletId, walletJson] of workerState.wallets.entries()) {
+                const updatedWallet = await pluribit.wallet_scan_block(walletJson, block);
+                if (updatedWallet !== walletJson) {
+                    workerState.wallets.set(walletId, updatedWallet);
+                    const newBalance = await pluribit.wallet_get_balance(updatedWallet);
+                    parentPort.postMessage({ 
+                        type: 'walletBalance', 
+                        payload: { wallet_id: walletId, balance: newBalance }
+                    });
+                }
+            }
+            
+            log(`Applied block #${block.height} from fork`, 'success');
+        }
+        
+        // 4. Clean up fork cache
+        cleanupForkCache(newChain[newChain.length - 1].height);
+        
+        // 5. Broadcast our new tip
+        const newTip = newChain[newChain.length - 1];
+        if (workerState.p2p) {
+            workerState.p2p.broadcast({
+                type: 'BLOCK_ANNOUNCEMENT',
+                height: newTip.height,
+                hash: newTip.hash
+            });
+        }
+        
+        log(`Reorganization complete. New chain tip at height ${newTip.height}`, 'success');
+        
+    } catch (e) {
+        log(`Critical error during reorganization: ${e}`, 'error');
+    }
+}
+
+function cleanupForkCache(keepAboveHeight) {
+    const heights = Array.from(reorgState.pendingForks.keys());
+    for (const height of heights) {
+        if (height <= keepAboveHeight) {
+            reorgState.pendingForks.delete(height);
+        }
+    }
+    reorgState.requestedBlocks.clear();
+}
+
+async function handleBlockRequest({ hash, height }) {
+    try {
+        await acquireLock();
+        const chainState = await pluribit.get_blockchain_state();
+        
+        // Check if we have this block
+        if (height < chainState.blocks.length) {
+            const block = chainState.blocks[height];
+            if (block && block.hash === hash) {
+                // Send the block to peers
+                if (workerState.p2p) {
+                    workerState.p2p.broadcast({
+                        type: 'BLOCK_RESPONSE',
+                        block: block
+                    });
+                }
+            }
+        }
+    } catch (e) {
+        log(`Error handling block request: ${e}`, 'error');
+    } finally {
+        releaseLock();
+    }
+}
+
+async function handleBlockResponse({ block }) {
+    try {
+        await acquireLock();
+        
+        // Store the block in our fork cache
+        if (!reorgState.pendingForks.has(block.height)) {
+            reorgState.pendingForks.set(block.height, new Map());
+        }
+        reorgState.pendingForks.get(block.height).set(block.hash, block);
+        
+        // Remove from requested set
+        reorgState.requestedBlocks.delete(block.hash);
+        
+        // Continue building fork chain if needed
+        const forkBlocks = Array.from(reorgState.pendingForks.values())
+            .flatMap(m => Array.from(m.values()));
+        
+        for (const forkBlock of forkBlocks) {
+            if (forkBlock.prev_hash === block.hash) {
+                await requestForkChain(forkBlock);
+                break;
+            }
+        }
+    } catch (e) {
+        log(`Error handling block response: ${e}`, 'error');
+    } finally {
+        releaseLock();
+    }
+}
+
 
 async function handleCreateTransaction({ from, to, amount, fee }) {
     const fromWalletJson = workerState.wallets.get(from);

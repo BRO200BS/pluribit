@@ -322,7 +322,7 @@ mod tests {
         let excess1 = mimblewimble::commit(30, &kernel_blinding1).unwrap(); // fee*H + kernel_blinding*G
         
         let tx1 = Transaction {
-            inputs: vec![TransactionInput { commitment: c1_commitment_bytes.clone() }],
+            inputs: vec![TransactionInput { commitment: c1_commitment_bytes.clone(), merkle_proof: None }],
             outputs: vec![TransactionOutput { 
                 commitment: c2_point.compress().to_bytes().to_vec(), 
                 range_proof: vec![1; 100], // Dummy proof
@@ -344,7 +344,7 @@ mod tests {
         let excess2 = mimblewimble::commit(10, &kernel_blinding2).unwrap();
         
         let tx2 = Transaction {
-            inputs: vec![TransactionInput { commitment: c2_point.compress().to_bytes().to_vec() }],
+            inputs: vec![TransactionInput { commitment: c2_point.compress().to_bytes().to_vec(), merkle_proof: None }],
             outputs: vec![TransactionOutput { 
                 commitment: c3_point.compress().to_bytes().to_vec(), 
                 range_proof: vec![2; 100], // Dummy proof

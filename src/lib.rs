@@ -38,6 +38,8 @@ pub mod staking;
 pub mod stealth;
 pub mod wallet;
 pub mod address;
+pub mod merkle;
+
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct StakeLockTransaction {
@@ -165,6 +167,11 @@ lazy_static! {
 
         // Queue of pending staking rewards to be included in next block
     static ref PENDING_REWARDS: Mutex<Vec<(String, u64)>> = Mutex::new(Vec::new());
+    
+    // Cache of recent UTXOs for fast recovery during reorgs
+    // Maps commitment -> (height, TransactionOutput)
+    static ref RECENT_UTXO_CACHE: Mutex<HashMap<Vec<u8>, (u64, TransactionOutput)>> = 
+        Mutex::new(HashMap::new());
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -2442,6 +2449,211 @@ pub fn get_chain_work(blocks_json: JsValue) -> Result<u64, JsValue> {
     Ok(blockchain::Blockchain::get_chain_work(&blocks))
 }
 
+
+
+
+#[wasm_bindgen]
+pub fn rewind_block(block_js: JsValue) -> Result<(), JsValue> {
+    let block: Block = serde_wasm_bindgen::from_value(block_js)?;
+    
+    let mut chain = BLOCKCHAIN.lock().unwrap();
+    
+    // Verify this is the tip
+    if chain.current_height != block.height {
+        return Err(JsValue::from_str(&format!(
+            "Can only rewind from tip. Current height: {}, block height: {}",
+            chain.current_height, block.height
+        )));
+    }
+    
+    // First, restore all inputs (spent UTXOs) back to the UTXO set
+    {
+        let mut utxo_set = blockchain::UTXO_SET.lock().unwrap();
+        let mut global_utxo_set = UTXO_SET.lock().unwrap();
+        let mut cache = RECENT_UTXO_CACHE.lock().unwrap();
+        
+        for tx in &block.transactions {
+            // Skip coinbase transactions
+            if tx.inputs.is_empty() {
+                continue;
+            }
+            
+            for input in &tx.inputs {
+                // First check cache
+                if let Some((height, output)) = cache.get(&input.commitment) {
+                    utxo_set.insert(input.commitment.clone(), output.clone());
+                    global_utxo_set.insert(input.commitment.clone(), UTXO {
+                        commitment: input.commitment.clone(),
+                        range_proof: output.range_proof.clone(),
+                        block_height: *height,
+                        index: 0,
+                    });
+                    log(&format!("[RUST] Restored UTXO from cache at height {}", height));
+                    continue;
+                }
+                
+                // If input has merkle proof, we can verify it existed
+                if let Some(proof) = &input.merkle_proof {
+                    // Verify the proof against the previous block's UTXO root
+                    let roots = blockchain::UTXO_ROOTS.lock().unwrap();
+                    if let Some(root) = roots.get(&(block.height - 1)) {
+                        if !proof.verify(root) {
+                            log(&format!("[RUST] Warning: Invalid merkle proof for input"));
+                        }
+                    }
+                }
+                
+                // Still need to search for the actual output data
+                // But with proof, we know it must exist somewhere
+                let mut found = false;
+                
+                // Search backwards through the chain
+                for search_height in (0..block.height).rev() {
+                    if let Some(search_block) = chain.blocks.get(search_height as usize) {
+                        for search_tx in &search_block.transactions {
+                            for search_output in &search_tx.outputs {
+                                if search_output.commitment == input.commitment {
+                                    // Found the output that was spent
+                                    utxo_set.insert(input.commitment.clone(), search_output.clone());
+                                    
+                                    global_utxo_set.insert(input.commitment.clone(), UTXO {
+                                        commitment: input.commitment.clone(),
+                                        range_proof: search_output.range_proof.clone(),
+                                        block_height: search_height,
+                                        index: 0,
+                                    });
+                                    
+                                    // Add to cache for future reorgs
+                                    cache.insert(
+                                        input.commitment.clone(),
+                                        (search_height, search_output.clone())
+                                    );
+                                    
+                                    found = true;
+                                    break;
+                                }
+                            }
+                            if found { break; }
+                        }
+                    }
+                    if found { break; }
+                }
+                
+                if !found {
+                    log(&format!("[RUST] Warning: Could not find source output for input {:?}", 
+                        hex::encode(&input.commitment[..8])));
+                }
+            }
+            
+            // Remove outputs created by this block
+            for output in &tx.outputs {
+                utxo_set.remove(&output.commitment);
+                global_utxo_set.remove(&output.commitment);
+                cache.remove(&output.commitment);
+            }
+        }
+        
+        // Prune cache if it gets too large (keep last 1000 entries)
+        if cache.len() > 1000 {
+            let mut entries: Vec<_> = cache.drain().collect();
+            entries.sort_by_key(|(_, (height, _))| *height);
+            entries.reverse();
+            entries.truncate(1000);
+            *cache = entries.into_iter().collect();
+        }
+    }
+    
+    // Remove UTXO root for this height
+    {
+        let mut roots = blockchain::UTXO_ROOTS.lock().unwrap();
+        roots.remove(&block.height);
+    }
+    
+    // Remove block from chain
+    chain.blocks.pop();
+    chain.block_by_hash.remove(&block.hash());
+    chain.current_height -= 1;
+    
+    // Recalculate difficulty if needed
+    if chain.current_height > 0 && 
+       chain.current_height % constants::DIFFICULTY_ADJUSTMENT_INTERVAL == 0 {
+        chain.current_difficulty = chain.calculate_next_difficulty();
+    }
+    
+    // Clear any consensus state related to this height
+    {
+        let mut votes = BLOCK_VOTES.lock().unwrap();
+        votes.remove(&block.height);
+    }
+    {
+        let mut commitments = CANDIDATE_COMMITMENTS.lock().unwrap();
+        commitments.remove(&block.height);
+    }
+    {
+        let mut selections = FINAL_SELECTIONS.lock().unwrap();
+        selections.remove(&block.height);
+    }
+    {
+        let mut candidates = CANDIDATE_BLOCKS.lock().unwrap();
+        candidates.remove(&block.height);
+    }
+    
+    // Return transactions to the mempool (except coinbase)
+    {
+        let mut tx_pool = TX_POOL.lock().unwrap();
+        for tx in block.transactions {
+            if !tx.inputs.is_empty() { // Skip coinbase
+                // Verify the transaction is still valid before adding back
+                match tx.verify(None) {
+                    Ok(_) => {
+                        tx_pool.pending.push(tx.clone());
+                        tx_pool.fee_total += tx.kernel.fee;
+                    }
+                    Err(e) => {
+                        log(&format!("[RUST] Not returning tx to pool: {:?}", e));
+                    }
+                }
+            }
+        }
+    }
+    
+    log(&format!("[RUST] Successfully rewound block at height {}", block.height));
+    Ok(())
+}
+
+#[wasm_bindgen]
+pub fn wallet_unscan_block(wallet_json: &str, block_js: JsValue) -> Result<String, JsValue> {
+    let mut wallet: Wallet = serde_json::from_str(wallet_json)
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+    let block: Block = serde_wasm_bindgen::from_value(block_js)?;
+    
+    // We need to remove any UTXOs that came from this block
+    // First, collect all output commitments from this block
+    let mut block_commitments = HashSet::new();
+    for tx in &block.transactions {
+        for output in &tx.outputs {
+            block_commitments.insert(output.commitment.clone());
+        }
+    }
+    
+    // Remove any owned UTXOs that match commitments from this block
+    let initial_count = wallet.owned_utxos.len();
+    wallet.owned_utxos.retain(|utxo| {
+        !block_commitments.contains(&utxo.commitment.to_bytes().to_vec())
+    });
+    
+    let removed_count = initial_count - wallet.owned_utxos.len();
+    if removed_count > 0 {
+        log(&format!("[RUST] Removed {} UTXOs from wallet during unscan of block {}", 
+            removed_count, block.height));
+    }
+    
+    serde_json::to_string(&wallet)
+        .map_err(|e| JsValue::from_str(&e.to_string()))
+}
+
+
+
 #[wasm_bindgen]
 pub fn store_network_vote(
     validator_id: String,
@@ -2456,6 +2668,15 @@ pub fn store_network_vote(
     let mut votes = BLOCK_VOTES.lock().unwrap();
     let height_votes = votes.entry(block_height).or_insert_with(HashMap::new);
     
+    // Check for double voting
+    if let Some(existing_vote) = height_votes.get(&validator_id) {
+        if existing_vote.block_hash != block_hash {
+            log(&format!("[RUST] WARNING: Validator {} attempting double vote at height {}", 
+                validator_id, block_height));
+            return Err(JsValue::from_str("Double vote detected"));
+        }
+    }
+    
     let vote_data = VoteData {
         block_hash,
         stake_amount,
@@ -2464,7 +2685,11 @@ pub fn store_network_vote(
         timestamp: js_sys::Date::now() as u64,
     };
     
-    height_votes.insert(validator_id, vote_data);
+    height_votes.insert(validator_id.clone(), vote_data);
+    
+    log(&format!("[RUST] Stored vote from {} for block at height {}", 
+        validator_id, block_height));
+    
     Ok(())
 }
 
@@ -2476,9 +2701,88 @@ pub fn store_candidate_block(
 ) -> Result<(), JsValue> {
     let block: Block = serde_wasm_bindgen::from_value(block_js)?;
     
+    // Verify the block is valid before storing
+    if !block.is_valid_pow() {
+        return Err(JsValue::from_str("Invalid PoW"));
+    }
+    
+    if block.height != height {
+        return Err(JsValue::from_str("Height mismatch"));
+    }
+    
+    if block.hash() != hash {
+        return Err(JsValue::from_str("Hash mismatch"));
+    }
+    
     let mut blocks = CANDIDATE_BLOCKS.lock().unwrap();
     let height_blocks = blocks.entry(height).or_insert_with(HashMap::new);
-    height_blocks.insert(hash, block);
+    
+    // Limit candidates per height to prevent DoS
+    if height_blocks.len() >= 100 {
+        log(&format!("[RUST] Too many candidates at height {}, rejecting", height));
+        return Err(JsValue::from_str("Too many candidates at this height"));
+    }
+    
+    height_blocks.insert(hash.clone(), block);
+    
+    log(&format!("[RUST] Stored candidate block {} at height {}", 
+        &hash[..16], height));
     
     Ok(())
+}
+
+#[wasm_bindgen]
+pub fn get_block_by_hash(hash: &str) -> Result<JsValue, JsValue> {
+    let chain = BLOCKCHAIN.lock().unwrap();
+    
+    // First check main chain
+    if let Some(block) = chain.block_by_hash.get(hash) {
+        return serde_wasm_bindgen::to_value(block)
+            .map_err(|e| JsValue::from_str(&e.to_string()));
+    }
+    
+    // Then check candidate blocks
+    let candidates = CANDIDATE_BLOCKS.lock().unwrap();
+    for (_height, height_blocks) in candidates.iter() {
+        if let Some(block) = height_blocks.get(hash) {
+            return serde_wasm_bindgen::to_value(block)
+                .map_err(|e| JsValue::from_str(&e.to_string()));
+        }
+    }
+    
+    Err(JsValue::from_str("Block not found"))
+}
+
+#[wasm_bindgen]
+pub fn verify_chain_segment(blocks_json: JsValue) -> Result<bool, JsValue> {
+    let blocks: Vec<Block> = serde_wasm_bindgen::from_value(blocks_json)?;
+    
+    if blocks.is_empty() {
+        return Ok(true);
+    }
+    
+    // Verify each block connects to the previous
+    for i in 1..blocks.len() {
+        if blocks[i].prev_hash != blocks[i-1].hash() {
+            log(&format!("[RUST] Chain segment broken at height {}", blocks[i].height));
+            return Ok(false);
+        }
+        
+        if blocks[i].height != blocks[i-1].height + 1 {
+            log(&format!("[RUST] Height discontinuity at {}", blocks[i].height));
+            return Ok(false);
+        }
+        
+        if !blocks[i].is_valid_pow() {
+            log(&format!("[RUST] Invalid PoW at height {}", blocks[i].height));
+            return Ok(false);
+        }
+        
+        if !blocks[i].has_valid_vdf_proof() {
+            log(&format!("[RUST] Invalid VDF at height {}", blocks[i].height));
+            return Ok(false);
+        }
+    }
+    
+    Ok(true)
 }

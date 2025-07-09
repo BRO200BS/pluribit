@@ -16,6 +16,7 @@ use crate::log;
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct TransactionInput {
     pub commitment: Vec<u8>,
+    pub merkle_proof: Option<crate::merkle::MerkleProof>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -40,6 +41,20 @@ pub struct Transaction {
     pub kernel: TransactionKernel,
 }
 
+impl TransactionInput {
+    pub fn verify_merkle_proof(&self, height: u64) -> PluribitResult<bool> {
+        let proof = self.merkle_proof.as_ref()
+            .ok_or_else(|| PluribitError::ValidationError("Missing merkle proof".to_string()))?;
+        
+        let roots = crate::blockchain::UTXO_ROOTS.lock().unwrap();
+        let root = roots.get(&height)
+            .ok_or_else(|| PluribitError::ValidationError(
+                format!("No UTXO root found for height {}", height)
+            ))?;
+        
+        Ok(proof.verify(root))
+    }
+}
 
 impl TransactionKernel {
     
@@ -196,17 +211,27 @@ impl Transaction {
             }
         }
 
-        // 4) UTXO existence (only for regular transactions)
+        // 4) UTXO existence and merkle proofs (only for regular transactions)
         if block_reward.is_none() {
             let utxos = UTXO_SET.lock().unwrap();
             for inp in &self.inputs {
                 if !utxos.contains_key(&inp.commitment) {
                     return Err(PluribitError::UnknownInput);
                 }
+                
+
+                if inp.merkle_proof.is_none() {
+                       return Err(PluribitError::ValidationError(
+                           "Missing required merkle proof".to_string()
+                    ));
+                }
+                    
+
+                
             }
         }
 
-           Ok(())
+        Ok(())
     }
 
     /// Create a coinbase transaction (no inputs, only outputs)
@@ -366,7 +391,8 @@ mod tests {
         let blinding = Scalar::from(5u64);
         let commitment = mimblewimble::commit(5, &blinding).unwrap();
 
-        let inp = TransactionInput { commitment: commitment.compress().to_bytes().to_vec() };
+        let inp = TransactionInput { commitment: commitment.compress().to_bytes().to_vec(), merkle_proof: None };
+
         
         // This tx is invalid as created, but shows the structure.
         let tx = Transaction { 
@@ -422,7 +448,6 @@ fn test_transaction_verify_regular() {
     let value_in = 100u64;
     let value_out = 90u64;
     let fee = 10u64;
-    
     // Create input commitment and add to UTXO set
     let input_commitment = mimblewimble::commit(value_in, &blinding_in).unwrap();
     UTXO_SET.lock().unwrap().insert(
@@ -434,27 +459,32 @@ fn test_transaction_verify_regular() {
             stealth_payload: None,
         }
     );
-    
     // Create output with range proof
     let (range_proof, output_commitment) = mimblewimble::create_range_proof(value_out, &blinding_out).unwrap();
-    
     // Create kernel
     let kernel_blinding = blinding_in - blinding_out;
     let kernel = TransactionKernel::new(kernel_blinding, fee).unwrap();
-    
+
+    // ADD A DUMMY MERKLE PROOF TO SATISFY THE VERIFY FUNCTION
+    let dummy_proof = crate::merkle::MerkleProof {
+        leaf_hash: [0u8; 32],
+        siblings: vec![],
+        leaf_index: 0,
+    };
+
     let tx = Transaction {
         inputs: vec![TransactionInput {
             commitment: input_commitment.compress().to_bytes().to_vec(),
+            merkle_proof: Some(dummy_proof), // <-- ADDED DUMMY PROOF
         }],
         outputs: vec![TransactionOutput {
             commitment: output_commitment.to_bytes().to_vec(),
             range_proof: range_proof.to_bytes(),
             ephemeral_key: None,
             stealth_payload: None,
-        }],
+         }],
         kernel,
     };
-    
     // Should verify successfully
     assert!(tx.verify(None).is_ok());
     

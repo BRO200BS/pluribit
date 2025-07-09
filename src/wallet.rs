@@ -5,14 +5,16 @@ use curve25519_dalek::scalar::Scalar;
 use curve25519_dalek::ristretto::{RistrettoPoint, CompressedRistretto};
 use rand::rngs::OsRng;
 use serde::{Serialize, Deserialize};
-
+use crate::merkle;
+use crate::blockchain::UTXO_SET;
+use crate::HashSet;
+use crate::BLOCKCHAIN;
 use crate::{
     block::Block,
     mimblewimble, // For commit() and create_range_proof()
     stealth,      // For stealth address primitives
     transaction::{Transaction, TransactionInput, TransactionOutput, TransactionKernel},
 };
-
 /// Represents a UTXO that the wallet owns and can spend.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WalletUtxo {
@@ -47,6 +49,25 @@ impl Wallet {
             owned_utxos: Vec::new(),
         }
     }
+
+    /// Remove UTXOs that came from a specific block (for reorg handling)
+    pub fn remove_block_utxos(&mut self, block_commitments: &HashSet<Vec<u8>>) -> usize {
+        let initial_count = self.owned_utxos.len();
+        
+        self.owned_utxos.retain(|utxo| {
+            !block_commitments.contains(&utxo.commitment.to_bytes().to_vec())
+        });
+        
+        initial_count - self.owned_utxos.len()
+    }
+    
+    /// Get the list of UTXOs as commitments for comparison
+    pub fn get_utxo_commitments(&self) -> HashSet<Vec<u8>> {
+        self.owned_utxos.iter()
+            .map(|utxo| utxo.commitment.to_bytes().to_vec())
+            .collect()
+    }
+
 
     /// Calculates the wallet's total balance from its owned UTXOs.
     pub fn balance(&self) -> u64 {
@@ -94,7 +115,15 @@ impl Wallet {
     ) -> Result<Transaction, String> {
         let total_needed = amount + fee;
 
-        // 1. Coin Selection: Find UTXOs to fund the transaction.
+        // Get current height for merkle proof generation
+        let current_height = BLOCKCHAIN.lock().unwrap().current_height;
+        
+        // Get current UTXO set for proof generation
+        let utxo_set = UTXO_SET.lock().unwrap();
+        let utxo_vec: Vec<(Vec<u8>, crate::transaction::TransactionOutput)> = 
+            utxo_set.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+
+        // 1. Coin Selection: Find UTXOs to fund the transaction
         let mut inputs_to_spend = Vec::new();
         let mut input_utxos = Vec::new();
         let mut total_available = 0;
@@ -105,7 +134,15 @@ impl Wallet {
             if total_available < total_needed {
                 total_available += utxo.value;
                 blinding_sum_in += utxo.blinding;
-                inputs_to_spend.push(TransactionInput { commitment: utxo.commitment.to_bytes().to_vec() });
+                
+                // Generate merkle proof for this input
+                let commitment_bytes = utxo.commitment.to_bytes().to_vec();
+                let merkle_proof = merkle::generate_utxo_proof(&commitment_bytes, &utxo_vec).ok();
+                
+                inputs_to_spend.push(TransactionInput { 
+                    commitment: commitment_bytes,
+                    merkle_proof,
+                });
                 input_utxos.push(utxo.clone());
                 false // Remove from available UTXOs
             } else {

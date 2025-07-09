@@ -7,6 +7,7 @@ use js_sys::Date;
 use std::collections::HashMap;
 use sha2::Digest; // Only Digest is needed now
 
+
 /// Returns a **cloned** map of all active validators (ID → Validator).
 pub fn current_validators() -> HashMap<String, Validator> {
     VALIDATORS
@@ -147,7 +148,14 @@ mod tests {
     use wasm_bindgen_test::*;
     use super::*;
     use crate::StakeLockTransaction;
-    
+
+    use lazy_static::lazy_static;
+    use std::sync::Mutex;
+
+        lazy_static! {
+            static ref TEST_MUTEX: Mutex<()> = Mutex::new(());
+        }
+
     #[test]
     fn test_calculate_time_weighted_stake() {
         let stake = VDFLockedStake {
@@ -257,6 +265,7 @@ mod tests {
     
     #[test]
     fn test_early_unstake() {
+        let _guard = TEST_MUTEX.lock().unwrap();
         // Clear validators to ensure a clean state for this test
         VALIDATORS.lock().unwrap().clear();
 
