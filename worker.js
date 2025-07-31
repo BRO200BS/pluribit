@@ -148,55 +148,43 @@ async function startPoSTMining() {
         return;
     }
 
-    log(`[MINING] Starting PoWrPoST mining for wallet: ${workerState.minerId}...`);
-
     const minerWalletJson = workerState.wallets.get(workerState.minerId);
     if (!minerWalletJson) {
         log('Miner wallet not loaded, stopping.', 'error');
         return;
     }
+    
     const walletData = JSON.parse(minerWalletJson);
-    // This is the private spend key, used for VRF and block identity
-    const minerSecretKey = new Uint8Array(Object.values(walletData.spend_priv)); 
-    // Extract the public scan key, which receives the reward
+    const minerSecretKey = new Uint8Array(Object.values(walletData.spend_priv));
     const minerScanPubkey = new Uint8Array(Object.values(walletData.scan_pub));
 
-
-    // Create mining worker thread
+    // Create mining worker
     const miningWorkerPath = path.join(__dirname, 'mining-worker.js');
     workerState.miningWorker = new ThreadWorker(miningWorkerPath);
     
-    // Handle mining results
     workerState.miningWorker.on('message', async (msg) => {
-        if (msg.type === 'BLOCK_MINED' && msg.block) {
-            log(`[MINING] Block #${msg.block.height} MINED! Including ${msg.block.transactions.length - 1} transactions.`, 'success');
+        if (msg.type === 'BLOCK_MINED') {
+            const txCount = msg.block.transactions.length - 1; // Subtract coinbase
+            log(`[MINING] Block #${msg.block.height} MINED! Including ${txCount} transactions.`, 'success');
             
             try {
-                // Process the block locally first
+                // Process the block
                 await handleRemoteBlockDownloaded({ block: msg.block });
-
+                
+                // Broadcast to network
                 await workerState.p2p.publish(TOPICS.BLOCKS, {
                     type: 'NEW_BLOCK',
                     payload: msg.block
                 });
+                
+                // Continue mining next block
+                setTimeout(() => startNextMiningJob(), 1000);
             } catch (e) {
                 log(`Error processing mined block: ${e.message}`, 'error');
+                setTimeout(() => startNextMiningJob(), 5000);
             }
-            
-            // Wait before mining next block
-            setTimeout(() => {
-                if (workerState.minerActive) {
-                    scheduleMiningJob();
-                }
-            }, 5000);
-        } else if (msg.type === 'MINING_ERROR') {
-            log(`Mining error: ${msg.error}`, 'error');
-            // Retry after error
-            setTimeout(() => {
-                if (workerState.minerActive) {
-                    scheduleMiningJob();
-                }
-            }, 5000);
+        } else if (msg.type === 'STATUS') {
+            log(`[MINING] ${msg.message}`);
         }
     });
 
@@ -206,71 +194,43 @@ async function startPoSTMining() {
 
     workerState.miningWorker.on('exit', (code) => {
         if (code !== 0 && workerState.minerActive) {
-            log(`Mining worker stopped unexpectedly with code ${code}, restarting...`, 'error');
+            log(`Mining worker crashed, restarting...`, 'error');
             setTimeout(() => startPoSTMining(), 1000);
         }
     });
 
-    // Function to schedule mining jobs
-    const scheduleMiningJob = async () => {
-        if (!workerState.minerActive || !workerState.miningWorker) return;
+    // Start mining
+    startNextMiningJob();
+}
 
-        try {
-            const chainState = await pluribit.get_blockchain_state();
-            const nextHeight = Number(chainState.current_height) + 1;
-            const prevHash = await pluribit.get_latest_block_hash();
-            
-            const poolInfo = await pluribit.get_tx_pool();
-            let transactionsToMine = [];
-
-            if (poolInfo && poolInfo.transactions && poolInfo.transactions.length > 0) {
-                const sortedTxs = poolInfo.transactions.sort((a, b) => {
-                    const feeA = BigInt(a.kernel.fee);
-                    const feeB = BigInt(b.kernel.fee);
-                    if (feeA > feeB) return -1;
-                    if (feeA < feeB) return 1;
-                    return 0;
-                });
-
-                const MAX_BLOCK_SIZE = 4 * 1024 * 1024;
-                let currentBlockSize = 0;
-                const selectedTxs = [];
-
-                for (const tx of sortedTxs) {
-                    const estimatedTxSize = JSON.stringify(tx).length;
-                    
-                    if (currentBlockSize + estimatedTxSize <= MAX_BLOCK_SIZE) {
-                        selectedTxs.push(tx);
-                        currentBlockSize += estimatedTxSize;
-                    } else {
-                        break;
-                    }
-                }
-                
-                if (selectedTxs.length > 0) {
-                    log(`[MINING] Selected ${selectedTxs.length} of ${poolInfo.transactions.length} available transactions.`);
-                }
-                transactionsToMine = selectedTxs;
-            }
-
-            // Send mining job to worker thread
-            workerState.miningWorker.postMessage({
-                type: 'MINE_BLOCK',
-                height: nextHeight,
-                minerSecretKey: Array.from(minerSecretKey),
-                minerScanPubkey: Array.from(minerScanPubkey), 
-                prevHash,
-                transactions: transactionsToMine
-            });
-            
-        } catch (e) {
-            log(`Error preparing mining job: ${e.message}`, 'error');
-            setTimeout(() => scheduleMiningJob(), 5000);
-        }
-    };
-
-    // Start first mining job
-    scheduleMiningJob();
+async function startNextMiningJob() {
+    if (!workerState.minerActive || !workerState.miningWorker) return;
+    
+    try {
+        const chainState = await pluribit.get_blockchain_state();
+        const chain = typeof chainState === 'string' ? JSON.parse(chainState) : chainState;
+        const height = Number(chain.current_height) + 1;
+        const prevHash = await pluribit.get_latest_block_hash();
+        
+        const minerWalletJson = workerState.wallets.get(workerState.minerId);
+        const walletData = JSON.parse(minerWalletJson);
+        
+        workerState.miningWorker.postMessage({
+            type: 'MINE_BLOCK',
+            height,
+            minerSecretKey: Array.from(new Uint8Array(Object.values(walletData.spend_priv))),
+            minerScanPubkey: Array.from(new Uint8Array(Object.values(walletData.scan_pub))),
+            prevHash,
+            powDifficulty: chain.current_pow_difficulty,
+            vrfThreshold: Array.from(chain.current_vrf_threshold),
+            vdfIterations: chain.current_vdf_iterations
+        });
+        
+        log(`[MINING] Started mining block #${height}`);
+    } catch (e) {
+        log(`Error starting mining job: ${e.message}`, 'error');
+        setTimeout(() => startNextMiningJob(), 5000);
+    }
 }
 
 async function handleRemoteBlockDownloaded({ block }) {
@@ -615,13 +575,19 @@ async function initializeNetwork() {
     log('Network initialization complete.', 'success');
 }
 
+
 async function setupMessageHandlers() {
     const { p2p } = workerState;
     
     await p2p.subscribe(TOPICS.TRANSACTIONS, async (message) => {
         if (message.payload) {
             try {
+                log(`Received transaction from network`);
+                
+                // The object is already in the correct format after JSONParseWithBigInt.
+                // Pass it directly to the Wasm function.
                 await pluribit.add_transaction_to_pool(message.payload);
+                
                 log(`Added network transaction to pool.`);
             } catch (e) {
                 log(`Failed to add network transaction: ${e}`, 'warn');
@@ -659,6 +625,8 @@ async function setupMessageHandlers() {
         }
     });
 }
+
+
 
 async function handleInitWallet({ walletId }) {
     if (!walletId) return log('Wallet ID cannot be empty.', 'error');
@@ -719,7 +687,12 @@ async function handleCreateTransaction({ from, to, amount, fee }) {
             });
         }
         
-        log(`Transaction created. Hash: ${result.transaction.kernel.excess.substring(0,16)}...`, 'success');
+        // Convert the excess bytes to hex before trying to substring
+        const excessHex = result.transaction.kernel.excess.map(b => 
+            b.toString(16).padStart(2, '0')
+        ).join('');
+        log(`Transaction created. Hash: ${excessHex.substring(0,16)}...`, 'success');
+        
         const newBalance = await pluribit.wallet_get_balance(result.updated_wallet_json);
         parentPort.postMessage({ type: 'walletBalance', payload: { wallet_id: from, balance: newBalance }});
     } catch (e) {

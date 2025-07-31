@@ -44,7 +44,7 @@ constructor(log, options = {}) {
       },
       bootstrap: this.isBootstrap ? [] : [
         // This will be populated dynamically or via config
-        '/ip4/127.0.0.1/tcp/26658/p2p/12D3KooWASE5Jgor9P6ztHakyEBQ5ouaLSoqjFMgiqPkb9A9vNvQ'
+        '/ip4/127.0.0.1/tcp/26658/p2p/12D3KooWDFWp2F7NWxBXEpjx1tVF8tMU4UpT1Q4sChhWocctSSS6'
       ]
     };
 }

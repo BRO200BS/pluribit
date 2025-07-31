@@ -12,7 +12,7 @@ use bulletproofs::RangeProof;
 use serde::Serialize;
 use serde::Deserialize;
 use std::collections::HashSet;
-
+use crate::vrf::VrfProof;
 
 use crate::wallet::Wallet; 
 
@@ -530,6 +530,144 @@ pub fn get_tx_pool() -> Result<JsValue, JsValue> {
 
 // Introducing - PoWrPoST - Thermodynamic finality!
 #[wasm_bindgen]
+pub fn mine_block_header(
+    height: u64,
+    miner_secret_key_bytes: Vec<u8>,
+    prev_hash: String,
+    pow_difficulty: u8,
+    vrf_threshold_bytes: Vec<u8>,
+    start_nonce: u64,
+    max_nonce: u64,
+) -> Result<JsValue, JsValue> {
+    use curve25519_dalek::scalar::Scalar;
+    use curve25519_dalek::constants::RISTRETTO_BASEPOINT_TABLE;
+    
+    // Validate inputs
+    if miner_secret_key_bytes.len() != 32 {
+        return Err(JsValue::from_str("Invalid secret key length"));
+    }
+    
+    let mut sk_bytes = [0u8; 32];
+    sk_bytes.copy_from_slice(&miner_secret_key_bytes);
+    let secret_key = Scalar::from_bytes_mod_order(sk_bytes);
+    let public_key = &secret_key * &*RISTRETTO_BASEPOINT_TABLE;
+    let miner_pubkey = public_key.compress().to_bytes();
+    
+    let mut vrf_threshold = [0u8; 32];
+    vrf_threshold.copy_from_slice(&vrf_threshold_bytes);
+    
+    // Mine just the header (no transactions needed yet)
+    for nonce in start_nonce..max_nonce {
+        let mut test_block = Block::genesis();
+        test_block.height = height;
+        test_block.prev_hash = prev_hash.clone();
+        test_block.miner_pubkey = miner_pubkey;
+        test_block.pow_nonce = nonce;
+        
+        // Check PoW
+        if !test_block.is_valid_pow_ticket(pow_difficulty) {
+            continue;
+        }
+        
+        // Check VRF
+        let vrf_proof = vrf::create_vrf(&secret_key, prev_hash.as_bytes());
+        if vrf_proof.output >= vrf_threshold {
+            continue;
+        }
+        
+        // Found valid PoW + VRF!
+        log(&format!("[MINING] Won lottery! PoW Nonce: {}, VRF Output: {}", 
+            nonce, hex::encode(&vrf_proof.output[..8])));
+        
+        #[derive(Serialize)]
+        struct HeaderSolution {
+            nonce: u64,
+            vrf_proof: VrfProof,
+            miner_pubkey: Vec<u8>,
+        }
+        
+        return serde_wasm_bindgen::to_value(&HeaderSolution {
+            nonce,
+            vrf_proof,
+            miner_pubkey: miner_pubkey.to_vec(),
+        }).map_err(|e| e.into());
+    }
+    
+    // No solution in this range
+    Ok(JsValue::NULL)
+}
+
+#[wasm_bindgen]
+pub fn complete_block_with_transactions(
+    height: u64,
+    prev_hash: String,
+    nonce: u64,
+    miner_pubkey_bytes: Vec<u8>,
+    miner_scan_pubkey_bytes: Vec<u8>,
+    vrf_proof_js: JsValue,
+    vdf_iterations: u64,
+    pow_difficulty: u8,
+) -> Result<JsValue, JsValue> {
+    // Deserialize VRF proof
+    let vrf_proof: VrfProof = serde_wasm_bindgen::from_value(vrf_proof_js)?;
+    
+    // Compute VDF
+    let vdf = VDF::new(2048).map_err(|e| JsValue::from_str(&e.to_string()))?;
+    let vdf_input = format!("{}{}", prev_hash, hex::encode(&vrf_proof.output));
+    let vdf_proof = vdf.compute_with_proof(vdf_input.as_bytes(), vdf_iterations)
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+    
+    // NOW get current mempool transactions
+    let pool = TX_POOL.lock().unwrap();
+    let mut transactions: Vec<Transaction> = pool.pending.clone();
+    let total_fees: u64 = transactions.iter().map(|tx| tx.kernel.fee).sum();
+    drop(pool);
+    
+    // Calculate reward
+    let chain = BLOCKCHAIN.lock().unwrap();
+    let reward = chain.calculate_block_reward(height, pow_difficulty) + total_fees;
+    drop(chain);
+    
+    // Create coinbase
+    let coinbase_tx = Transaction::create_coinbase(vec![(miner_scan_pubkey_bytes, reward)])
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+    
+    transactions.insert(0, coinbase_tx);
+    
+    // Build final block
+    let mut miner_pubkey = [0u8; 32];
+    miner_pubkey.copy_from_slice(&miner_pubkey_bytes);
+    
+    let mut block = Block {
+        height,
+        prev_hash,
+        timestamp: js_sys::Date::now() as u64,
+        transactions,
+        pow_nonce: nonce,
+        vrf_proof,
+        vdf_proof,
+        miner_pubkey,
+        tx_merkle_root: [0u8; 32],
+        hash: String::new(),
+    };
+    
+    // Apply cut-through
+    block.apply_cut_through()
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+    
+    block.tx_merkle_root = block.calculate_tx_merkle_root();
+    block.hash = block.compute_hash();
+    
+    log(&format!("[MINING] Completed block #{} with {} transactions", 
+        height, block.transactions.len() - 1));
+    
+    serde_wasm_bindgen::to_value(&block).map_err(|e| e.into())
+}
+
+
+
+///////////old method. did not correctly pull in transactions from the mempool
+#[wasm_bindgen]
 pub fn mine_post_block(
     height: u64,
     miner_secret_key_bytes: Vec<u8>,
@@ -692,7 +830,10 @@ pub fn add_transaction_to_pool(tx_json: JsValue) -> Result<(), JsValue> {
             .map_err(|_| JsValue::from_str("Invalid signature bytes"))?
     );
     
-    let kernel_message_hash: [u8; 32] = Sha256::digest(format!("fee:{}", tx.kernel.fee)).into();
+    let mut hasher = Sha256::new();
+    hasher.update(&tx.kernel.fee.to_be_bytes());
+    hasher.update(&tx.kernel.min_height.to_be_bytes());
+    let kernel_message_hash: [u8; 32] = hasher.finalize().into();
     
     if !mimblewimble::verify_schnorr_signature(&(challenge, signature_s), kernel_message_hash, &excess_point) {
         return Err(JsValue::from_str("Kernel signature verification failed"));

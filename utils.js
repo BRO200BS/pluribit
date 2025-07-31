@@ -120,9 +120,16 @@ export const JSONStringifyWithBigInt = (obj) => {
         if (typeof value === 'bigint') {
             return { __type: 'BigInt', value: value.toString() }; 
         }
-        // CORRECTED: Handle Uint8Arrays by tagging them and encoding to Base64 using the library
+        // Handle Uint8Arrays by tagging them and encoding to Base64
         if (value instanceof Uint8Array) {
             return { __type: 'Uint8Array', value: uint8ArrayToString(value, 'base64') };
+        }
+        // Handle regular arrays that look like byte arrays (all elements are numbers 0-255)
+        if (Array.isArray(value) && value.length > 0 && 
+            value.every(v => typeof v === 'number' && v >= 0 && v <= 255)) {
+            // Convert to Uint8Array first, then to base64
+            const uint8 = new Uint8Array(value);
+            return { __type: 'Uint8Array', value: uint8ArrayToString(uint8, 'base64') };
         }
         return value;
     }

@@ -68,8 +68,8 @@ pub fn new(blinding: Scalar, fee: u64, min_height: u64) -> Result<Self, String> 
 
     log(&format!("[KERNEL_NEW] Derived excess_point={}", hex::encode(excess_point.compress().to_bytes())));
     let mut hasher = Sha256::new();
-    hasher.update(&fee.to_le_bytes());
-    hasher.update(&min_height.to_le_bytes()); // Include min_height in signature hash
+    hasher.update(&fee.to_be_bytes());
+    hasher.update(&min_height.to_be_bytes()); // Include min_height in signature hash
     let message_hash: [u8; 32] = hasher.finalize().into();
     log(&format!("[KERNEL_NEW] Message hash={}", hex::encode(message_hash)));
     
@@ -127,8 +127,8 @@ pub fn new(blinding: Scalar, fee: u64, min_height: u64) -> Result<Self, String> 
         let aggregate_pubkey: RistrettoPoint = public_keys.iter().sum();
 
         let mut hasher = Sha256::new();
-        hasher.update(&total_fee.to_le_bytes());
-        hasher.update(&max_min_height.to_le_bytes()); 
+        hasher.update(&total_fee.to_be_bytes());
+        hasher.update(&max_min_height.to_be_bytes()); 
         let message_hash: [u8; 32] = hasher.finalize().into();
 
         let (agg_challenge, agg_s) = mimblewimble::aggregate_schnorr_signatures(
@@ -319,8 +319,8 @@ impl Transaction {
 
         // The message that was signed is the hash of the fee and min_height.
         let mut hasher = sha2::Sha256::new();
-        hasher.update(&self.kernel.fee.to_le_bytes());
-        hasher.update(&self.kernel.min_height.to_le_bytes());
+        hasher.update(&self.kernel.fee.to_be_bytes());
+        hasher.update(&self.kernel.min_height.to_be_bytes());
         let msg_hash: [u8; 32] = hasher.finalize().into();
         
         // Parse the signature from the kernel.
@@ -343,7 +343,7 @@ impl Transaction {
         let mut hasher = Sha256::new();
         hasher.update(&self.kernel.excess);
         hasher.update(&self.kernel.signature);
-        hasher.update(&self.kernel.fee.to_le_bytes());
+        hasher.update(&self.kernel.fee.to_be_bytes());
         hex::encode(hasher.finalize())
     }
 }
@@ -596,4 +596,60 @@ fn reset_global_state() {
         tx3.kernel.fee = 20;
         assert_ne!(tx1.hash(), tx3.hash());
     }
+
+#[test]
+fn test_transaction_excess_with_fee() {
+    let _guard = TEST_MUTEX.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    reset_global_state();
+
+    // Setup similar to existing test_transaction_roundtrip
+    let miner_sk = mimblewimble::generate_secret_key();
+    let miner_pk = &miner_sk * &*RISTRETTO_BASEPOINT_TABLE;
+    let sender_wallet = Wallet::new();
+    let recipient_wallet = Wallet::new();
+
+    // Add funding block
+    let block1 = { /* same as in test_transaction_roundtrip, with reward to sender */ };
+
+    // Create tx with fee
+    let mut temp_wallet = sender_wallet.clone();
+    temp_wallet.scan_block(&block1);
+    let spending_tx = temp_wallet.create_transaction(900, 10, &recipient_wallet.scan_pub).unwrap();
+
+    // Verify with UTXO set
+    let utxo_set = UTXO_SET.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    assert!(spending_tx.verify(None, Some(&utxo_set)).is_ok(), "Transaction with fee should verify after fix");
+}
+
+#[test]
+fn test_transaction_serialization_with_fee() {
+    let _guard = TEST_MUTEX.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    reset_global_state();
+
+    // Same setup as above, create spending_tx
+
+    // Serialize and deserialize
+    let tx_json = serde_json::to_string(&spending_tx).unwrap();
+    let deserialized_tx: Transaction = serde_json::from_str(&tx_json).unwrap();
+
+    // Verify deserialized
+    let utxo_set = UTXO_SET.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    assert!(deserialized_tx.verify(None, Some(&utxo_set)).is_ok(), "Serialized transaction with fee should verify");
+}
+
+#[test]
+fn test_coinbase_excess_balance() {
+    let _guard = TEST_MUTEX.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    reset_global_state();
+
+    // Create coinbase tx
+    let recipient_pubkey_bytes = Wallet::new().scan_pub.compress().to_bytes().to_vec();
+    let reward = blockchain::get_current_base_reward(1);
+    let coinbase_tx = Transaction::create_coinbase(vec![(recipient_pubkey_bytes, reward)]).unwrap();
+
+    // Verify as coinbase
+    let utxo_set = UTXO_SET.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    assert!(coinbase_tx.verify(Some(reward), Some(&utxo_set)).is_ok(), "Coinbase should verify with adjustment");
+}
+
 }
