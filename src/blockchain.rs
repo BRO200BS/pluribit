@@ -23,8 +23,6 @@ use serde::{Serialize, Deserialize};
 lazy_static! {
     pub static ref UTXO_SET: Mutex<HashMap<Vec<u8>, TransactionOutput>> =
         Mutex::new(HashMap::new());
-    pub static ref UTXO_ROOTS: Mutex<HashMap<u64, [u8; 32]>> = 
-        Mutex::new(HashMap::new());
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -84,30 +82,26 @@ impl Blockchain {
             return Err(PluribitError::InvalidBlock("Parent hash mismatch".into()));
         }
 
-        // === 2. PoW + PoST Consensus Validation ===
-        // a. Verify the PoW ticket
-        if !block.is_valid_pow_ticket(self.current_pow_difficulty) {
-            return Err(PluribitError::InvalidBlock("Invalid PoW ticket".into()));
-        }
-
-        // b. Verify the VRF proof
+       // === 2. Sequential-Lottery Validation ===
+         // a. Verify the VRF proof (input = VDF output bytes)
         let miner_pubkey = CompressedRistretto::from_slice(&block.miner_pubkey)
             .map_err(|_| PluribitError::InvalidBlock("Invalid miner public key format".into()))?
             .decompress()
             .ok_or_else(|| PluribitError::InvalidBlock("Invalid miner public key".into()))?;
-        let vrf_input = block.prev_hash.as_bytes();
+
+        let vrf_input = &block.vdf_proof.y;
         if !vrf::verify_vrf(&miner_pubkey, vrf_input, &block.vrf_proof) {
             return Err(PluribitError::InvalidBlock("Invalid VRF proof".into()));
         }
 
-        // c. Verify the VRF output meets the lottery threshold
+        // b. Check the VRF output meets the lottery threshold
         if block.vrf_proof.output >= self.current_vrf_threshold {
             return Err(PluribitError::InvalidBlock("VRF output does not meet threshold".into()));
         }
 
-        // d. Verify the VDF proof
+        // c. Verify the VDF proof binds (prev_hash, miner_pubkey, nonce)
         let vdf = crate::vdf::VDF::new(2048)?;
-        let vdf_input = format!("{}{}", block.prev_hash, hex::encode(&block.vrf_proof.output));
+        let vdf_input = format!("{}{}{}", block.prev_hash, hex::encode(&block.miner_pubkey), block.pow_nonce);
         if !vdf.verify(vdf_input.as_bytes(), &block.vdf_proof)? {
             return Err(PluribitError::InvalidBlock("Invalid VDF proof".into()));
         }
@@ -151,11 +145,14 @@ impl Blockchain {
 
         if is_coinbase {
             coinbase_kernel += kernel_excess_pt;
+            debug_assert_eq!(tx.kernel.fee, 0);
         } else {
             sum_kernel_non_cb += kernel_excess_pt;
-            total_fees += tx.kernel.fee;
+            total_fees = total_fees
+                .checked_add(tx.kernel.fee)
+                .ok_or(PluribitError::InvalidBlock("fee overflow".into()))?;
         }
-        total_fees += tx.kernel.fee;
+
         log(&format!("[BLOCK VALIDATION] TX#{}: Kernel excess: {}", 
             tx_idx, hex::encode(&tx.kernel.excess)));
         
@@ -255,17 +252,7 @@ log(&format!("[BLOCK VALIDATION] Balance check PASSED"));
         if self.current_height > 0 && self.current_height % constants::DIFFICULTY_ADJUSTMENT_INTERVAL == 0 {
             self.adjust_difficulty();
         }
-        // === 6. Store UTXO Root ===
-        // After a block is successfully added, we compute the Merkle root of the *entire*
-        // resulting UTXO set and store it, keyed by the block's height.
-        // This is crucial for later verifying spending proofs.
-        {
-            let utxo_set = UTXO_SET.lock().unwrap();
-            let mut utxo_vec: Vec<(Vec<u8>, TransactionOutput)> = utxo_set.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-            utxo_vec.sort_by(|a, b| a.0.cmp(&b.0)); // Sort for deterministic root
-            let utxo_root = Block::calculate_utxo_merkle_root(&utxo_vec);
-            UTXO_ROOTS.lock().unwrap().insert(block.height, utxo_root);
-        }
+
         Ok(())
     }
     

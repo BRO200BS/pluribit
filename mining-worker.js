@@ -21,7 +21,10 @@ parentPort.on('message', async (msg) => {
 async function mineBlock(params) {
     const { height, minerSecretKey, minerScanPubkey, prevHash, 
             powDifficulty, vrfThreshold, vdfIterations, mempoolTransactions } = params;
-    
+
+
+
+
     let nonce = 0;
     const BATCH_SIZE = 10_000_000; // 10M nonces per batch
     
@@ -31,7 +34,7 @@ async function mineBlock(params) {
             BigInt(height),
             minerSecretKey,
             prevHash,
-            powDifficulty,
+            BigInt(vdfIterations),
             vrfThreshold,
             BigInt(nonce),
             BigInt(nonce + BATCH_SIZE)
@@ -46,7 +49,7 @@ async function mineBlock(params) {
                 solution.miner_pubkey,
                 minerScanPubkey,
                 solution.vrf_proof,
-                BigInt(vdfIterations),
+                solution.vdf_proof,
                 powDifficulty,
                 mempoolTransactions // Pass the transactions!
             );

@@ -529,16 +529,16 @@ pub fn get_tx_pool() -> Result<JsValue, JsValue> {
 
 
 // Introducing - PoWrPoST - Thermodynamic finality!
-#[wasm_bindgen]
-pub fn mine_block_header(
-    height: u64,
-    miner_secret_key_bytes: Vec<u8>,
-    prev_hash: String,
-    pow_difficulty: u8,
-    vrf_threshold_bytes: Vec<u8>,
-    start_nonce: u64,
-    max_nonce: u64,
-) -> Result<JsValue, JsValue> {
+ #[wasm_bindgen]
+ pub fn mine_block_header(
+     height: u64,
+     miner_secret_key_bytes: Vec<u8>,
+     prev_hash: String,
+     vdf_iterations: u64,
+     vrf_threshold_bytes: Vec<u8>,
+     start_nonce: u64,
+     max_nonce: u64,
+ ) -> Result<JsValue, JsValue> {
     use curve25519_dalek::scalar::Scalar;
     use curve25519_dalek::constants::RISTRETTO_BASEPOINT_TABLE;
     
@@ -556,7 +556,8 @@ pub fn mine_block_header(
     let mut vrf_threshold = [0u8; 32];
     vrf_threshold.copy_from_slice(&vrf_threshold_bytes);
     
-    // Mine just the header (no transactions needed yet)
+    // Sequential-lottery ticketing: VDF -> VRF (no PoW)
+   // Mine just the header ticket (no transactions needed yet)
     for nonce in start_nonce..max_nonce {
         let mut test_block = Block::genesis();
         test_block.height = height;
@@ -564,31 +565,34 @@ pub fn mine_block_header(
         test_block.miner_pubkey = miner_pubkey;
         test_block.pow_nonce = nonce;
         
-        // Check PoW
-        if !test_block.is_valid_pow_ticket(pow_difficulty) {
-            continue;
-        }
-        
-        // Check VRF
-        let vrf_proof = vrf::create_vrf(&secret_key, prev_hash.as_bytes());
+        // 1) VDF ticket: input binds (prev_hash, miner_pubkey, nonce)
+        let vdf = VDF::new(2048).map_err(|e| JsValue::from_str(&e.to_string()))?;
+        let vdf_input = format!("{}{}{}", prev_hash, hex::encode(miner_pubkey), nonce);
+        let vdf_proof = vdf.compute_with_proof(vdf_input.as_bytes(), vdf_iterations)
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+
+        // 2) VRF lottery over the VDF output (non-outsourcable per attempt)
+        let vrf_proof = vrf::create_vrf(&secret_key, &vdf_proof.y);
         if vrf_proof.output >= vrf_threshold {
             continue;
         }
-        
-        // Found valid PoW + VRF!
-        log(&format!("[MINING] Won lottery! PoW Nonce: {}, VRF Output: {}", 
+
+        // Found valid ticket!
+        log(&format!("[MINING] Won lottery! Nonce: {}, VRF: {}", 
             nonce, hex::encode(&vrf_proof.output[..8])));
         
         #[derive(Serialize)]
         struct HeaderSolution {
             nonce: u64,
             vrf_proof: VrfProof,
+            vdf_proof: VDFProof,
             miner_pubkey: Vec<u8>,
         }
         
         return serde_wasm_bindgen::to_value(&HeaderSolution {
             nonce,
             vrf_proof,
+            vdf_proof,
             miner_pubkey: miner_pubkey.to_vec(),
         }).map_err(|e| e.into());
     }
@@ -599,24 +603,21 @@ pub fn mine_block_header(
 
 #[wasm_bindgen]
 pub fn complete_block_with_transactions(
-    height: u64,
-    prev_hash: String,
-    nonce: u64,
-    miner_pubkey_bytes: Vec<u8>,
-    miner_scan_pubkey_bytes: Vec<u8>,
-    vrf_proof_js: JsValue,
-    vdf_iterations: u64,
-    pow_difficulty: u8,
-    mempool_transactions_js: JsValue,  
-) -> Result<JsValue, JsValue> {
+     height: u64,
+     prev_hash: String,
+     nonce: u64,
+     miner_pubkey_bytes: Vec<u8>,
+     miner_scan_pubkey_bytes: Vec<u8>,
+     vrf_proof_js: JsValue,
+     vdf_proof_js: JsValue,
+     pow_difficulty: u8,
+     mempool_transactions_js: JsValue,  
+ ) -> Result<JsValue, JsValue> {
     // Deserialize VRF proof
     let vrf_proof: VrfProof = serde_wasm_bindgen::from_value(vrf_proof_js)?;
     
-    // Compute VDF
-    let vdf = VDF::new(2048).map_err(|e| JsValue::from_str(&e.to_string()))?;
-    let vdf_input = format!("{}{}", prev_hash, hex::encode(&vrf_proof.output));
-    let vdf_proof = vdf.compute_with_proof(vdf_input.as_bytes(), vdf_iterations)
-        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+    // Use the VDF proof computed during header mining
+    let vdf_proof: VDFProof = serde_wasm_bindgen::from_value(vdf_proof_js)?;
     
     // NOW get current mempool transactions
     // Get transactions from parameter if provided, otherwise from local pool
@@ -648,7 +649,7 @@ pub fn complete_block_with_transactions(
         prev_hash,
         timestamp: js_sys::Date::now() as u64,
         transactions,
-        pow_nonce: nonce,
+        pow_nonce: nonce, // acts as ticket_nonce; kept on-wire
         vrf_proof,
         vdf_proof,
         miner_pubkey,
@@ -707,135 +708,106 @@ pub fn get_mining_metrics() -> Result<JsValue, JsValue> {
 pub fn add_transaction_to_pool(tx_json: JsValue) -> Result<(), JsValue> {
     let tx: Transaction = serde_wasm_bindgen::from_value(tx_json)
         .map_err(|e| JsValue::from_str(&format!("Failed to deserialize transaction: {}", e)))?;
-    
-    // Verify transaction signature
+
+    // 1) Kernel signature (single source of truth)
     if !tx.verify_signature().unwrap_or(false) {
         return Err(JsValue::from_str("Invalid transaction signature"));
     }
-    
-    // Verify all range proofs
+
+    // 2) Range proofs
     for output in &tx.outputs {
         let commitment = CompressedRistretto::from_slice(&output.commitment)
             .map_err(|_| JsValue::from_str("Invalid output commitment"))?;
-        
         let proof = RangeProof::from_bytes(&output.range_proof)
             .map_err(|_| JsValue::from_str("Invalid range proof format"))?;
-        
         if !mimblewimble::verify_range_proof(&proof, &commitment) {
             return Err(JsValue::from_str("Range proof verification failed"));
         }
     }
-    
-    // Verify kernel signature
+
+    // 3) Mimblewimble balance:
+    //    sum(inputs) == sum(outputs) + kernel_excess
+    //    (your kernel_excess is commit(fee, blinding), so adding it is correct)
+    let mut input_sum = RistrettoPoint::identity();
+    let mut output_sum = RistrettoPoint::identity();
+
+    for input in &tx.inputs {
+        let c = CompressedRistretto::from_slice(&input.commitment)
+            .map_err(|_| JsValue::from_str("Invalid input commitment"))?
+            .decompress()
+            .ok_or_else(|| JsValue::from_str("Failed to decompress input commitment"))?;
+        input_sum += c;
+    }
+    for output in &tx.outputs {
+        let c = CompressedRistretto::from_slice(&output.commitment)
+            .map_err(|_| JsValue::from_str("Invalid output commitment"))?
+            .decompress()
+            .ok_or_else(|| JsValue::from_str("Failed to decompress output commitment"))?;
+        output_sum += c;
+    }
+
+    // kernel.excess -> point
     let excess_point = CompressedRistretto::from_slice(&tx.kernel.excess)
         .map_err(|_| JsValue::from_str("Invalid kernel excess"))?
         .decompress()
         .ok_or_else(|| JsValue::from_str("Failed to decompress kernel excess"))?;
-    
-    // Parse signature (challenge, s)
-    if tx.kernel.signature.len() != 64 {
-        return Err(JsValue::from_str("Invalid signature length"));
-    }
-    
-    let challenge = Scalar::from_bytes_mod_order(
-        tx.kernel.signature[0..32].try_into()
-            .map_err(|_| JsValue::from_str("Invalid challenge bytes"))?
-    );
-    
-    let signature_s = Scalar::from_bytes_mod_order(
-        tx.kernel.signature[32..64].try_into()
-            .map_err(|_| JsValue::from_str("Invalid signature bytes"))?
-    );
-    
-    let mut hasher = Sha256::new();
-    hasher.update(&tx.kernel.fee.to_be_bytes());
-    hasher.update(&tx.kernel.min_height.to_be_bytes());
-    let kernel_message_hash: [u8; 32] = hasher.finalize().into();
-    
-    if !mimblewimble::verify_schnorr_signature(&(challenge, signature_s), kernel_message_hash, &excess_point) {
-        return Err(JsValue::from_str("Kernel signature verification failed"));
-    }
-    
-    // Verify balance (sum of inputs = sum of outputs + kernel excess)
-    let mut input_sum = RistrettoPoint::identity();
-    let mut output_sum = RistrettoPoint::identity();
-    
-    // Sum all input commitments
-    for input in &tx.inputs {
-        let input_commitment = CompressedRistretto::from_slice(&input.commitment)
-            .map_err(|_| JsValue::from_str("Invalid input commitment"))?
-            .decompress()
-            .ok_or_else(|| JsValue::from_str("Failed to decompress input commitment"))?;
-        input_sum += input_commitment;
-    }
-    
-    // Sum all output commitments
-    for output in &tx.outputs {
-        let output_commitment = CompressedRistretto::from_slice(&output.commitment)
-            .map_err(|_| JsValue::from_str("Invalid output commitment"))?
-            .decompress()
-            .ok_or_else(|| JsValue::from_str("Failed to decompress output commitment"))?;
-        output_sum += output_commitment;
-    }
-    
-    // Add kernel excess to output sum
-    output_sum += excess_point;
-    
-    // Verify balance
-    if input_sum != output_sum {
+
+    if input_sum != (output_sum + excess_point) {
         return Err(JsValue::from_str("Transaction doesn't balance"));
     }
-    
-    // Check UTXO set to ensure inputs exist and aren't double-spent
-    let utxo_set = blockchain::UTXO_SET.lock().unwrap();
+
+    // 4) Inputs must exist in current UTXO set (and not be spent already)
+    let utxo_set_guard = blockchain::UTXO_SET.lock().unwrap_or_else(|p| p.into_inner());
     for input in &tx.inputs {
-        if !utxo_set.contains_key(&input.commitment) {
+        if !utxo_set_guard.contains_key(&input.commitment) {
             return Err(JsValue::from_str("Input not found in UTXO set"));
         }
     }
-    drop(utxo_set);
-    
-    // Add to pool
-    let mut pool = TX_POOL.lock().unwrap();
-    
-    // Check if transaction already exists (by comparing kernel excess)
-    for existing_tx in &pool.pending {
-        if existing_tx.kernel.excess == tx.kernel.excess {
+    drop(utxo_set_guard);
+
+    // 5) Mempool policy & add
+    let mut pool = TX_POOL.lock().unwrap_or_else(|p| p.into_inner());
+
+    // (optional but recommended) prevent conflicts with pending txs
+    for pending in &pool.pending {
+        // same kernel = duplicate
+        if pending.kernel.excess == tx.kernel.excess {
             return Err(JsValue::from_str("Transaction already in pool"));
         }
+        // basic double-spend check vs pending txs
+        for inp in &tx.inputs {
+            if pending.inputs.iter().any(|i| i.commitment == inp.commitment) {
+                return Err(JsValue::from_str("Conflicts with pending transaction (double spend)"));
+            }
+        }
     }
-    
-    // Eviction logic for a full pool
+
     if pool.pending.len() >= MAX_TX_POOL_SIZE {
-        // Find the transaction with the lowest fee in the current pool
-        if let Some((lowest_fee_index, lowest_fee_tx)) = pool.pending.iter().enumerate().min_by_key(|(_, t)| t.kernel.fee) {
-            // Only add the new transaction if its fee is higher than the lowest fee in the full pool
-            if tx.kernel.fee > lowest_fee_tx.kernel.fee {
-                log(&format!("[RUST] Pool full. Evicting tx with fee {} to add new tx with fee {}", lowest_fee_tx.kernel.fee, tx.kernel.fee));
-                // Subtract the evicted transaction's fee and remove it
-                pool.fee_total -= lowest_fee_tx.kernel.fee;
-                pool.pending.remove(lowest_fee_index);
+        if let Some((idx, low)) = pool.pending.iter().enumerate().min_by_key(|(_, t)| t.kernel.fee) {
+            if tx.kernel.fee > low.kernel.fee {
+                log(&format!(
+                    "[RUST] Pool full. Evicting tx with fee {} to add new tx with fee {}",
+                    low.kernel.fee, tx.kernel.fee
+                ));
+                pool.fee_total -= low.kernel.fee;
+                pool.pending.remove(idx);
             } else {
-                // The new transaction's fee is too low, so we reject it
                 return Err(JsValue::from_str(&format!(
                     "Transaction fee {} is too low for a full pool. Minimum required: {}",
-                    tx.kernel.fee, lowest_fee_tx.kernel.fee + 1
+                    tx.kernel.fee, low.kernel.fee + 1
                 )));
             }
         } else {
-             // This case is unlikely but handled for safety
-             return Err(JsValue::from_str("Pool is full but could not determine minimum fee."));
+            return Err(JsValue::from_str("Pool is full but could not determine minimum fee."));
         }
-    }    
-    
-    
+    }
+
     pool.fee_total += tx.kernel.fee;
     pool.pending.push(tx);
-    
     log(&format!("[RUST] Added network transaction to pool. Total: {}", pool.pending.len()));
-    
     Ok(())
 }
+
 
 #[wasm_bindgen]
 pub fn verify_transaction(tx_json: JsValue) -> Result<bool, JsValue> {
@@ -1166,8 +1138,7 @@ pub fn rewind_block(block_js: JsValue) -> Result<(), JsValue> {
     } // All locks on UTXO_SET and RECENT_UTXO_CACHE are released here.
     // --- End of Refactored State Manipulation ---
 
-    // 3. Clean up other state related to the rewound block.
-    blockchain::UTXO_ROOTS.lock().unwrap().remove(&block.height);
+
     
     // Return the block's non-coinbase transactions to the mempool
     {

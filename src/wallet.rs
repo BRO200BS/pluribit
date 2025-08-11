@@ -104,7 +104,7 @@ impl Wallet {
                                         blinding,
                                         commitment: commitment.compress(),
                                         block_height: block.height,
-                                        merkle_proof: proof, // Store the proof
+                                        merkle_proof: None, // we never store this now.
                                     });
                                 }
                             }
@@ -142,8 +142,8 @@ impl Wallet {
                 
                 inputs_to_spend.push(TransactionInput {
                     commitment: utxo.commitment.to_bytes().to_vec(),
-                    merkle_proof: utxo.merkle_proof.clone(), // Use the stored proof
-                    source_height: utxo.block_height,
+                    merkle_proof: None, // we dont keep these.
+                    source_height: 0, //unused
                 });
                 input_utxos.push(utxo.clone());
                 false // Remove from available UTXOs

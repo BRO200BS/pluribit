@@ -41,20 +41,7 @@ pub struct Transaction {
     pub kernel: TransactionKernel,
 }
 
-impl TransactionInput {
-    pub fn verify_merkle_proof(&self, height: u64) -> PluribitResult<bool> {
-        let proof = self.merkle_proof.as_ref()
-            .ok_or_else(|| PluribitError::ValidationError("Missing merkle proof".to_string()))?;
-        
-        let roots = crate::blockchain::UTXO_ROOTS.lock().unwrap();
-        let root = roots.get(&height)
-            .ok_or_else(|| PluribitError::ValidationError(
-                format!("No UTXO root found for height {}", height)
-            ))?;
-        
-        Ok(proof.verify(root))
-    }
-}
+
 
 impl TransactionKernel {
         pub fn verify_signature(&self) -> PluribitResult<bool> {
@@ -240,35 +227,18 @@ impl Transaction {
             }
         }
 
-        // 4) UTXO existence and merkle proofs (only for regular transactions)
+        // 4) UTXO existence (only for regular transactions)
         if block_reward.is_none() {
-            let utxos = utxos_opt.ok_or(PluribitError::InvalidInput("UTXO set is required for regular transaction verification".to_string()))?;
+            let utxos = utxos_opt.ok_or(PluribitError::InvalidInput(
+                "UTXO set is required for regular transaction verification".to_string()
+            ))?;
             for inp in &self.inputs {
                 if !utxos.contains_key(&inp.commitment) {
                     return Err(PluribitError::UnknownInput);
                 }
-                
-                if let Some(proof) = &inp.merkle_proof {
-                    let roots = crate::blockchain::UTXO_ROOTS.lock().unwrap();
-                    if let Some(root) = roots.get(&inp.source_height) {
-
-                        // ---- START DEBUG LOGS ----
-                        let proof_reconstructed_root = proof.reconstruct_root(); // We will add this helper function next
-                        println!("[DEBUG] Official Merkle Root (Height {}): {}", inp.source_height, hex::encode(root));
-                        println!("[DEBUG] Proof Reconstructed Root:      {}", hex::encode(proof_reconstructed_root));
-                        // ---- END DEBUG LOGS ----
-
-                        if !proof.verify(root) {
-                            return Err(PluribitError::ValidationError("Invalid merkle proof".to_string()));
-                        }
-                    } else {
-                        return Err(PluribitError::ValidationError(format!("Missing UTXO root for height {}", inp.source_height)));
-                    }
-                } else {
-                    return Err(PluribitError::ValidationError("Missing required merkle proof".to_string()));
-                }
             }
         }
+
 
         Ok(())
     }
