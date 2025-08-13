@@ -6,10 +6,12 @@ import { noise } from '@chainsafe/libp2p-noise';
 import { yamux } from '@chainsafe/libp2p-yamux';
 import { circuitRelayTransport, circuitRelayServer } from '@libp2p/circuit-relay-v2';
 import { mdns } from '@libp2p/mdns' 
-
+import { dcutr } from '@libp2p/dcutr';
 import { multiaddr } from '@multiformats/multiaddr';
 import { CONFIG } from './config.js';
-
+import { CID } from 'multiformats/cid';
+import { sha256 } from 'multiformats/hashes/sha2';
+import * as raw from 'multiformats/codecs/raw';
 
 import { kadDHT } from '@libp2p/kad-dht';
 import { gossipsub } from '@chainsafe/libp2p-gossipsub';
@@ -44,8 +46,12 @@ constructor(log, options = {}) {
         ws: options.wsPort || 26659
       },
       bootstrap: this.isBootstrap ? [] : [
-        // This will be populated dynamically or via config
-        '/ip4/127.0.0.1/tcp/26658/p2p/12D3KooWDFWp2F7NWxBXEpjx1tVF8tMU4UpT1Q4sChhWocctSSS6'
+        // Public IPFS/libp2p bootstrappers (DNSADDR -> stable peer IDs)
+        '/dnsaddr/bootstrap.libp2p.io/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN',
+        '/dnsaddr/bootstrap.libp2p.io/p2p/QmQCU2EcMqAqQPR2i9bChDtGNJchTbq5TbXJJ16u19uLTa',
+        '/dnsaddr/bootstrap.libp2p.io/p2p/QmbLHAnMoJPWSCR5Zhtx6BHJX9KiKNN6tpvbUcqanj75Nb',
+        '/dnsaddr/bootstrap.libp2p.io/p2p/QmcZf59bWwK5XFi76CZX8cbJ4BhTzzA3gU1ZjYZcYW3dwt',
+        '/ip4/104.131.131.82/tcp/4001/p2p/QmaCpDMGvV2BGHeYERUEnRQAwe3N8SzbUtfsmvsqQLuvuJ'
       ]
     };
 }
@@ -73,6 +79,60 @@ constructor(log, options = {}) {
     b.tokens -= 1;
     return true;
   }
+
+  _rendezvousStr = process.env.PLURIBIT_RENDEZVOUS || 'pluribit:mainnet:v1';
+  _rendezvousCid = null;
+  _rendezvousTimer = null;
+
+  async _getRendezvousCID() {
+    if (this._rendezvousCid) return this._rendezvousCid;
+    const bytes = new TextEncoder().encode(this._rendezvousStr);
+    const digest = await sha256.digest(bytes);
+    this._rendezvousCid = CID.createV1(raw.code, digest);
+    return this._rendezvousCid;
+  }
+
+  async _announceAndDiscoverProviders() {
+    try {
+      const cid = await this._getRendezvousCID();
+
+      // Announce ourselves as a provider for the rendezvous CID
+      // (this populates provider records on the public DHT)
+      for await (const _event of this.node.contentRouting.provide(cid)) {
+        // no-op: iterate to drive the async iterable to completion
+      }
+      this.log(`[P2P] 📣 Provided rendezvous CID ${cid.toString()}`);
+
+      // Discover other providers and auto-dial them
+      const providers = [];
+      for await (const p of this.node.contentRouting.findProviders(cid, { timeout: 15_000 })) {
+        providers.push(p);
+      }
+
+      const myId = this.node.peerId.toString();
+      for (const p of providers) {
+        const id = p.id?.toString?.();
+        if (!id || id === myId) continue;
+
+        const already = this.node.getConnections(id).length > 0;
+        if (!already) {
+          try {
+            // Save any announced multiaddrs, then dial
+            if (p.multiaddrs?.length) {
+              await this.node.peerStore.addressBook.add(p.id, p.multiaddrs);
+            }
+            await this.node.dial(p.id);
+            this.log(`[P2P] 🔌 Dialed rendezvous provider ${id}`);
+          } catch (e) {
+            this.log(`[P2P] Rendezvous dial to ${id} failed: ${e.message}`, 'warn');
+          }
+        }
+      }
+    } catch (e) {
+      this.log(`[P2P] Rendezvous error: ${e.message}`, 'warn');
+    }
+  }
+
 
 
 async initialize() {
@@ -115,28 +175,29 @@ async initialize() {
         connectionEncrypters: [noise()],
         streamMuxers: [yamux()],
         services: {
-            // 👇 THIS IS THE KEY FIX 👇
             // Conditionally enable the relay server for bootstrap nodes
             ...(this.isBootstrap && { relay: circuitRelayServer() }),
 
             identify: identify(),
             dht: kadDHT({
-                // Regular nodes should be DHT clients, bootstrap nodes are servers.
-                clientMode: !this.isBootstrap,
-                
-                validators: {
-                    pluribit: {
-                        func: (key, value) => {
-                            try {
-                                const data = JSON.parse(uint8ArrayToString(value));
-                                return data.type === 'pluribit' && data.timestamp;
-                            } catch {
-                                return false;
-                            }
-                        }
+              // Use the public IPFS DHT protocol so we can use content routing on the open network
+              protocol: '/ipfs/kad/1.0.0',
+              clientMode: !this.isBootstrap,
+
+              validators: {
+                pluribit: {
+                  func: (key, value) => {
+                    try {
+                      const data = JSON.parse(uint8ArrayToString(value));
+                      return data.type === 'pluribit' && data.timestamp;
+                    } catch {
+                      return false;
                     }
+                  }
                 }
+              }
             }),
+
             pubsub: gossipsub({
                 allowPublishToZeroPeers: true,
                 seenTTL: 120 * 1000,
@@ -182,14 +243,15 @@ async initialize() {
                     }
                 }
             }),
-            ping: ping()
+            ping: ping(),
+             dcutr: dcutr(),
         },
         peerDiscovery: this.config.bootstrap.length > 0 
             ?
             [
                 bootstrap({
                     list: this.config.bootstrap,
-                    interval: 2000,
+                    interval: 30000,
                     timeout: 30000
                 }),
                 mdns() 
@@ -217,7 +279,6 @@ async initialize() {
 
     // Proactively dial bootstrap peers once
     if (!this.isBootstrap && Array.isArray(this.config.bootstrap) && this.config.bootstrap.length) {
-      const { multiaddr } = await import('@multiformats/multiaddr'); // already imported at top in your file
       const tasks = this.config.bootstrap.map(async (addr) => {
         try {
           await this.node.dial(multiaddr(addr));
@@ -229,10 +290,19 @@ async initialize() {
       await Promise.allSettled(tasks);
     }
 
-    // Start DHT
-    await this.node.services.dht.start();
+    // Start DHT (guard in case libp2p already started it)
+    try {
+      if (this.node.services.dht?.isStarted?.() === false) {
+        await this.node.services.dht.start();
+      }
+    } catch { /* ignore if already started */ }
     
-
+    // Zero-infra rendezvous: announce & discover via public DHT provider records
+    await this._announceAndDiscoverProviders();
+    this._rendezvousTimer = setInterval(
+      () => this._announceAndDiscoverProviders(),
+      10 * 60 * 1000 // every 10 minutes
+    );
     
     return this.node;
 }
@@ -417,7 +487,11 @@ async get(key) {
     });
   }
 
-  async stop() {
-    await this.node.stop();
+async stop() {
+  if (this._rendezvousTimer) {
+    clearInterval(this._rendezvousTimer);
+    this._rendezvousTimer = null;
   }
+  await this.node.stop();
+}
 }

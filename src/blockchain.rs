@@ -27,8 +27,7 @@ use crate::constants::{
     MTP_WINDOW,
     MAX_FUTURE_DRIFT_MS,
 };
-use num_traits::{One, Zero, ToPrimitive};
-use std::ops::Shr;
+
 
 lazy_static! {
     pub static ref UTXO_SET: Mutex<HashMap<Vec<u8>, TransactionOutput>> =
@@ -87,7 +86,6 @@ impl Blockchain {
     pub fn get_chain_work(blocks: &[Block]) -> u64 {
         use num_bigint::BigUint;
         use num_traits::{One, Zero, ToPrimitive};
-        use std::ops::Shr;
 
         if blocks.is_empty() { return 0; }
 
