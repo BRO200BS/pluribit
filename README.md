@@ -1,4 +1,4 @@
-# Pluribit
+# pluriƀit
 
 An experimental, privacy-focused cryptocurrency featuring a novel consensus mechanism. Pluribit is built as a hybrid system with a Rust core compiled to WASM for cryptographic operations and a Node.js layer for networking and orchestration.
 
@@ -14,7 +14,7 @@ An experimental, privacy-focused cryptocurrency featuring a novel consensus mech
 
 ## Architecture
 
-Pluribit uses a hybrid architecture to balance performance, security, and development velocity.
+Pluriƀit uses a hybrid architecture to balance performance, security, and development velocity.
 
   * **Rust Core (`pluribit_core`)**: The cryptographic engine of the project, compiled to WebAssembly. It handles all critical consensus logic, state validation, transaction construction, and MimbleWimble primitives.
   * **Node.js Orchestration Layer (`pluribit-node`)**: The main process that runs the node. It manages the libp2p network stack, database interactions (LevelDB), mining coordination via worker threads, and a JSON RPC server for the block explorer.
@@ -24,7 +24,7 @@ Pluribit uses a hybrid architecture to balance performance, security, and develo
 
 ## Consensus Mechanism
 
-Pluribit's consensus is a multi-stage lottery designed to favor decentralization by neutralizing the raw hardware advantages common in pure Proof-of-Work systems.
+pluriƀit's consensus is a multi-stage lottery designed to favor decentralization by neutralizing the raw hardware advantages common in pure Proof-of-Work systems.
 
 #### 1\. Proof-of-Work (Spam Resistance)
 
@@ -96,7 +96,7 @@ Privacy is mandatory and enforced at the protocol level.
 
 ### Running the Node
 
-Start the Pluribit node using the start script:
+Start the pluriƀit node using the start script:
 
 ```bash
 npm run start
