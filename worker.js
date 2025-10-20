@@ -1393,6 +1393,18 @@ async function handleRemoteBlockDownloaded({ block }) {
         }
     } finally {
         release();
+        // This ensures the miner restarts with the latest chain state
+        // after any block attempt, success or failure.
+        if (workerState.minerActive && !workerState.isReorging && !workerState.isSyncing) {
+            log('[MINING] Resetting mining job after block processing...', 'info');
+            
+            // Abort any old job and start a new one with fresh chain parameters.
+            // Using a small timeout prevents a tight error loop if a block is consistently invalid.
+            setTimeout(async () => { 
+                await abortCurrentMiningJob(); 
+                await startPoSTMining(); 
+            }, 500);
+        }
     }
 }
 
