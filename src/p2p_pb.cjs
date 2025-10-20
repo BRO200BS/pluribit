@@ -4488,26 +4488,23 @@ $root.p2p = (function() {
         return HashesResponse;
     })();
 
-    p2p.TipBroadcast = (function() {
+    p2p.TipRequest = (function() {
 
         /**
-         * Properties of a TipBroadcast.
+         * Properties of a TipRequest.
          * @memberof p2p
-         * @interface ITipBroadcast
-         * @property {string|null} [tipHash] TipBroadcast tipHash
-         * @property {number|Long|null} [height] TipBroadcast height
-         * @property {string|null} [totalWork] TipBroadcast totalWork
+         * @interface ITipRequest
          */
 
         /**
-         * Constructs a new TipBroadcast.
+         * Constructs a new TipRequest.
          * @memberof p2p
-         * @classdesc Represents a TipBroadcast.
-         * @implements ITipBroadcast
+         * @classdesc Represents a TipRequest.
+         * @implements ITipRequest
          * @constructor
-         * @param {p2p.ITipBroadcast=} [properties] Properties to set
+         * @param {p2p.ITipRequest=} [properties] Properties to set
          */
-        function TipBroadcast(properties) {
+        function TipRequest(properties) {
             if (properties)
                 for (var keys = Object.keys(properties), i = 0; i < keys.length; ++i)
                     if (properties[keys[i]] != null)
@@ -4515,51 +4512,231 @@ $root.p2p = (function() {
         }
 
         /**
-         * TipBroadcast tipHash.
-         * @member {string} tipHash
-         * @memberof p2p.TipBroadcast
-         * @instance
-         */
-        TipBroadcast.prototype.tipHash = "";
-
-        /**
-         * TipBroadcast height.
-         * @member {number|Long} height
-         * @memberof p2p.TipBroadcast
-         * @instance
-         */
-        TipBroadcast.prototype.height = $util.Long ? $util.Long.fromBits(0,0,true) : 0;
-
-        /**
-         * TipBroadcast totalWork.
-         * @member {string} totalWork
-         * @memberof p2p.TipBroadcast
-         * @instance
-         */
-        TipBroadcast.prototype.totalWork = "";
-
-        /**
-         * Creates a new TipBroadcast instance using the specified properties.
+         * Creates a new TipRequest instance using the specified properties.
          * @function create
-         * @memberof p2p.TipBroadcast
+         * @memberof p2p.TipRequest
          * @static
-         * @param {p2p.ITipBroadcast=} [properties] Properties to set
-         * @returns {p2p.TipBroadcast} TipBroadcast instance
+         * @param {p2p.ITipRequest=} [properties] Properties to set
+         * @returns {p2p.TipRequest} TipRequest instance
          */
-        TipBroadcast.create = function create(properties) {
-            return new TipBroadcast(properties);
+        TipRequest.create = function create(properties) {
+            return new TipRequest(properties);
         };
 
         /**
-         * Encodes the specified TipBroadcast message. Does not implicitly {@link p2p.TipBroadcast.verify|verify} messages.
+         * Encodes the specified TipRequest message. Does not implicitly {@link p2p.TipRequest.verify|verify} messages.
          * @function encode
-         * @memberof p2p.TipBroadcast
+         * @memberof p2p.TipRequest
          * @static
-         * @param {p2p.ITipBroadcast} message TipBroadcast message or plain object to encode
+         * @param {p2p.ITipRequest} message TipRequest message or plain object to encode
          * @param {$protobuf.Writer} [writer] Writer to encode to
          * @returns {$protobuf.Writer} Writer
          */
-        TipBroadcast.encode = function encode(message, writer) {
+        TipRequest.encode = function encode(message, writer) {
+            if (!writer)
+                writer = $Writer.create();
+            return writer;
+        };
+
+        /**
+         * Encodes the specified TipRequest message, length delimited. Does not implicitly {@link p2p.TipRequest.verify|verify} messages.
+         * @function encodeDelimited
+         * @memberof p2p.TipRequest
+         * @static
+         * @param {p2p.ITipRequest} message TipRequest message or plain object to encode
+         * @param {$protobuf.Writer} [writer] Writer to encode to
+         * @returns {$protobuf.Writer} Writer
+         */
+        TipRequest.encodeDelimited = function encodeDelimited(message, writer) {
+            return this.encode(message, writer).ldelim();
+        };
+
+        /**
+         * Decodes a TipRequest message from the specified reader or buffer.
+         * @function decode
+         * @memberof p2p.TipRequest
+         * @static
+         * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
+         * @param {number} [length] Message length if known beforehand
+         * @returns {p2p.TipRequest} TipRequest
+         * @throws {Error} If the payload is not a reader or valid buffer
+         * @throws {$protobuf.util.ProtocolError} If required fields are missing
+         */
+        TipRequest.decode = function decode(reader, length, error) {
+            if (!(reader instanceof $Reader))
+                reader = $Reader.create(reader);
+            var end = length === undefined ? reader.len : reader.pos + length, message = new $root.p2p.TipRequest();
+            while (reader.pos < end) {
+                var tag = reader.uint32();
+                if (tag === error)
+                    break;
+                switch (tag >>> 3) {
+                default:
+                    reader.skipType(tag & 7);
+                    break;
+                }
+            }
+            return message;
+        };
+
+        /**
+         * Decodes a TipRequest message from the specified reader or buffer, length delimited.
+         * @function decodeDelimited
+         * @memberof p2p.TipRequest
+         * @static
+         * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
+         * @returns {p2p.TipRequest} TipRequest
+         * @throws {Error} If the payload is not a reader or valid buffer
+         * @throws {$protobuf.util.ProtocolError} If required fields are missing
+         */
+        TipRequest.decodeDelimited = function decodeDelimited(reader) {
+            if (!(reader instanceof $Reader))
+                reader = new $Reader(reader);
+            return this.decode(reader, reader.uint32());
+        };
+
+        /**
+         * Verifies a TipRequest message.
+         * @function verify
+         * @memberof p2p.TipRequest
+         * @static
+         * @param {Object.<string,*>} message Plain object to verify
+         * @returns {string|null} `null` if valid, otherwise the reason why it is not
+         */
+        TipRequest.verify = function verify(message) {
+            if (typeof message !== "object" || message === null)
+                return "object expected";
+            return null;
+        };
+
+        /**
+         * Creates a TipRequest message from a plain object. Also converts values to their respective internal types.
+         * @function fromObject
+         * @memberof p2p.TipRequest
+         * @static
+         * @param {Object.<string,*>} object Plain object
+         * @returns {p2p.TipRequest} TipRequest
+         */
+        TipRequest.fromObject = function fromObject(object) {
+            if (object instanceof $root.p2p.TipRequest)
+                return object;
+            return new $root.p2p.TipRequest();
+        };
+
+        /**
+         * Creates a plain object from a TipRequest message. Also converts values to other types if specified.
+         * @function toObject
+         * @memberof p2p.TipRequest
+         * @static
+         * @param {p2p.TipRequest} message TipRequest
+         * @param {$protobuf.IConversionOptions} [options] Conversion options
+         * @returns {Object.<string,*>} Plain object
+         */
+        TipRequest.toObject = function toObject() {
+            return {};
+        };
+
+        /**
+         * Converts this TipRequest to JSON.
+         * @function toJSON
+         * @memberof p2p.TipRequest
+         * @instance
+         * @returns {Object.<string,*>} JSON object
+         */
+        TipRequest.prototype.toJSON = function toJSON() {
+            return this.constructor.toObject(this, $protobuf.util.toJSONOptions);
+        };
+
+        /**
+         * Gets the default type url for TipRequest
+         * @function getTypeUrl
+         * @memberof p2p.TipRequest
+         * @static
+         * @param {string} [typeUrlPrefix] your custom typeUrlPrefix(default "type.googleapis.com")
+         * @returns {string} The default type url
+         */
+        TipRequest.getTypeUrl = function getTypeUrl(typeUrlPrefix) {
+            if (typeUrlPrefix === undefined) {
+                typeUrlPrefix = "type.googleapis.com";
+            }
+            return typeUrlPrefix + "/p2p.TipRequest";
+        };
+
+        return TipRequest;
+    })();
+
+    p2p.TipResponse = (function() {
+
+        /**
+         * Properties of a TipResponse.
+         * @memberof p2p
+         * @interface ITipResponse
+         * @property {string|null} [tipHash] TipResponse tipHash
+         * @property {number|Long|null} [height] TipResponse height
+         * @property {string|null} [totalWork] TipResponse totalWork
+         */
+
+        /**
+         * Constructs a new TipResponse.
+         * @memberof p2p
+         * @classdesc Represents a TipResponse.
+         * @implements ITipResponse
+         * @constructor
+         * @param {p2p.ITipResponse=} [properties] Properties to set
+         */
+        function TipResponse(properties) {
+            if (properties)
+                for (var keys = Object.keys(properties), i = 0; i < keys.length; ++i)
+                    if (properties[keys[i]] != null)
+                        this[keys[i]] = properties[keys[i]];
+        }
+
+        /**
+         * TipResponse tipHash.
+         * @member {string} tipHash
+         * @memberof p2p.TipResponse
+         * @instance
+         */
+        TipResponse.prototype.tipHash = "";
+
+        /**
+         * TipResponse height.
+         * @member {number|Long} height
+         * @memberof p2p.TipResponse
+         * @instance
+         */
+        TipResponse.prototype.height = $util.Long ? $util.Long.fromBits(0,0,true) : 0;
+
+        /**
+         * TipResponse totalWork.
+         * @member {string} totalWork
+         * @memberof p2p.TipResponse
+         * @instance
+         */
+        TipResponse.prototype.totalWork = "";
+
+        /**
+         * Creates a new TipResponse instance using the specified properties.
+         * @function create
+         * @memberof p2p.TipResponse
+         * @static
+         * @param {p2p.ITipResponse=} [properties] Properties to set
+         * @returns {p2p.TipResponse} TipResponse instance
+         */
+        TipResponse.create = function create(properties) {
+            return new TipResponse(properties);
+        };
+
+        /**
+         * Encodes the specified TipResponse message. Does not implicitly {@link p2p.TipResponse.verify|verify} messages.
+         * @function encode
+         * @memberof p2p.TipResponse
+         * @static
+         * @param {p2p.ITipResponse} message TipResponse message or plain object to encode
+         * @param {$protobuf.Writer} [writer] Writer to encode to
+         * @returns {$protobuf.Writer} Writer
+         */
+        TipResponse.encode = function encode(message, writer) {
             if (!writer)
                 writer = $Writer.create();
             if (message.tipHash != null && Object.hasOwnProperty.call(message, "tipHash"))
@@ -4572,33 +4749,33 @@ $root.p2p = (function() {
         };
 
         /**
-         * Encodes the specified TipBroadcast message, length delimited. Does not implicitly {@link p2p.TipBroadcast.verify|verify} messages.
+         * Encodes the specified TipResponse message, length delimited. Does not implicitly {@link p2p.TipResponse.verify|verify} messages.
          * @function encodeDelimited
-         * @memberof p2p.TipBroadcast
+         * @memberof p2p.TipResponse
          * @static
-         * @param {p2p.ITipBroadcast} message TipBroadcast message or plain object to encode
+         * @param {p2p.ITipResponse} message TipResponse message or plain object to encode
          * @param {$protobuf.Writer} [writer] Writer to encode to
          * @returns {$protobuf.Writer} Writer
          */
-        TipBroadcast.encodeDelimited = function encodeDelimited(message, writer) {
+        TipResponse.encodeDelimited = function encodeDelimited(message, writer) {
             return this.encode(message, writer).ldelim();
         };
 
         /**
-         * Decodes a TipBroadcast message from the specified reader or buffer.
+         * Decodes a TipResponse message from the specified reader or buffer.
          * @function decode
-         * @memberof p2p.TipBroadcast
+         * @memberof p2p.TipResponse
          * @static
          * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
          * @param {number} [length] Message length if known beforehand
-         * @returns {p2p.TipBroadcast} TipBroadcast
+         * @returns {p2p.TipResponse} TipResponse
          * @throws {Error} If the payload is not a reader or valid buffer
          * @throws {$protobuf.util.ProtocolError} If required fields are missing
          */
-        TipBroadcast.decode = function decode(reader, length, error) {
+        TipResponse.decode = function decode(reader, length, error) {
             if (!(reader instanceof $Reader))
                 reader = $Reader.create(reader);
-            var end = length === undefined ? reader.len : reader.pos + length, message = new $root.p2p.TipBroadcast();
+            var end = length === undefined ? reader.len : reader.pos + length, message = new $root.p2p.TipResponse();
             while (reader.pos < end) {
                 var tag = reader.uint32();
                 if (tag === error)
@@ -4625,30 +4802,30 @@ $root.p2p = (function() {
         };
 
         /**
-         * Decodes a TipBroadcast message from the specified reader or buffer, length delimited.
+         * Decodes a TipResponse message from the specified reader or buffer, length delimited.
          * @function decodeDelimited
-         * @memberof p2p.TipBroadcast
+         * @memberof p2p.TipResponse
          * @static
          * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
-         * @returns {p2p.TipBroadcast} TipBroadcast
+         * @returns {p2p.TipResponse} TipResponse
          * @throws {Error} If the payload is not a reader or valid buffer
          * @throws {$protobuf.util.ProtocolError} If required fields are missing
          */
-        TipBroadcast.decodeDelimited = function decodeDelimited(reader) {
+        TipResponse.decodeDelimited = function decodeDelimited(reader) {
             if (!(reader instanceof $Reader))
                 reader = new $Reader(reader);
             return this.decode(reader, reader.uint32());
         };
 
         /**
-         * Verifies a TipBroadcast message.
+         * Verifies a TipResponse message.
          * @function verify
-         * @memberof p2p.TipBroadcast
+         * @memberof p2p.TipResponse
          * @static
          * @param {Object.<string,*>} message Plain object to verify
          * @returns {string|null} `null` if valid, otherwise the reason why it is not
          */
-        TipBroadcast.verify = function verify(message) {
+        TipResponse.verify = function verify(message) {
             if (typeof message !== "object" || message === null)
                 return "object expected";
             if (message.tipHash != null && message.hasOwnProperty("tipHash"))
@@ -4664,17 +4841,17 @@ $root.p2p = (function() {
         };
 
         /**
-         * Creates a TipBroadcast message from a plain object. Also converts values to their respective internal types.
+         * Creates a TipResponse message from a plain object. Also converts values to their respective internal types.
          * @function fromObject
-         * @memberof p2p.TipBroadcast
+         * @memberof p2p.TipResponse
          * @static
          * @param {Object.<string,*>} object Plain object
-         * @returns {p2p.TipBroadcast} TipBroadcast
+         * @returns {p2p.TipResponse} TipResponse
          */
-        TipBroadcast.fromObject = function fromObject(object) {
-            if (object instanceof $root.p2p.TipBroadcast)
+        TipResponse.fromObject = function fromObject(object) {
+            if (object instanceof $root.p2p.TipResponse)
                 return object;
-            var message = new $root.p2p.TipBroadcast();
+            var message = new $root.p2p.TipResponse();
             if (object.tipHash != null)
                 message.tipHash = String(object.tipHash);
             if (object.height != null)
@@ -4692,15 +4869,15 @@ $root.p2p = (function() {
         };
 
         /**
-         * Creates a plain object from a TipBroadcast message. Also converts values to other types if specified.
+         * Creates a plain object from a TipResponse message. Also converts values to other types if specified.
          * @function toObject
-         * @memberof p2p.TipBroadcast
+         * @memberof p2p.TipResponse
          * @static
-         * @param {p2p.TipBroadcast} message TipBroadcast
+         * @param {p2p.TipResponse} message TipResponse
          * @param {$protobuf.IConversionOptions} [options] Conversion options
          * @returns {Object.<string,*>} Plain object
          */
-        TipBroadcast.toObject = function toObject(message, options) {
+        TipResponse.toObject = function toObject(message, options) {
             if (!options)
                 options = {};
             var object = {};
@@ -4726,32 +4903,567 @@ $root.p2p = (function() {
         };
 
         /**
-         * Converts this TipBroadcast to JSON.
+         * Converts this TipResponse to JSON.
          * @function toJSON
-         * @memberof p2p.TipBroadcast
+         * @memberof p2p.TipResponse
          * @instance
          * @returns {Object.<string,*>} JSON object
          */
-        TipBroadcast.prototype.toJSON = function toJSON() {
+        TipResponse.prototype.toJSON = function toJSON() {
             return this.constructor.toObject(this, $protobuf.util.toJSONOptions);
         };
 
         /**
-         * Gets the default type url for TipBroadcast
+         * Gets the default type url for TipResponse
          * @function getTypeUrl
-         * @memberof p2p.TipBroadcast
+         * @memberof p2p.TipResponse
          * @static
          * @param {string} [typeUrlPrefix] your custom typeUrlPrefix(default "type.googleapis.com")
          * @returns {string} The default type url
          */
-        TipBroadcast.getTypeUrl = function getTypeUrl(typeUrlPrefix) {
+        TipResponse.getTypeUrl = function getTypeUrl(typeUrlPrefix) {
             if (typeUrlPrefix === undefined) {
                 typeUrlPrefix = "type.googleapis.com";
             }
-            return typeUrlPrefix + "/p2p.TipBroadcast";
+            return typeUrlPrefix + "/p2p.TipResponse";
         };
 
-        return TipBroadcast;
+        return TipResponse;
+    })();
+
+    p2p.SyncMessage = (function() {
+
+        /**
+         * Properties of a SyncMessage.
+         * @memberof p2p
+         * @interface ISyncMessage
+         * @property {p2p.ITipRequest|null} [tipRequest] SyncMessage tipRequest
+         * @property {p2p.ITipResponse|null} [tipResponse] SyncMessage tipResponse
+         */
+
+        /**
+         * Constructs a new SyncMessage.
+         * @memberof p2p
+         * @classdesc Represents a SyncMessage.
+         * @implements ISyncMessage
+         * @constructor
+         * @param {p2p.ISyncMessage=} [properties] Properties to set
+         */
+        function SyncMessage(properties) {
+            if (properties)
+                for (var keys = Object.keys(properties), i = 0; i < keys.length; ++i)
+                    if (properties[keys[i]] != null)
+                        this[keys[i]] = properties[keys[i]];
+        }
+
+        /**
+         * SyncMessage tipRequest.
+         * @member {p2p.ITipRequest|null|undefined} tipRequest
+         * @memberof p2p.SyncMessage
+         * @instance
+         */
+        SyncMessage.prototype.tipRequest = null;
+
+        /**
+         * SyncMessage tipResponse.
+         * @member {p2p.ITipResponse|null|undefined} tipResponse
+         * @memberof p2p.SyncMessage
+         * @instance
+         */
+        SyncMessage.prototype.tipResponse = null;
+
+        // OneOf field names bound to virtual getters and setters
+        var $oneOfFields;
+
+        /**
+         * SyncMessage payload.
+         * @member {"tipRequest"|"tipResponse"|undefined} payload
+         * @memberof p2p.SyncMessage
+         * @instance
+         */
+        Object.defineProperty(SyncMessage.prototype, "payload", {
+            get: $util.oneOfGetter($oneOfFields = ["tipRequest", "tipResponse"]),
+            set: $util.oneOfSetter($oneOfFields)
+        });
+
+        /**
+         * Creates a new SyncMessage instance using the specified properties.
+         * @function create
+         * @memberof p2p.SyncMessage
+         * @static
+         * @param {p2p.ISyncMessage=} [properties] Properties to set
+         * @returns {p2p.SyncMessage} SyncMessage instance
+         */
+        SyncMessage.create = function create(properties) {
+            return new SyncMessage(properties);
+        };
+
+        /**
+         * Encodes the specified SyncMessage message. Does not implicitly {@link p2p.SyncMessage.verify|verify} messages.
+         * @function encode
+         * @memberof p2p.SyncMessage
+         * @static
+         * @param {p2p.ISyncMessage} message SyncMessage message or plain object to encode
+         * @param {$protobuf.Writer} [writer] Writer to encode to
+         * @returns {$protobuf.Writer} Writer
+         */
+        SyncMessage.encode = function encode(message, writer) {
+            if (!writer)
+                writer = $Writer.create();
+            if (message.tipRequest != null && Object.hasOwnProperty.call(message, "tipRequest"))
+                $root.p2p.TipRequest.encode(message.tipRequest, writer.uint32(/* id 1, wireType 2 =*/10).fork()).ldelim();
+            if (message.tipResponse != null && Object.hasOwnProperty.call(message, "tipResponse"))
+                $root.p2p.TipResponse.encode(message.tipResponse, writer.uint32(/* id 2, wireType 2 =*/18).fork()).ldelim();
+            return writer;
+        };
+
+        /**
+         * Encodes the specified SyncMessage message, length delimited. Does not implicitly {@link p2p.SyncMessage.verify|verify} messages.
+         * @function encodeDelimited
+         * @memberof p2p.SyncMessage
+         * @static
+         * @param {p2p.ISyncMessage} message SyncMessage message or plain object to encode
+         * @param {$protobuf.Writer} [writer] Writer to encode to
+         * @returns {$protobuf.Writer} Writer
+         */
+        SyncMessage.encodeDelimited = function encodeDelimited(message, writer) {
+            return this.encode(message, writer).ldelim();
+        };
+
+        /**
+         * Decodes a SyncMessage message from the specified reader or buffer.
+         * @function decode
+         * @memberof p2p.SyncMessage
+         * @static
+         * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
+         * @param {number} [length] Message length if known beforehand
+         * @returns {p2p.SyncMessage} SyncMessage
+         * @throws {Error} If the payload is not a reader or valid buffer
+         * @throws {$protobuf.util.ProtocolError} If required fields are missing
+         */
+        SyncMessage.decode = function decode(reader, length, error) {
+            if (!(reader instanceof $Reader))
+                reader = $Reader.create(reader);
+            var end = length === undefined ? reader.len : reader.pos + length, message = new $root.p2p.SyncMessage();
+            while (reader.pos < end) {
+                var tag = reader.uint32();
+                if (tag === error)
+                    break;
+                switch (tag >>> 3) {
+                case 1: {
+                        message.tipRequest = $root.p2p.TipRequest.decode(reader, reader.uint32());
+                        break;
+                    }
+                case 2: {
+                        message.tipResponse = $root.p2p.TipResponse.decode(reader, reader.uint32());
+                        break;
+                    }
+                default:
+                    reader.skipType(tag & 7);
+                    break;
+                }
+            }
+            return message;
+        };
+
+        /**
+         * Decodes a SyncMessage message from the specified reader or buffer, length delimited.
+         * @function decodeDelimited
+         * @memberof p2p.SyncMessage
+         * @static
+         * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
+         * @returns {p2p.SyncMessage} SyncMessage
+         * @throws {Error} If the payload is not a reader or valid buffer
+         * @throws {$protobuf.util.ProtocolError} If required fields are missing
+         */
+        SyncMessage.decodeDelimited = function decodeDelimited(reader) {
+            if (!(reader instanceof $Reader))
+                reader = new $Reader(reader);
+            return this.decode(reader, reader.uint32());
+        };
+
+        /**
+         * Verifies a SyncMessage message.
+         * @function verify
+         * @memberof p2p.SyncMessage
+         * @static
+         * @param {Object.<string,*>} message Plain object to verify
+         * @returns {string|null} `null` if valid, otherwise the reason why it is not
+         */
+        SyncMessage.verify = function verify(message) {
+            if (typeof message !== "object" || message === null)
+                return "object expected";
+            var properties = {};
+            if (message.tipRequest != null && message.hasOwnProperty("tipRequest")) {
+                properties.payload = 1;
+                {
+                    var error = $root.p2p.TipRequest.verify(message.tipRequest);
+                    if (error)
+                        return "tipRequest." + error;
+                }
+            }
+            if (message.tipResponse != null && message.hasOwnProperty("tipResponse")) {
+                if (properties.payload === 1)
+                    return "payload: multiple values";
+                properties.payload = 1;
+                {
+                    var error = $root.p2p.TipResponse.verify(message.tipResponse);
+                    if (error)
+                        return "tipResponse." + error;
+                }
+            }
+            return null;
+        };
+
+        /**
+         * Creates a SyncMessage message from a plain object. Also converts values to their respective internal types.
+         * @function fromObject
+         * @memberof p2p.SyncMessage
+         * @static
+         * @param {Object.<string,*>} object Plain object
+         * @returns {p2p.SyncMessage} SyncMessage
+         */
+        SyncMessage.fromObject = function fromObject(object) {
+            if (object instanceof $root.p2p.SyncMessage)
+                return object;
+            var message = new $root.p2p.SyncMessage();
+            if (object.tipRequest != null) {
+                if (typeof object.tipRequest !== "object")
+                    throw TypeError(".p2p.SyncMessage.tipRequest: object expected");
+                message.tipRequest = $root.p2p.TipRequest.fromObject(object.tipRequest);
+            }
+            if (object.tipResponse != null) {
+                if (typeof object.tipResponse !== "object")
+                    throw TypeError(".p2p.SyncMessage.tipResponse: object expected");
+                message.tipResponse = $root.p2p.TipResponse.fromObject(object.tipResponse);
+            }
+            return message;
+        };
+
+        /**
+         * Creates a plain object from a SyncMessage message. Also converts values to other types if specified.
+         * @function toObject
+         * @memberof p2p.SyncMessage
+         * @static
+         * @param {p2p.SyncMessage} message SyncMessage
+         * @param {$protobuf.IConversionOptions} [options] Conversion options
+         * @returns {Object.<string,*>} Plain object
+         */
+        SyncMessage.toObject = function toObject(message, options) {
+            if (!options)
+                options = {};
+            var object = {};
+            if (message.tipRequest != null && message.hasOwnProperty("tipRequest")) {
+                object.tipRequest = $root.p2p.TipRequest.toObject(message.tipRequest, options);
+                if (options.oneofs)
+                    object.payload = "tipRequest";
+            }
+            if (message.tipResponse != null && message.hasOwnProperty("tipResponse")) {
+                object.tipResponse = $root.p2p.TipResponse.toObject(message.tipResponse, options);
+                if (options.oneofs)
+                    object.payload = "tipResponse";
+            }
+            return object;
+        };
+
+        /**
+         * Converts this SyncMessage to JSON.
+         * @function toJSON
+         * @memberof p2p.SyncMessage
+         * @instance
+         * @returns {Object.<string,*>} JSON object
+         */
+        SyncMessage.prototype.toJSON = function toJSON() {
+            return this.constructor.toObject(this, $protobuf.util.toJSONOptions);
+        };
+
+        /**
+         * Gets the default type url for SyncMessage
+         * @function getTypeUrl
+         * @memberof p2p.SyncMessage
+         * @static
+         * @param {string} [typeUrlPrefix] your custom typeUrlPrefix(default "type.googleapis.com")
+         * @returns {string} The default type url
+         */
+        SyncMessage.getTypeUrl = function getTypeUrl(typeUrlPrefix) {
+            if (typeUrlPrefix === undefined) {
+                typeUrlPrefix = "type.googleapis.com";
+            }
+            return typeUrlPrefix + "/p2p.SyncMessage";
+        };
+
+        return SyncMessage;
+    })();
+
+    p2p.DandelionStem = (function() {
+
+        /**
+         * Properties of a DandelionStem.
+         * @memberof p2p
+         * @interface IDandelionStem
+         * @property {p2p.ITransaction|null} [transaction] DandelionStem transaction
+         * @property {number|null} [hopCount] DandelionStem hopCount
+         * @property {number|Long|null} [timestamp] DandelionStem timestamp
+         */
+
+        /**
+         * Constructs a new DandelionStem.
+         * @memberof p2p
+         * @classdesc Represents a DandelionStem.
+         * @implements IDandelionStem
+         * @constructor
+         * @param {p2p.IDandelionStem=} [properties] Properties to set
+         */
+        function DandelionStem(properties) {
+            if (properties)
+                for (var keys = Object.keys(properties), i = 0; i < keys.length; ++i)
+                    if (properties[keys[i]] != null)
+                        this[keys[i]] = properties[keys[i]];
+        }
+
+        /**
+         * DandelionStem transaction.
+         * @member {p2p.ITransaction|null|undefined} transaction
+         * @memberof p2p.DandelionStem
+         * @instance
+         */
+        DandelionStem.prototype.transaction = null;
+
+        /**
+         * DandelionStem hopCount.
+         * @member {number} hopCount
+         * @memberof p2p.DandelionStem
+         * @instance
+         */
+        DandelionStem.prototype.hopCount = 0;
+
+        /**
+         * DandelionStem timestamp.
+         * @member {number|Long} timestamp
+         * @memberof p2p.DandelionStem
+         * @instance
+         */
+        DandelionStem.prototype.timestamp = $util.Long ? $util.Long.fromBits(0,0,true) : 0;
+
+        /**
+         * Creates a new DandelionStem instance using the specified properties.
+         * @function create
+         * @memberof p2p.DandelionStem
+         * @static
+         * @param {p2p.IDandelionStem=} [properties] Properties to set
+         * @returns {p2p.DandelionStem} DandelionStem instance
+         */
+        DandelionStem.create = function create(properties) {
+            return new DandelionStem(properties);
+        };
+
+        /**
+         * Encodes the specified DandelionStem message. Does not implicitly {@link p2p.DandelionStem.verify|verify} messages.
+         * @function encode
+         * @memberof p2p.DandelionStem
+         * @static
+         * @param {p2p.IDandelionStem} message DandelionStem message or plain object to encode
+         * @param {$protobuf.Writer} [writer] Writer to encode to
+         * @returns {$protobuf.Writer} Writer
+         */
+        DandelionStem.encode = function encode(message, writer) {
+            if (!writer)
+                writer = $Writer.create();
+            if (message.transaction != null && Object.hasOwnProperty.call(message, "transaction"))
+                $root.p2p.Transaction.encode(message.transaction, writer.uint32(/* id 1, wireType 2 =*/10).fork()).ldelim();
+            if (message.hopCount != null && Object.hasOwnProperty.call(message, "hopCount"))
+                writer.uint32(/* id 2, wireType 0 =*/16).uint32(message.hopCount);
+            if (message.timestamp != null && Object.hasOwnProperty.call(message, "timestamp"))
+                writer.uint32(/* id 3, wireType 0 =*/24).uint64(message.timestamp);
+            return writer;
+        };
+
+        /**
+         * Encodes the specified DandelionStem message, length delimited. Does not implicitly {@link p2p.DandelionStem.verify|verify} messages.
+         * @function encodeDelimited
+         * @memberof p2p.DandelionStem
+         * @static
+         * @param {p2p.IDandelionStem} message DandelionStem message or plain object to encode
+         * @param {$protobuf.Writer} [writer] Writer to encode to
+         * @returns {$protobuf.Writer} Writer
+         */
+        DandelionStem.encodeDelimited = function encodeDelimited(message, writer) {
+            return this.encode(message, writer).ldelim();
+        };
+
+        /**
+         * Decodes a DandelionStem message from the specified reader or buffer.
+         * @function decode
+         * @memberof p2p.DandelionStem
+         * @static
+         * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
+         * @param {number} [length] Message length if known beforehand
+         * @returns {p2p.DandelionStem} DandelionStem
+         * @throws {Error} If the payload is not a reader or valid buffer
+         * @throws {$protobuf.util.ProtocolError} If required fields are missing
+         */
+        DandelionStem.decode = function decode(reader, length, error) {
+            if (!(reader instanceof $Reader))
+                reader = $Reader.create(reader);
+            var end = length === undefined ? reader.len : reader.pos + length, message = new $root.p2p.DandelionStem();
+            while (reader.pos < end) {
+                var tag = reader.uint32();
+                if (tag === error)
+                    break;
+                switch (tag >>> 3) {
+                case 1: {
+                        message.transaction = $root.p2p.Transaction.decode(reader, reader.uint32());
+                        break;
+                    }
+                case 2: {
+                        message.hopCount = reader.uint32();
+                        break;
+                    }
+                case 3: {
+                        message.timestamp = reader.uint64();
+                        break;
+                    }
+                default:
+                    reader.skipType(tag & 7);
+                    break;
+                }
+            }
+            return message;
+        };
+
+        /**
+         * Decodes a DandelionStem message from the specified reader or buffer, length delimited.
+         * @function decodeDelimited
+         * @memberof p2p.DandelionStem
+         * @static
+         * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
+         * @returns {p2p.DandelionStem} DandelionStem
+         * @throws {Error} If the payload is not a reader or valid buffer
+         * @throws {$protobuf.util.ProtocolError} If required fields are missing
+         */
+        DandelionStem.decodeDelimited = function decodeDelimited(reader) {
+            if (!(reader instanceof $Reader))
+                reader = new $Reader(reader);
+            return this.decode(reader, reader.uint32());
+        };
+
+        /**
+         * Verifies a DandelionStem message.
+         * @function verify
+         * @memberof p2p.DandelionStem
+         * @static
+         * @param {Object.<string,*>} message Plain object to verify
+         * @returns {string|null} `null` if valid, otherwise the reason why it is not
+         */
+        DandelionStem.verify = function verify(message) {
+            if (typeof message !== "object" || message === null)
+                return "object expected";
+            if (message.transaction != null && message.hasOwnProperty("transaction")) {
+                var error = $root.p2p.Transaction.verify(message.transaction);
+                if (error)
+                    return "transaction." + error;
+            }
+            if (message.hopCount != null && message.hasOwnProperty("hopCount"))
+                if (!$util.isInteger(message.hopCount))
+                    return "hopCount: integer expected";
+            if (message.timestamp != null && message.hasOwnProperty("timestamp"))
+                if (!$util.isInteger(message.timestamp) && !(message.timestamp && $util.isInteger(message.timestamp.low) && $util.isInteger(message.timestamp.high)))
+                    return "timestamp: integer|Long expected";
+            return null;
+        };
+
+        /**
+         * Creates a DandelionStem message from a plain object. Also converts values to their respective internal types.
+         * @function fromObject
+         * @memberof p2p.DandelionStem
+         * @static
+         * @param {Object.<string,*>} object Plain object
+         * @returns {p2p.DandelionStem} DandelionStem
+         */
+        DandelionStem.fromObject = function fromObject(object) {
+            if (object instanceof $root.p2p.DandelionStem)
+                return object;
+            var message = new $root.p2p.DandelionStem();
+            if (object.transaction != null) {
+                if (typeof object.transaction !== "object")
+                    throw TypeError(".p2p.DandelionStem.transaction: object expected");
+                message.transaction = $root.p2p.Transaction.fromObject(object.transaction);
+            }
+            if (object.hopCount != null)
+                message.hopCount = object.hopCount >>> 0;
+            if (object.timestamp != null)
+                if ($util.Long)
+                    (message.timestamp = $util.Long.fromValue(object.timestamp)).unsigned = true;
+                else if (typeof object.timestamp === "string")
+                    message.timestamp = parseInt(object.timestamp, 10);
+                else if (typeof object.timestamp === "number")
+                    message.timestamp = object.timestamp;
+                else if (typeof object.timestamp === "object")
+                    message.timestamp = new $util.LongBits(object.timestamp.low >>> 0, object.timestamp.high >>> 0).toNumber(true);
+            return message;
+        };
+
+        /**
+         * Creates a plain object from a DandelionStem message. Also converts values to other types if specified.
+         * @function toObject
+         * @memberof p2p.DandelionStem
+         * @static
+         * @param {p2p.DandelionStem} message DandelionStem
+         * @param {$protobuf.IConversionOptions} [options] Conversion options
+         * @returns {Object.<string,*>} Plain object
+         */
+        DandelionStem.toObject = function toObject(message, options) {
+            if (!options)
+                options = {};
+            var object = {};
+            if (options.defaults) {
+                object.transaction = null;
+                object.hopCount = 0;
+                if ($util.Long) {
+                    var long = new $util.Long(0, 0, true);
+                    object.timestamp = options.longs === String ? long.toString() : options.longs === Number ? long.toNumber() : long;
+                } else
+                    object.timestamp = options.longs === String ? "0" : 0;
+            }
+            if (message.transaction != null && message.hasOwnProperty("transaction"))
+                object.transaction = $root.p2p.Transaction.toObject(message.transaction, options);
+            if (message.hopCount != null && message.hasOwnProperty("hopCount"))
+                object.hopCount = message.hopCount;
+            if (message.timestamp != null && message.hasOwnProperty("timestamp"))
+                if (typeof message.timestamp === "number")
+                    object.timestamp = options.longs === String ? String(message.timestamp) : message.timestamp;
+                else
+                    object.timestamp = options.longs === String ? $util.Long.prototype.toString.call(message.timestamp) : options.longs === Number ? new $util.LongBits(message.timestamp.low >>> 0, message.timestamp.high >>> 0).toNumber(true) : message.timestamp;
+            return object;
+        };
+
+        /**
+         * Converts this DandelionStem to JSON.
+         * @function toJSON
+         * @memberof p2p.DandelionStem
+         * @instance
+         * @returns {Object.<string,*>} JSON object
+         */
+        DandelionStem.prototype.toJSON = function toJSON() {
+            return this.constructor.toObject(this, $protobuf.util.toJSONOptions);
+        };
+
+        /**
+         * Gets the default type url for DandelionStem
+         * @function getTypeUrl
+         * @memberof p2p.DandelionStem
+         * @static
+         * @param {string} [typeUrlPrefix] your custom typeUrlPrefix(default "type.googleapis.com")
+         * @returns {string} The default type url
+         */
+        DandelionStem.getTypeUrl = function getTypeUrl(typeUrlPrefix) {
+            if (typeUrlPrefix === undefined) {
+                typeUrlPrefix = "type.googleapis.com";
+            }
+            return typeUrlPrefix + "/p2p.DandelionStem";
+        };
+
+        return DandelionStem;
     })();
 
     p2p.P2pMessage = (function() {
@@ -4766,7 +5478,8 @@ $root.p2p = (function() {
          * @property {p2p.IBlockRequest|null} [blockRequest] P2pMessage blockRequest
          * @property {p2p.IGetHashesRequest|null} [getHashesRequest] P2pMessage getHashesRequest
          * @property {p2p.IHashesResponse|null} [hashesResponse] P2pMessage hashesResponse
-         * @property {p2p.ITipBroadcast|null} [tipBroadcast] P2pMessage tipBroadcast
+         * @property {p2p.ISyncMessage|null} [syncMessage] P2pMessage syncMessage
+         * @property {p2p.IDandelionStem|null} [dandelionStem] P2pMessage dandelionStem
          */
 
         /**
@@ -4833,24 +5546,32 @@ $root.p2p = (function() {
         P2pMessage.prototype.hashesResponse = null;
 
         /**
-         * P2pMessage tipBroadcast.
-         * @member {p2p.ITipBroadcast|null|undefined} tipBroadcast
+         * P2pMessage syncMessage.
+         * @member {p2p.ISyncMessage|null|undefined} syncMessage
          * @memberof p2p.P2pMessage
          * @instance
          */
-        P2pMessage.prototype.tipBroadcast = null;
+        P2pMessage.prototype.syncMessage = null;
+
+        /**
+         * P2pMessage dandelionStem.
+         * @member {p2p.IDandelionStem|null|undefined} dandelionStem
+         * @memberof p2p.P2pMessage
+         * @instance
+         */
+        P2pMessage.prototype.dandelionStem = null;
 
         // OneOf field names bound to virtual getters and setters
         var $oneOfFields;
 
         /**
          * P2pMessage payload.
-         * @member {"block"|"transaction"|"blockAnnouncement"|"blockRequest"|"getHashesRequest"|"hashesResponse"|"tipBroadcast"|undefined} payload
+         * @member {"block"|"transaction"|"blockAnnouncement"|"blockRequest"|"getHashesRequest"|"hashesResponse"|"syncMessage"|"dandelionStem"|undefined} payload
          * @memberof p2p.P2pMessage
          * @instance
          */
         Object.defineProperty(P2pMessage.prototype, "payload", {
-            get: $util.oneOfGetter($oneOfFields = ["block", "transaction", "blockAnnouncement", "blockRequest", "getHashesRequest", "hashesResponse", "tipBroadcast"]),
+            get: $util.oneOfGetter($oneOfFields = ["block", "transaction", "blockAnnouncement", "blockRequest", "getHashesRequest", "hashesResponse", "syncMessage", "dandelionStem"]),
             set: $util.oneOfSetter($oneOfFields)
         });
 
@@ -4890,8 +5611,10 @@ $root.p2p = (function() {
                 $root.p2p.GetHashesRequest.encode(message.getHashesRequest, writer.uint32(/* id 5, wireType 2 =*/42).fork()).ldelim();
             if (message.hashesResponse != null && Object.hasOwnProperty.call(message, "hashesResponse"))
                 $root.p2p.HashesResponse.encode(message.hashesResponse, writer.uint32(/* id 6, wireType 2 =*/50).fork()).ldelim();
-            if (message.tipBroadcast != null && Object.hasOwnProperty.call(message, "tipBroadcast"))
-                $root.p2p.TipBroadcast.encode(message.tipBroadcast, writer.uint32(/* id 7, wireType 2 =*/58).fork()).ldelim();
+            if (message.syncMessage != null && Object.hasOwnProperty.call(message, "syncMessage"))
+                $root.p2p.SyncMessage.encode(message.syncMessage, writer.uint32(/* id 7, wireType 2 =*/58).fork()).ldelim();
+            if (message.dandelionStem != null && Object.hasOwnProperty.call(message, "dandelionStem"))
+                $root.p2p.DandelionStem.encode(message.dandelionStem, writer.uint32(/* id 8, wireType 2 =*/66).fork()).ldelim();
             return writer;
         };
 
@@ -4953,7 +5676,11 @@ $root.p2p = (function() {
                         break;
                     }
                 case 7: {
-                        message.tipBroadcast = $root.p2p.TipBroadcast.decode(reader, reader.uint32());
+                        message.syncMessage = $root.p2p.SyncMessage.decode(reader, reader.uint32());
+                        break;
+                    }
+                case 8: {
+                        message.dandelionStem = $root.p2p.DandelionStem.decode(reader, reader.uint32());
                         break;
                     }
                 default:
@@ -5050,14 +5777,24 @@ $root.p2p = (function() {
                         return "hashesResponse." + error;
                 }
             }
-            if (message.tipBroadcast != null && message.hasOwnProperty("tipBroadcast")) {
+            if (message.syncMessage != null && message.hasOwnProperty("syncMessage")) {
                 if (properties.payload === 1)
                     return "payload: multiple values";
                 properties.payload = 1;
                 {
-                    var error = $root.p2p.TipBroadcast.verify(message.tipBroadcast);
+                    var error = $root.p2p.SyncMessage.verify(message.syncMessage);
                     if (error)
-                        return "tipBroadcast." + error;
+                        return "syncMessage." + error;
+                }
+            }
+            if (message.dandelionStem != null && message.hasOwnProperty("dandelionStem")) {
+                if (properties.payload === 1)
+                    return "payload: multiple values";
+                properties.payload = 1;
+                {
+                    var error = $root.p2p.DandelionStem.verify(message.dandelionStem);
+                    if (error)
+                        return "dandelionStem." + error;
                 }
             }
             return null;
@@ -5105,10 +5842,15 @@ $root.p2p = (function() {
                     throw TypeError(".p2p.P2pMessage.hashesResponse: object expected");
                 message.hashesResponse = $root.p2p.HashesResponse.fromObject(object.hashesResponse);
             }
-            if (object.tipBroadcast != null) {
-                if (typeof object.tipBroadcast !== "object")
-                    throw TypeError(".p2p.P2pMessage.tipBroadcast: object expected");
-                message.tipBroadcast = $root.p2p.TipBroadcast.fromObject(object.tipBroadcast);
+            if (object.syncMessage != null) {
+                if (typeof object.syncMessage !== "object")
+                    throw TypeError(".p2p.P2pMessage.syncMessage: object expected");
+                message.syncMessage = $root.p2p.SyncMessage.fromObject(object.syncMessage);
+            }
+            if (object.dandelionStem != null) {
+                if (typeof object.dandelionStem !== "object")
+                    throw TypeError(".p2p.P2pMessage.dandelionStem: object expected");
+                message.dandelionStem = $root.p2p.DandelionStem.fromObject(object.dandelionStem);
             }
             return message;
         };
@@ -5156,10 +5898,15 @@ $root.p2p = (function() {
                 if (options.oneofs)
                     object.payload = "hashesResponse";
             }
-            if (message.tipBroadcast != null && message.hasOwnProperty("tipBroadcast")) {
-                object.tipBroadcast = $root.p2p.TipBroadcast.toObject(message.tipBroadcast, options);
+            if (message.syncMessage != null && message.hasOwnProperty("syncMessage")) {
+                object.syncMessage = $root.p2p.SyncMessage.toObject(message.syncMessage, options);
                 if (options.oneofs)
-                    object.payload = "tipBroadcast";
+                    object.payload = "syncMessage";
+            }
+            if (message.dandelionStem != null && message.hasOwnProperty("dandelionStem")) {
+                object.dandelionStem = $root.p2p.DandelionStem.toObject(message.dandelionStem, options);
+                if (options.oneofs)
+                    object.payload = "dandelionStem";
             }
             return object;
         };

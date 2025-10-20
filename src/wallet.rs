@@ -180,160 +180,132 @@ impl Wallet {
     }
     
 
+
     /// Creates a transaction to send a specified amount to a recipient.
-pub fn create_transaction(
-    &mut self,
-    amount: u64,
-    fee: u64,
-    recipient_scan_pub: &RistrettoPoint,
-) -> Result<Transaction, String> {
+    pub fn create_transaction(
+        &mut self,
+        amount: u64,
+        fee: u64,
+        recipient_scan_pub: &RistrettoPoint,
+    ) -> Result<Transaction, String> {
+        log("=== CREATE_TRANSACTION DEBUG ===");
+        let total_needed = amount.checked_add(fee).ok_or("Amount plus fee overflowed")?;
+        log(&format!("[WALLET] Amount={}, Fee={}", amount, fee));
+        log(&format!("[WALLET] Selecting UTXOs to cover {}...", total_needed));
+        log(&format!("[WALLET] Available UTXOs before selection: {}", self.owned_utxos.len()));
 
-    
-        let total_needed = amount + fee;
+        // --- START: ATOMIC COIN SELECTION WITH LOCK ORDERING ---
 
-        // 1. Coin Selection with race condition prevention
-        let mut selected_commitments = Vec::new();
-        let mut inputs_to_spend = Vec::new();
-        let mut input_utxos = Vec::new();
-        let mut total_available = 0;
-        let mut blinding_sum_in = Scalar::default();
+        // 1. Acquire UTXO_SET lock first to get a snapshot of valid UTXOs.
+        let valid_commitments: HashSet<Vec<u8>> = {
+            let utxo_set = crate::blockchain::UTXO_SET.lock().unwrap();
+            utxo_set.keys().cloned().collect()
+        }; // Lock is released immediately after snapshot is created.
+
+        let mut selected_inputs = Vec::new();
+        let mut selected_utxos = Vec::new();
+        let mut input_blinding_sum = Scalar::default();
+        let mut total_from_selected: u64 = 0;
+
+        // 2. Now acquire the PENDING_UTXOS lock to perform the atomic selection.
+        let mut pending = PENDING_UTXOS.lock().unwrap();
         
-        // Lock both pending set and UTXO set for selection
-        let pending = PENDING_UTXOS.lock().unwrap();
-        let utxo_set = crate::blockchain::UTXO_SET.lock().unwrap();
-        
-        // Select UTXOs
-        self.owned_utxos.retain(|utxo| {
-            if total_available < total_needed {
-                let key = utxo.commitment.to_bytes().to_vec();
+        self.owned_utxos.retain_mut(|utxo| {
+            if total_from_selected >= total_needed {
+                return true; // Keep this UTXO, we have enough.
+            }
+
+            let commitment_bytes = utxo.commitment.to_bytes().to_vec();
+
+            // Check against the snapshot (NO nested lock!) and the pending set.
+            if valid_commitments.contains(&commitment_bytes) && !pending.contains(&commitment_bytes) {
+                // Select this UTXO
+                log(&format!("[WALLET] Selected UTXO: value={}, commitment={}", utxo.value, hex::encode(&utxo.commitment.to_bytes()[..8])));
+                total_from_selected += utxo.value;
+                input_blinding_sum += utxo.blinding;
+                log(&format!("[WALLET] Total selected so far: {}", total_from_selected));
                 
-                // Skip if already pending
-                if pending.contains(&key) {
-                    return true; // Keep in wallet
-                }
-                
-                // Skip if not in UTXO set
-                if !utxo_set.contains_key(&key) {
-                    return true;
-                }
-                
-                selected_commitments.push(key.clone());
-                total_available = total_available.saturating_add(utxo.value);
-                blinding_sum_in += utxo.blinding;
-                
-                inputs_to_spend.push(TransactionInput {
-                    commitment: utxo.commitment.to_bytes().to_vec(),
+                selected_inputs.push(TransactionInput {
+                    commitment: commitment_bytes.clone(),
                     merkle_proof: None,
                     source_height: WasmU64::from(utxo.block_height),
                 });
-                input_utxos.push(utxo.clone());
-                false // Remove from wallet
-            } else {
-                true // Keep in wallet
+                selected_utxos.push(utxo.clone());
+
+                // Immediately mark as pending to prevent other concurrent calls from selecting it.
+                pending.insert(commitment_bytes);
+
+                return false; // Remove this UTXO from owned_utxos for this transaction.
             }
+
+            true // Keep UTXO if it's invalid, pending, or not needed.
         });
+
+        // --- END: ATOMIC COIN SELECTION ---
         
-        // Check if we have enough funds
-        if total_available < total_needed {
-            // Return selected UTXOs to wallet
-            self.owned_utxos.extend(input_utxos);
-            return Err("Insufficient confirmed funds".to_string());
-        }
-        
-        // Mark as pending and release locks
-        drop(pending); // Drop read lock
-        drop(utxo_set); // Drop UTXO set lock
-        
-        // Now acquire write lock to mark as pending
-        let mut pending = PENDING_UTXOS.lock().unwrap();
-        for commitment in &selected_commitments {
-            pending.insert(commitment.clone());
-        }
-        drop(pending); // Release immediately
-        
-        // Final sanity check
-        let utxo_set = crate::blockchain::UTXO_SET.lock().unwrap();
-        for inp in &inputs_to_spend {
-            if !utxo_set.contains_key(&inp.commitment) {
-                // Revert selection
-                self.owned_utxos.extend(input_utxos);
-                
-                // Clear pending marks
-                let mut pending = PENDING_UTXOS.lock().unwrap();
-                for commitment in &selected_commitments {
-                    pending.remove(commitment);
-                }
-                
-                return Err(format!(
-                    "Selected input missing from UTXO set: {}",
-                    hex::encode(&inp.commitment[..8])
-                ));
+        if total_from_selected < total_needed {
+            // If we don't have enough funds, revert the changes.
+            log("[WALLET] Insufficient funds.");
+            self.owned_utxos.extend(selected_utxos); // Add the UTXOs back.
+            for input in selected_inputs {
+                pending.remove(&input.commitment); // Un-mark as pending.
             }
+            return Err("Insufficient funds after excluding invalid/pending UTXOs".to_string());
         }
-        drop(utxo_set);
-        
-        // 2. Create Outputs (rest of function continues normally)
+
+        // 3. Create Outputs
+        log(&format!("[WALLET] Creating outputs..."));
         let mut outputs = Vec::new();
-        let mut blinding_sum_out = Scalar::default();
-
-            // a. Create the recipient's stealth output
-            let (recipient_output, recipient_blinding) = create_stealth_output(amount, recipient_scan_pub)?;
-            outputs.push(recipient_output);
-            blinding_sum_out += recipient_blinding;
-
-            // b. Create change output back to ourselves, if necessary
-            let change = total_available - total_needed;
-
-            if change > 0 {
-                // Send change back to our own stealth address
-                let (change_output, change_blinding) = create_stealth_output(change, &self.scan_pub)?;
-
-                outputs.push(change_output);
-                blinding_sum_out += change_blinding;
-                // NOTE: Change will be detected by scan_block when transaction confirms
-
-            }
-
-            // 3. Create the Transaction Kernel
-            let current_height = crate::BLOCKCHAIN.lock().unwrap().current_height;
-            #[cfg(target_arch = "wasm32")]
-            let timestamp = js_sys::Date::now() as u64;
-            #[cfg(not(target_arch = "wasm32"))]
-            let timestamp = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .expect("Time went backwards")
-                .as_millis() as u64;
-            let kernel_blinding = blinding_sum_in - blinding_sum_out;
-            let kernel = TransactionKernel::new(kernel_blinding, fee, *current_height, timestamp)
-                .map_err(|e| {
-                    // Transaction creation failed - clear pending marks
-                    let mut pending = PENDING_UTXOS.lock().unwrap();
-                    for commitment in &selected_commitments {
-                        pending.remove(commitment);
-                    }
-                    e
-                })?;
-
-            log(&format!("[WALLET] Transaction blinding factors:"));
-            log(&format!("  blinding_sum_in: {}", hex::encode(blinding_sum_in.to_bytes())));
-            log(&format!("  blinding_sum_out: {}", hex::encode(blinding_sum_out.to_bytes())));
-            log(&format!("  kernel_blinding: {}", hex::encode(kernel_blinding.to_bytes())));
-
-
-            // 4. Assemble the final transaction
-            let tx = Transaction {
-                inputs: inputs_to_spend,
-                outputs,
-                kernels: vec![kernel],
-                timestamp: WasmU64::from(timestamp),
-            };
-            // Note: UTXOs remain marked as pending until:
-            // - Transaction is mined (they're spent, so removed from UTXO set)
-            // - Transaction fails validation (caller must call clear_pending_utxos)
-            // - Timeout (background task clears stale pending marks)
-            
-            Ok(tx)
+        let mut output_blinding_sum = Scalar::default();
+        
+        let (recipient_output, recipient_blinding) = create_stealth_output(amount, recipient_scan_pub)?;
+        outputs.push(recipient_output);
+        output_blinding_sum += recipient_blinding;
+        
+        let change_amount = total_from_selected - total_needed;
+        if change_amount > 0 {
+            log(&format!("[WALLET] Change amount: {}", change_amount));
+            let (change_output, change_blinding) = create_stealth_output(change_amount, &self.scan_pub)?;
+            outputs.push(change_output);
+            output_blinding_sum += change_blinding;
         }
+
+        // 4. Create the Transaction Kernel
+        let current_height = crate::BLOCKCHAIN.lock().unwrap().current_height;
+        #[cfg(target_arch = "wasm32")]
+        let timestamp = js_sys::Date::now() as u64;
+        #[cfg(not(target_arch = "wasm32"))]
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("Time went backwards")
+            .as_millis() as u64;
+        
+        let kernel_blinding = input_blinding_sum - output_blinding_sum;
+        
+        log(&format!("[WALLET] Transaction blinding factors:"));
+        log(&format!("  blinding_sum_in: {}", hex::encode(input_blinding_sum.to_bytes())));
+        log(&format!("  blinding_sum_out: {}", hex::encode(output_blinding_sum.to_bytes())));
+        log(&format!("  kernel_blinding: {}", hex::encode(kernel_blinding.to_bytes())));
+
+        let kernel = TransactionKernel::new(kernel_blinding, fee, *current_height, timestamp)
+            .map_err(|e| {
+                // If kernel creation fails, we must also revert
+                self.owned_utxos.extend(selected_utxos);
+                for input in &selected_inputs { // Use a borrow (&) instead of moving
+                    pending.remove(&input.commitment);
+                }
+                e
+            })?;
+            
+        // 5. Assemble the final transaction
+        log("[WALLET] Assembling final transaction...");
+        Ok(Transaction {
+            inputs: selected_inputs,
+            outputs,
+            kernels: vec![kernel],
+            timestamp: WasmU64::from(timestamp),
+        })
+    }
     
 
     /// Clear pending marks for specific commitments (call after tx broadcast failure)

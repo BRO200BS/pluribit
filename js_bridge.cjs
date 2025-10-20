@@ -4,25 +4,73 @@
  * All database operations, including wallet encryption and chain state management, are defined and exported here.
  */
 
+// @ts-check
+
 const { Level } = require('level');
 const path = require('path');
 const { webcrypto: crypto, randomBytes, scryptSync, createCipheriv, createDecipheriv } = require('crypto');
 const fs = require('fs');
 
+/**
+ * @typedef {import('level').Level<string, string>} LevelDB
+ */
+
+/**
+ * @typedef {Object} Transaction
+ * @property {Array<any>} inputs
+ * @property {Array<any>} outputs
+ * @property {Array<any>} kernels
+ * @property {bigint} timestamp
+ */
+
+/**
+ * @typedef {Object} Block
+ * @property {bigint} height
+ * @property {string} hash
+ * @property {string} prevHash
+ * @property {bigint} timestamp
+ * @property {Array<Transaction>} transactions
+ * @property {bigint} totalWork
+ * @property {Uint8Array} vrfThreshold
+ * @property {bigint} vdfIterations
+ */
+
+/**
+ * @typedef {Object} EncryptedEnvelope
+ * @property {boolean} enc
+ * @property {number} v
+ * @property {string} alg
+ * @property {string} kdf
+ * @property {Object} scrypt
+ * @property {string} s
+ * @property {string} n
+ * @property {string} ct
+ * @property {string} tag
+ */
+
 // --- DATABASE SINGLETON MANAGEMENT ---
 
 // These variables will hold the single instances and their initialization promises.
+/** @type {LevelDB | null} */
 let chainDbInstance = null;
+/** @type {LevelDB | null} */
 let walletDbInstance = null;
+/** @type {LevelDB | null} */
 let deferredDbInstance = null;
 
+/** @type {Promise<LevelDB> | null} */
 let chainDbPromise = null;
+/** @type {Promise<LevelDB> | null} */
 let walletDbPromise = null;
+/** @type {Promise<LevelDB> | null} */
 let deferredDbPromise = null;
 
 // UTXO DB singleton
+/** @type {import('level').Level<string, any> | null} */
 let utxoDbInstance = null;
+/** @type {Promise<import('level').Level<string, any>> | null} */
 let utxoDbPromise = null;
+
 const DB_PATH = path.resolve(process.cwd(), 'pluribit-data');
 
 // Use synchronous functions for one-time setup to avoid top-level await.
@@ -30,14 +78,14 @@ try {
   if (!fs.existsSync(DB_PATH)) {
     fs.mkdirSync(DB_PATH, { recursive: true, mode: 0o700 });
   }
-} catch (e) {
+} catch (/** @type {any} */ e) {
   console.warn(`Could not create database directory: ${e.message}`);
 }
 
 /**
  * Lazily initializes and opens the chain database instance.
  * @private
- * @returns {Promise<Level>} A promise that resolves with the open chain DB instance.
+ * @returns {Promise<LevelDB>} A promise that resolves with the open chain DB instance.
  */
 async function getChainDb() {
   // If the instance exists and is open, return it immediately.
@@ -69,7 +117,7 @@ async function getChainDb() {
 /**
  * Lazily initializes and opens the wallet database instance.
  * @private
- * @returns {Promise<Level>} A promise that resolves with the open wallet DB instance.
+ * @returns {Promise<LevelDB>} A promise that resolves with the open wallet DB instance.
  */
 async function getWalletDb() {
   if (walletDbInstance && walletDbInstance.status === 'open') {
@@ -91,13 +139,10 @@ async function getWalletDb() {
   return walletDbPromise;
 }
 
-
-
-
 /**
  * Lazily initializes and opens the deferred blocks database instance.
  * @private
- * @returns {Promise<Level>} A promise that resolves with the open deferred DB instance.
+ * @returns {Promise<LevelDB>} A promise that resolves with the open deferred DB instance.
  */
 async function getDeferredDb() {
   if (deferredDbInstance && deferredDbInstance.status === 'open') {
@@ -115,11 +160,11 @@ async function getDeferredDb() {
   return deferredDbPromise;
 }
 
-
-
-
 // --- UTXO DATABASE SINGLETON ---
 
+/**
+ * @returns {Promise<import('level').Level<string, any>>}
+ */
 async function getUtxoDb() {
   if (utxoDbInstance && utxoDbInstance.status === 'open') {
     return utxoDbInstance;
@@ -136,7 +181,6 @@ async function getUtxoDb() {
   return utxoDbPromise;
 }
 
-
 /**
  * Initializes all database connections. This function should be called once when the worker starts.
  * It's safe to call multiple times; it will only perform the initialization once per database.
@@ -146,11 +190,12 @@ async function initializeDatabase() {
   await Promise.all([getChainDb(), getWalletDb(), getDeferredDb()]);
 }
 
-
-
 /**
  * (For Testing) Overwrites the database instances with mock/test versions.
  * @private
+ * @param {any} testChainDb
+ * @param {any} testWalletDb
+ * @param {any} testMetaDb
  */
 function __setDbs(testChainDb, testWalletDb, testMetaDb) {
   chainDbInstance = testChainDb;
@@ -162,9 +207,13 @@ function __setDbs(testChainDb, testWalletDb, testMetaDb) {
   // metaDbPromise no longer used
 }
 
-
 // --- SERIALIZATION HELPERS ---
 
+/**
+ * @param {string} _
+ * @param {any} v
+ * @returns {any}
+ */
 const replacer = (_, v) => {
   if (typeof v === 'bigint') return v.toString();
   // Correctly serialize Uint8Array to the format the reviver expects
@@ -173,19 +222,35 @@ const replacer = (_, v) => {
   }
   return v;
 };
-const stringify = (x) => JSON.stringify(x, replacer);
-const parse = (s) => JSONParseWithBigInt(s);
 
+/**
+ * @param {any} x
+ * @returns {string}
+ */
+const stringify = (x) => JSON.stringify(x, replacer);
+
+/**
+ * @param {string} s
+ * @returns {any}
+ */
+const parse = (s) => JSONParseWithBigInt(s);
 
 // --- WALLET ENCRYPTION HELPERS ---
 const PASS_ENV = 'PLURIBIT_WALLET_PASSPHRASE';
 const SCRYPT_PARAMS = { N: 16384, r: 8, p: 1, dkLen: 32 };
 
+/**
+ * @returns {string | null}
+ */
 function getPassphrase() {
   const s = process.env[PASS_ENV];
   return (typeof s === 'string' && s.length >= 8) ? s : null;
 }
 
+/**
+ * @param {any} str
+ * @returns {boolean}
+ */
 function isEncryptedEnvelope(str) {
   if (typeof str !== 'string') return false;
   try {
@@ -194,6 +259,11 @@ function isEncryptedEnvelope(str) {
   } catch { return false; }
 }
 
+/**
+ * @param {string} plaintext
+ * @param {string} passphrase
+ * @returns {string}
+ */
 function encryptWallet(plaintext, passphrase) {
   const salt = randomBytes(16);
   const key = scryptSync(passphrase, salt, SCRYPT_PARAMS.dkLen, { N: SCRYPT_PARAMS.N, r: SCRYPT_PARAMS.r, p: SCRYPT_PARAMS.p });
@@ -214,6 +284,11 @@ function encryptWallet(plaintext, passphrase) {
   });
 }
 
+/**
+ * @param {string} envelopeStr
+ * @param {string} passphrase
+ * @returns {string}
+ */
 function decryptWallet(envelopeStr, passphrase) {
   const env = JSON.parse(envelopeStr);
   const { s, n, ct, tag, scrypt } = env || {};
@@ -224,24 +299,27 @@ function decryptWallet(envelopeStr, passphrase) {
   return pt.toString('utf8');
 }
 
-
 // --- BLOCK FUNCTIONS ---
 
 /**
  * Saves a block to the database. Also updates the chain tip if the block is the new highest.
  * @pre The `block` object must have a valid `height` property.
  * @post The block is stored in the database, keyed by its height. The 'tip_height' in the meta DB is updated if necessary.
- * @param {object} block - The block object to save.
+ * @param {Block} block - The block object to save.
  * @returns {Promise<void>} A promise that resolves when the save operation is complete.
  */
-async function saveBlock(block) {
-  const h = block.height.toString(); // Use BigInt's toString()
-  console.log(`[DB] Saving block #${h} to database`);
+async function saveBlock(block, isCanonical = true) {
   const chainDb = await getChainDb();
-  await chainDb.put(h, stringify(block));
-  const currentTip = await getTipHeight();
-  if (block.height >= currentTip) { // Compare BigInts directly
-    await chainDb.put('meta:tip_height', h);
+  await chainDb.put(`block:${block.hash}`, stringify(block));
+  
+  if (isCanonical) {
+    const h = block.height.toString();
+    await chainDb.put(`height:${h}`, block.hash);
+    const currentTip = await getTipHeight();
+    if (block.height >= currentTip) {
+      await chainDb.put('meta:tip_height', h);
+      await chainDb.put('meta:tip_hash', block.hash);
+    }
   }
 }
 
@@ -249,14 +327,15 @@ async function saveBlock(block) {
  * Loads a block from the database by its height.
  * @pre `height` must be a non-negative integer.
  * @post Returns the parsed block object if found, otherwise returns null.
- * @param {number} height - The height of the block to load.
- * @returns {Promise<object|null>} A promise resolving to the block object or null.
+ * @param {bigint} height - The height of the block to load.
+ * @returns {Promise<Block|null>} A promise resolving to the block object or null.
  */
 async function loadBlock(height) {
   const chainDb = await getChainDb();
   try {
-    const raw = await chainDb.get(height.toString());
-    return parse(raw);
+    const hash = await chainDb.get(`height:${height.toString()}`);
+    const blockData = await chainDb.get(`block:${hash}`);
+    return parse(blockData);
   } catch (error) {
     if (error.code === 'LEVEL_NOT_FOUND') return null;
     throw error;
@@ -267,15 +346,15 @@ async function loadBlock(height) {
  * Retrieves the height of the most recent block (the chain tip).
  * @pre Database must be available.
  * @post Returns the current tip height as a number. Returns 0 if no tip is set.
- * @returns {Promise<number>} A promise resolving to the tip height.
+ * @returns {Promise<bigint>} A promise resolving to the tip height.
  */
 async function getTipHeight() {
   const chainDb = await getChainDb();
   try {
     const h = await chainDb.get('meta:tip_height');
-    return BigInt(h); // Parse string back to BigInt
-  } catch (error) {
-    if (error.code === 'LEVEL_NOT_FOUND') return 0n; // Return BigInt zero
+    return BigInt(h);
+  } catch (/** @type {any} */ error) {
+    if (error.code === 'LEVEL_NOT_FOUND') return 0n;
     throw error;
   }
 }
@@ -284,7 +363,7 @@ async function getTipHeight() {
  * Retrieves the full block object at the chain tip.
  * @pre Database must be available.
  * @post Returns the full block object of the highest block, or null if the chain is empty.
- * @returns {Promise<object|null>} A promise resolving to the tip block object.
+ * @returns {Promise<Block|null>} A promise resolving to the tip block object.
  */
 async function getChainTip() {
   const tipHeight = await getTipHeight();
@@ -293,11 +372,12 @@ async function getChainTip() {
 
 /**
  * Retrieves a batch of blocks from the database by height range.
- * @param {number} startHeight - The starting height of the range (inclusive).
- * @param {number} endHeight - The ending height of the range (inclusive).
- * @returns {Promise<Array<object>>} A promise resolving to an array of block objects.
+ * @param {bigint} startHeight - The starting height of the range (inclusive).
+ * @param {bigint} endHeight - The ending height of the range (inclusive).
+ * @returns {Promise<Array<Block>>} A promise resolving to an array of block objects.
  */
 async function loadBlocks(startHeight, endHeight) {
+  /** @type {Array<Block>} */
   const blocks = [];
   // Arguments from Rust are already BigInts
   const start = startHeight;
@@ -310,17 +390,17 @@ async function loadBlocks(startHeight, endHeight) {
   return blocks;
 }
 
-
 /**
  * Retrieves all blocks from genesis to the current tip.
  * @pre Database must be available.
  * @post Returns an array of all block objects in order of height.
- * @returns {Promise<Array<object>>} A promise resolving to an array of blocks.
+ * @returns {Promise<Array<Block>>} A promise resolving to an array of blocks.
  */
 async function getAllBlocks() {
+  /** @type {Array<Block>} */
   const blocks = [];
   const tipHeight = await getTipHeight();
-  for (let i = 0; i <= tipHeight; i++) {
+  for (let i = 0n; i <= tipHeight; i++) {
     const block = await loadBlock(i);
     if (block) blocks.push(block);
   }
@@ -331,7 +411,7 @@ async function getAllBlocks() {
 
 /**
  * Saves a deferred block to the database, keyed by its height for sequential processing.
- * @param {object} block The block object to save.
+ * @param {Block} block The block object to save.
  * @returns {Promise<void>}
  */
 async function saveDeferredBlock(block) {
@@ -343,7 +423,7 @@ async function saveDeferredBlock(block) {
 
 /**
  * Loads and parses all deferred blocks from the database in order.
- * @returns {Promise<Array<object>>}
+ * @returns {Promise<Array<Block>>}
  */
 async function loadAllDeferredBlocks() {
     const db = await getDeferredDb();
@@ -351,11 +431,13 @@ async function loadAllDeferredBlocks() {
     return entries.map(([key, value]) => parse(value));
 }
 
+/**
+ * @returns {Promise<void>}
+ */
 async function clearDeferredBlocks() {
     const db = await getDeferredDb();
     await db.clear();
 }
-
 
 // --- WALLET FUNCTIONS ---
 
@@ -390,7 +472,7 @@ async function loadWallet(walletId) {
     if (isEncryptedEnvelope(raw)) {
       const pass = getPassphrase();
       if (!pass) {
-        const e = new Error('Wallet is encrypted; set PLURIBIT_WALLET_PASSPHRASE to decrypt.');
+        const e = /** @type {any} */ (new Error('Wallet is encrypted; set PLURIBIT_WALLET_PASSPHRASE to decrypt.'));
         e.code = 'WALLET_PASSPHRASE_REQUIRED';
         throw e;
       }
@@ -405,7 +487,7 @@ async function loadWallet(walletId) {
       await saveWallet(walletId, raw);
     }
     return raw;
-  } catch (error) {
+  } catch (/** @type {any} */ error) {
     if (error.code === 'LEVEL_NOT_FOUND') return null;
     throw error;
   }
@@ -433,7 +515,7 @@ async function isWalletEncrypted(walletId) {
  */
 async function walletExists(walletId) {
   // This reuses loadWallet's logic, which correctly handles not-found errors.
-  const walletData = await loadWallet(walletId).catch(err => {
+  const walletData = await loadWallet(walletId).catch(/** @param {any} err */ err => {
     // Suppress passphrase errors for a simple existence check.
     if (err.code === 'WALLET_PASSPHRASE_REQUIRED') return true;
     throw err;
@@ -441,14 +523,13 @@ async function walletExists(walletId) {
   return walletData !== null;
 }
 
-
 // --- TOTAL WORK FUNCTIONS ---
 
 /**
  * Saves the total accumulated chain work.
  * @pre `work` is a number or BigInt.
  * @post The total work is persisted as a string in the meta database.
- * @param {number|BigInt} work - The total work to save.
+ * @param {number|bigint} work - The total work to save.
  * @returns {Promise<void>} A promise that resolves when saved.
  */
 async function saveTotalWork(work) {
@@ -467,22 +548,33 @@ async function loadTotalWork() {
   try {
     const w = await chainDb.get('meta:total_work');
     return w;
-  } catch (error) {
+  } catch (/** @type {any} */ error) {
     if (error.code === 'LEVEL_NOT_FOUND') return '0';
     throw error;
   }
 }
 
-
 // --- UTILITY FUNCTIONS ---
 
+/**
+ * @returns {string}
+ */
 const generateId = () => {
   const bytes = new Uint8Array(16);
   crypto.getRandomValues(bytes);
   return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
 };
 
+/**
+ * @param {any} obj
+ * @returns {string}
+ */
 const JSONStringifyWithBigInt = (obj) => {
+  /**
+   * @param {string} key
+   * @param {any} value
+   * @returns {any}
+   */
   function replacer(key, value) {
     if (typeof value === 'bigint') {
       return { __type: 'BigInt', value: value.toString() };
@@ -500,7 +592,16 @@ const JSONStringifyWithBigInt = (obj) => {
   return JSON.stringify(obj, replacer);
 };
 
+/**
+ * @param {string} str
+ * @returns {any}
+ */
 const JSONParseWithBigInt = (str) => {
+  /**
+   * @param {string} key
+   * @param {any} value
+   * @returns {any}
+   */
   function reviver(key, value) {
     if (value && typeof value === 'object' && value.__type) {
       if (value.__type === 'BigInt') {
@@ -515,15 +616,14 @@ const JSONParseWithBigInt = (str) => {
   return JSON.parse(str, reviver);
 };
 
-
 // --- RUST <-> JAVASCRIPT BRIDGE FUNCTIONS ---
 // These are the functions directly exposed to the Wasm module.
 // They simply wrap the main JS functions to provide a stable API for Rust.
 
 /**
  * Loads a block by its height. Exported for the Rust/Wasm module.
- * @param {number} height - The height of the block to load.
- * @returns {Promise<object|null>} The block object or null if not found.
+ * @param {bigint} height - The height of the block to load.
+ * @returns {Promise<Block|null>} The block object or null if not found.
  */
 async function load_block_from_db(height) {
   return await loadBlock(height);
@@ -531,7 +631,7 @@ async function load_block_from_db(height) {
 
 /**
  * Gets the height of the current chain tip. Exported for the Rust/Wasm module.
- * @returns {Promise<number>} The height of the latest block.
+ * @returns {Promise<bigint>} The height of the latest block.
  */
 async function get_tip_height_from_db() {
   return await getTipHeight();
@@ -539,7 +639,7 @@ async function get_tip_height_from_db() {
 
 /**
  * Saves the total chain work. Exported for the Rust/Wasm module.
- * @param {string} work - The total work as a string, parsable to a u64 in Rust.
+ * @param {bigint} work - The total work as a string, parsable to a u64 in Rust.
  * @returns {Promise<void>}
  */
 async function save_total_work_to_db(work) {
@@ -556,70 +656,76 @@ async function get_total_work_from_db() {
   return await loadTotalWork();
 }
 
-
-// --- MODULE EXPORTS ---
-
-
-
 // --- UTXO OPERATIONS ---
+
+/**
+ * @param {string} commitment_hex
+ * @param {any} output
+ * @returns {Promise<void>}
+ */
 async function save_utxo(commitment_hex, output) {
   const db = await getUtxoDb();
   await db.put(commitment_hex, output);
 }
 
+/**
+ * @param {string} commitment_hex
+ * @returns {Promise<any>}
+ */
 async function load_utxo(commitment_hex) {
   const db = await getUtxoDb();
   try {
     return await db.get(commitment_hex);
-  } catch (err) {
+  } catch (/** @type {any} */ err) {
     if (err && err.code === 'LEVEL_NOT_FOUND') return null;
     throw err;
   }
 }
 
+/**
+ * @param {string} commitment_hex
+ * @returns {Promise<void>}
+ */
 async function delete_utxo(commitment_hex) {
   const db = await getUtxoDb();
   try {
     await db.del(commitment_hex);
-  } catch (err) {
+  } catch (/** @type {any} */ err) {
     if (err && err.code === 'LEVEL_NOT_FOUND') return;
     throw err;
   }
 }
 
+/**
+ * @returns {Promise<void>}
+ */
 async function clear_all_utxos() {
   const db = await getUtxoDb();
   await db.clear();
   console.log('[DB] UTXO database cleared.');
 }
 
-
 /**
- * Saves a block indexed by both height AND hash
+ * Saves a block indexed by hash (for side blocks/forks).
+ * CRITICAL: Does NOT overwrite canonical chain entries.
+ * @param {Block} block
+ * @returns {Promise<void>}
  */
 async function saveBlockWithHash(block) {
-  const h = block.height.toString(); // Use BigInt's toString()
   const chainDb = await getChainDb();
-  
-  // Save by height (for canonical chain)
-  await chainDb.put(h, stringify(block));
-  // ALSO save by hash (for forks/side chains) 
-  await chainDb.put(`hash:${block.hash}`, stringify(block));
-  // Update tip if needed
-  const currentTip = await getTipHeight();
-  if (block.height >= currentTip) { // Compare BigInts directly
-    await chainDb.put('meta:tip_height', h);
-  }
+  await chainDb.put(`block:${block.hash}`, stringify(block));
 }
 
 /**
  * Loads a block by its hash
+ * @param {string} hash
+ * @returns {Promise<Block|null>}
  */
 async function loadBlockByHash(hash) {
   const chainDb = await getChainDb();
   try {
-    const raw = await chainDb.get(`hash:${hash}`);
-    return parse(raw);
+    const blockData = await chainDb.get(`block:${hash}`);
+    return parse(blockData);
   } catch (error) {
     if (error.code === 'LEVEL_NOT_FOUND') return null;
     throw error;
@@ -628,20 +734,23 @@ async function loadBlockByHash(hash) {
 
 /**
  * Delete a block from the canonical chain at a specific height
+ * @param {bigint} height
+ * @returns {Promise<void>}
  */
 async function deleteCanonicalBlock(height) {
   const chainDb = await getChainDb();
   try {
-    await chainDb.del(height.toString());
-  } catch (error) {
+    await chainDb.del(`height:${height.toString()}`);  
+  } catch (/** @type {any} */ error) {
     if (error.code === 'LEVEL_NOT_FOUND') return;
     throw error;
   }
 }
 
-
 /**
  * Save a reorg marker for crash recovery
+ * @param {string} marker
+ * @returns {Promise<void>}
  */
 async function save_reorg_marker(marker) {
   const chainDb = await getChainDb();
@@ -650,81 +759,84 @@ async function save_reorg_marker(marker) {
 
 /**
  * Clear the reorg marker after successful completion
+ * @returns {Promise<void>}
  */
 async function clear_reorg_marker() {
   const chainDb = await getChainDb();
   try {
     await chainDb.del('meta:reorg_in_progress');
-  } catch (e) {
+  } catch (/** @type {any} */ e) {
     if (e.code !== 'LEVEL_NOT_FOUND') throw e;
   }
 }
 
 /**
  * Check for incomplete reorg on startup
+ * @returns {Promise<string|null>}
  */
 async function check_incomplete_reorg() {
   const chainDb = await getChainDb();
   try {
     return await chainDb.get('meta:reorg_in_progress');
-  } catch (e) {
+  } catch (/** @type {any} */ e) {
     if (e.code === 'LEVEL_NOT_FOUND') return null;
     throw e;
   }
 }
 
-
 /**
  * Set the chain tip metadata atomically
+ * @param {bigint} height
+ * @param {string} hash
+ * @returns {Promise<void>}
  */
 async function setTipMetadata(height, hash) {
   const chainDb = await getChainDb();
-  await chainDb.put('meta:tip_height', height);
+  await chainDb.put('meta:tip_height', height.toString());
   await chainDb.put('meta:tip_hash', hash);
 }
 
 /**
  * Save a block to staging area for atomic reorg
+ * @param {Block} block
+ * @returns {Promise<void>}
  */
 async function save_block_to_staging(block) {
   const chainDb = await getChainDb();
-  const stagingKey = `staging:${block.height}`;
-  // FIX: Use JSONStringifyWithBigInt instead of stringify
-  await chainDb.put(stagingKey, JSONStringifyWithBigInt(block));
+  await chainDb.put(`staging:${block.hash}`, stringify(block));
 }
 
 /**
  * Atomically commit a staged reorg
  * This uses a batch operation to ensure atomicity
+ * @param {Array<Block>} blocks
+ * @param {Array<bigint>} oldHeights
+ * @param {bigint} newTipHeight
+ * @param {string} newTipHash
+ * @returns {Promise<void>}
  */
 async function commit_staged_reorg(blocks, oldHeights, newTipHeight, newTipHash) {
   const chainDb = await getChainDb();
   const batch = chainDb.batch();
 
   for (const block of blocks) {
-    const stagingKey = `staging:${block.height}`;
-    const canonicalKey = block.height.toString(); // Use toString()
-    const hashKey = `hash:${block.hash}`;
-
-    const blockStr = JSONStringifyWithBigInt(block);
-    batch.put(canonicalKey, blockStr);
-    batch.put(hashKey, blockStr);
-    
-    batch.del(stagingKey);
+    const blockStr = stringify(block);
+    batch.put(`block:${block.hash}`, blockStr);
+    batch.put(`height:${block.height.toString()}`, block.hash);
+    batch.del(`staging:${block.hash}`);
   }
   
   for (const height of oldHeights) {
-    batch.del(height.toString()); // Use toString()
+    batch.del(`height:${height.toString()}`);
   }
   
-  batch.put('meta:tip_height', newTipHeight.toString()); // Use toString()
+  batch.put('meta:tip_height', newTipHeight.toString());
   batch.put('meta:tip_hash', newTipHash);
   
   await batch.write();
-  console.log('[DB] Atomic reorg commit completed');
 }
 
-// Reorg marker functions
+// --- MODULE EXPORTS ---
 
 module.exports = {
   // Management
@@ -743,7 +855,7 @@ module.exports = {
   getChainTip,
   getAllBlocks,
   loadBlocks,
-    saveBlockWithHash,
+  saveBlockWithHash,
   loadBlockByHash,
   
   // Deferred blocks
@@ -765,13 +877,13 @@ module.exports = {
   delete_utxo,
   clear_all_utxos,
 
-
   // Functions for JS Worker (utils.cjs)
   JSONStringifyWithBigInt,
   JSONParseWithBigInt,
   generateId,
   deleteCanonicalBlock,
   setTipMetadata,
+  
   // For testing
   __setDbs,
   save_block_to_staging,

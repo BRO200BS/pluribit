@@ -111,11 +111,29 @@ message HashesResponse {
   bool final_chunk = 3;
 }
 
-// Announce chain tip during consensus discovery.
-message TipBroadcast {
+// NEW: An empty message for tip requests. The presence of the message is the request.
+message TipRequest {}
+
+// RENAMED from TipBroadcast to be more explicit.
+message TipResponse {
   string tip_hash = 1;
   uint64 height = 2;
   string total_work = 3; // Rationale: Use string for u64/BigInt safety.
+}
+
+// NEW: A wrapper message for all messages sent on the SYNC topic.
+message SyncMessage {
+  oneof payload {
+    TipRequest tip_request = 1;
+    TipResponse tip_response = 2;
+  }
+}
+
+// Dandelion stem-phase transaction wrapper
+message DandelionStem {
+  Transaction transaction = 1;
+  uint32 hop_count = 2;
+  uint64 timestamp = 3; // When stem phase started
 }
 
 // Top-level message wrapper.
@@ -130,6 +148,7 @@ message P2pMessage {
     BlockRequest block_request = 4;
     GetHashesRequest get_hashes_request = 5;
     HashesResponse hashes_response = 6;
-    TipBroadcast tip_broadcast = 7;
+    SyncMessage sync_message = 7;
+    DandelionStem dandelion_stem = 8; // NEW
   }
 }

@@ -207,7 +207,6 @@ const syncState = {
 
 const blockRequestState = {
     // --- State for reassembling chunked blocks ---
-    blockChunkAssembler: new Map(), // chunkId -> { hash, total_chunks, chunks: [], received_chunks, timer }
     peerRequests: new Map(), // peer -> Map(blockHash -> lastRequestTime)
     globalRequests: new Map(), // blockHash -> Set(peerIds)
     MAX_PEERS_PER_BLOCK: 3,
@@ -261,6 +260,26 @@ function startApiServer() {
                     vdfIterations: tipBlock?.vdf_iterations || 0
                 }));
             }
+            
+            else if (url.pathname === '/api/mempool') {
+                try {
+                    // Call the Rust function to get mempool data
+                    const mempoolData = await pluribit.get_mempool_data();
+                    
+                    res.writeHead(200);
+                    res.end(JSONStringifyWithBigInt(mempoolData));
+                } catch (e) {
+                    log(`[API] Mempool error: ${e.message}`, 'error');
+                    res.writeHead(500);
+                    res.end(JSONStringifyWithBigInt({ 
+                        error: e.message,
+                        pending_count: 0,
+                        fee_total: 0,
+                        transactions: []
+                    }));
+                }
+            }
+            
             else if (url.pathname.startsWith('/api/block/')) {
                 const height = BigInt(url.pathname.split('/')[3]);
                 
@@ -590,7 +609,9 @@ export async function main() {
                     try {
                         const tip = await db.getTipHeight();
                         console.log(`Tip height: ${tip}`);
-                        for (let h = 0; h <= Math.min(tip, 5); h++) {
+                        // ✅ Use BigInt comparison instead of Math.min
+                        const maxHeight = tip < 5n ? tip : 5n;
+                        for (let h = 0n; h <= maxHeight; h++) {
                             const block = await db.loadBlock(h);
                             const coinbase = block.transactions.find(tx => tx.inputs.length === 0);
                             console.log(`Block ${h}: ${coinbase ? coinbase.outputs.length + ' coinbase outputs' : 'no coinbase'}`);
@@ -606,7 +627,8 @@ export async function main() {
                         let totalCoinbaseOutputs = 0;
                         let uniqueCommitments = new Set();
                         
-                        for (let h = 1; h <= tip; h++) {
+                        for (let h = 1n; h <= tip; h++) {
+
                             const block = await db.loadBlock(h);
                             for (const tx of block.transactions) {
                                 if (tx.inputs.length === 0) { // Coinbase
@@ -631,31 +653,6 @@ export async function main() {
                     }
                     break;
 
-                case 'checkMiners':
-                    try {
-                        const tip = await db.getTipHeight();
-                        const aliceAddr = 'pb1kpytpt9plch2dmd34wv3sq0md3zsd9nwrk9ucxmaqtcvz5skqy5q4j583s';
-                        const bobAddr = 'pb1rz4dsfzuxsr9lcvlwy3e7mqxslpk55s8luhv4ry0dg64l0tl6frqk2tvnv';
-                        
-                        let aliceBlocks = 0;
-                        let bobBlocks = 0;
-                        let unknownBlocks = 0;
-                        
-                        for (let h = 1; h <= tip; h++) {
-                            const block = await db.loadBlock(h);
-                            const coinbase = block.transactions[0];
-                            // Check which wallet can see this output
-                            // This requires checking the stealth keys
-                            console.log(`Block ${h}: miner_pubkey = ${block.miner_pubkey ? '...' + Buffer.from(block.miner_pubkey).toString('hex').slice(-8) : 'none'}`);
-                        }
-                        
-                        log(`Blocks mined by Alice: ${aliceBlocks}`, 'info');
-                        log(`Blocks mined by Bob: ${bobBlocks}`, 'info');
-                        log(`Unknown: ${unknownBlocks}`, 'info');
-                    } catch(e) {
-                        log(`Check failed: ${e}`, 'error');
-                    }
-                    break;
 
                 //audit total supply
                 case 'getSupply':
@@ -840,6 +837,55 @@ async function fetchBlocksParallel(blockHashes, peerIds) {
     return results;
     }
     
+    
+async function triggerReorgPlan(blockHash) {
+    try {
+        const blockHashShort = blockHash.substring(0, 12);
+        log(`[REORG] Planning reorg from fork tip ${blockHashShort}...`, 'warn');
+
+        const plan_js = await pluribit.plan_reorg_for_tip(blockHash);
+        const plan = plan_js;
+
+        if (plan.requests && plan.requests.length > 0) {
+            log(`[REORG] Plan requires missing blocks. Requesting ${plan.requests.length} block(s)...`, 'info');
+            for (const hash of plan.requests) {
+                if (!reorgState.requestedBlocks.has(hash)) {
+                    trackRequest(hash);
+                    log(`[REORG] Broadcasting request for missing block ${hash.substring(0,12)}`);
+                    await workerState.p2p.publish(TOPICS.BLOCK_REQUEST, { hash });
+                }
+            }
+            return; // Wait for blocks to arrive
+        }
+
+        if (plan.should_switch) {
+            log(`[REORG] Fork is heavier. Applying reorg: -${plan.detach?.length||0} +${plan.attach?.length||0}`, 'warn');
+            workerState.wasMinerActiveBeforeReorg = workerState.minerActive;
+            const __resumeMining = workerState.minerActive;
+
+            await abortCurrentMiningJob();
+            workerState.isReorging = true;
+            try {
+                await pluribit.atomic_reorg(plan_js);
+            } finally {
+                workerState.isReorging = false;
+            }
+
+            if (__resumeMining) {
+                workerState.minerActive = true;
+                await startPoSTMining();
+            }
+            workerState.wasMinerActiveBeforeReorg = false;
+        } else {
+            log(`[REORG] No switch needed; staying on current canonical chain.`, 'info');
+        }
+    } catch (e) {
+        const util = await import('node:util');
+        const errorDetails = util.inspect(e, { depth: 5 });
+        log(`[REORG] Failed to plan/execute reorg: ${errorDetails}`, 'error');
+    }
+}
+    
     // Forward sync implementation
 async function syncForward(targetHeight, targetHash, trustedPeers) {
     // RATIONALE (State Machine): Prevent multiple syncs from running concurrently.
@@ -901,8 +947,8 @@ async function syncForward(targetHeight, targetHash, trustedPeers) {
             return;
         }
         
-        log(`[SYNC] Need to download ${allHashes.length} blocks from height ${currentHeight + 1} to ${targetHeight}`, 'info');
-        
+        log(`[SYNC] Need to download ${allHashes.length} blocks from height ${currentHeight + 1n} to ${targetHeight}`, 'info');
+
 
         // --- RATIONALE (Fix #3, #8, Timestamp/Sequence Validation): Stream-validate blocks ---
         // The old logic downloaded an entire batch of blocks before validating any.
@@ -915,7 +961,8 @@ async function syncForward(targetHeight, targetHash, trustedPeers) {
             }
 
             const batchHashes = allHashes.slice(i, i + BATCH_SIZE);
-            log(`[SYNC] Processing batch of ${batchHashes.length} blocks (height ${currentHeight + 1}...)`, 'info');
+            log(`[SYNC] Processing batch of ${batchHashes.length} blocks (height ${currentHeight + 1n}...)`, 'info');
+
 
             // RATIONALE (Peer Scoring): Filter out peers with low scores.
             const availablePeers = trustedPeers.filter(p => (workerState.peerScores.get(p) || 100) > 0);
@@ -931,8 +978,71 @@ async function syncForward(targetHeight, targetHash, trustedPeers) {
                 if (!block) throw new Error(`Failed to fetch required block ${hash}`);
                 if (block.hash !== hash) throw new Error(`Fetched block hash mismatch for ${hash}`);
 
-                const result = await pluribit.ingest_block(block);
+                const blockHeightBigInt = BigInt(block.height.toString());
+
+                // NEW: Check if we already have a block at this height in our canonical chain
+                const canonicalBlockAtHeight = await load_block_from_db(blockHeightBigInt);
                 
+                if (canonicalBlockAtHeight) {
+                    if (canonicalBlockAtHeight.hash === block.hash) {
+                        // We already have this exact block - skip it
+                        log(`[SYNC] Already have block ${block.hash.substring(0,12)} at height ${block.height}, skipping...`, 'debug');
+                        
+                        syncState.syncProgress.currentHeight = blockHeightBigInt;
+                        currentHeight = blockHeightBigInt;
+                        previousBlock = block;
+                        
+                        // Still send progress updates for UI
+                        const currentBlockIndex = i + batchHashes.indexOf(hash);
+                        if (currentBlockIndex % 10 === 0 || currentBlockIndex === allHashes.length - 1) {
+                            parentPort.postMessage({
+                                type: 'syncProgress',
+                                payload: {
+                                    current: blockHeightBigInt,
+                                    target: targetHeight,
+                                    startTime: startTime,
+                                }
+                            });
+                        }
+                        continue; // Skip to next block
+                    } else {
+                        // Different block at same height = fork detected!
+                        log(`[SYNC] Fork detected at height ${block.height}. Our hash: ${canonicalBlockAtHeight.hash.substring(0,12)}, peer hash: ${block.hash.substring(0,12)}`, 'warn');
+                        log(`[SYNC] Halting linear sync and triggering reorg evaluation...`, 'warn');
+                        
+                        // Ingest the fork block (will return storedOnSide)
+                        const blockBytes = p2p.Block.encode(block).finish();
+                        const result = await pluribit.ingest_block_bytes(blockBytes);
+                        
+                        if (result.type === 'storedOnSide') {
+                            await triggerReorgPlan(result.tip_hash || block.hash);
+                        }
+                        
+                        // Exit sync - reorg handler takes over
+                        syncState.consecutiveFailures = 0;
+                        syncState.syncProgress.status = 'IDLE';
+                        workerState.isSyncing = false;
+                        parentPort.postMessage({ type: 'syncComplete' });
+                        return;
+                    }
+                }
+
+                // No block at this height - proceed with normal ingestion
+                const blockBytes = p2p.Block.encode(block).finish();
+                const result = await pluribit.ingest_block_bytes(blockBytes);
+
+                if (result.type === 'storedOnSide') {
+                    log(`[SYNC] Fork detected at height ${block.height}. Halting sync and initiating reorg plan directly.`, 'warn');
+                    
+                    await triggerReorgPlan(result.tip_hash || block.hash);
+                    
+                    syncState.consecutiveFailures = 0;
+                    syncState.syncProgress.status = 'IDLE';
+                    workerState.isSyncing = false;
+                    parentPort.postMessage({ type: 'syncComplete' });
+                    return;
+                }
+
                 if (result.type === 'invalid') {
                     // RATIONALE (Peer Scoring): If we get an invalid block, penalize all peers
                     // who claimed to have this chain tip, as one of them is lying.
@@ -954,29 +1064,28 @@ async function syncForward(targetHeight, targetHash, trustedPeers) {
                 }
                 
                 // Send a progress update to the main thread periodically.
-                // We update every 10 blocks or on the very last block to ensure it reaches 100%.
                 const currentBlockIndex = i + batchHashes.indexOf(hash);
                 if (currentBlockIndex % 10 === 0 || currentBlockIndex === allHashes.length - 1) {
                     parentPort.postMessage({
                         type: 'syncProgress',
                         payload: {
-                            current: block.height,
+                            current: blockHeightBigInt,
                             target: targetHeight,
                             startTime: startTime,
                         }
                     });
                 }
                 
-                syncState.syncProgress.currentHeight = block.height;
-                
-                if (block.height % CHECKPOINT_INTERVAL === 0) {
+                syncState.syncProgress.currentHeight = blockHeightBigInt;
+                                
+                if (blockHeightBigInt % BigInt(CHECKPOINT_INTERVAL) === 0n) {
                     const chainState = await pluribit.get_blockchain_state();
-                    await db.saveTotalWork(chainState.total_work); // Persist work progress
-                    log(`[SYNC] Checkpoint saved at height ${block.height}`, 'info');
+                    await db.saveTotalWork(chainState.total_work);
+                    log(`[SYNC] Checkpoint saved at height ${blockHeightBigInt}`, 'info');
                 }
-                
+                                
                 // Update wallets periodically
-                if (block.height % 100 === 0) {
+                if (blockHeightBigInt % 100n === 0n) {
                     const release = await globalMutex.acquire();
                     try {
                         for (const walletId of workerState.wallets.keys()) {
@@ -986,9 +1095,10 @@ async function syncForward(targetHeight, targetHash, trustedPeers) {
                         release();
                     }
                 }
+                
                 // Update previousBlock for the next iteration.
                 previousBlock = block;
-                currentHeight = block.height;
+                currentHeight = blockHeightBigInt;
             }
 
         }
@@ -1040,35 +1150,41 @@ async function syncForward(targetHeight, targetHash, trustedPeers) {
 
 
 async function startPoSTMining() {
-    if (!workerState.minerActive) return;
-    
-    // Ensure mining worker exists
-    if (!workerState.miningWorker) {
-        workerState.miningWorker = new ThreadWorker(new URL('./mining-worker.js', import.meta.url));
-        attachMiningWorkerHandlers(workerState.miningWorker);
-    }
-    
-    // Get current chain state
-    const chain = await pluribit.get_blockchain_state();
-    
-    // Get the miner's secret key
-    const minerSecretKey = await pluribit.wallet_session_get_spend_privkey(workerState.minerId);
+    // Acquire the lock at the beginning of the function
+    const release = await globalMutex.acquire(); 
+    try {
+        if (!workerState.minerActive) return;
+        
+        // Ensure mining worker exists
+        if (!workerState.miningWorker) {
+            workerState.miningWorker = new ThreadWorker(new URL('./mining-worker.js', import.meta.url));
+            attachMiningWorkerHandlers(workerState.miningWorker);
+        }
+        
+        // Get current chain state
+        const chain = await pluribit.get_blockchain_state();
+        
+        // Get the miner's secret key
+        const minerSecretKey = await pluribit.wallet_session_get_spend_privkey(workerState.minerId);
 
-    // Abort any in-flight job, then send a fresh mining job
-    await abortCurrentMiningJob();    
-    
-    // Send mining job to worker
-    workerState.currentJobId++;
-    workerState.miningWorker.postMessage({
-        type: 'MINE_BLOCK',
-        jobId: workerState.currentJobId,
-        height: BigInt(chain.current_height) + 1n,
-        minerPubkey: await pluribit.wallet_session_get_spend_pubkey(workerState.minerId),
-        minerSecretKey: minerSecretKey,  // Add the secret key
-        prevHash: await pluribit.get_latest_block_hash(),
-        vrfThreshold: Array.from(chain.current_vrf_threshold),
-        vdfIterations: chain.current_vdf_iterations
-    });
+        // Abort any in-flight job, then send a fresh mining job
+        await abortCurrentMiningJob();
+        // Send mining job to worker
+        workerState.currentJobId++;
+        workerState.miningWorker.postMessage({
+            type: 'MINE_BLOCK',
+            jobId: workerState.currentJobId,
+            height: BigInt(chain.current_height) + 1n,
+            minerPubkey: await pluribit.wallet_session_get_spend_pubkey(workerState.minerId),
+            minerSecretKey: minerSecretKey,
+            prevHash: await pluribit.get_latest_block_hash(),
+            vrfThreshold: Array.from(chain.current_vrf_threshold),
+            vdfIterations: chain.current_vdf_iterations
+        });
+    } finally {
+        // Always release the lock when the function is done
+        release(); 
+    }
 }
 
 async function stopMining() {
@@ -1111,155 +1227,172 @@ async function handleMiningCandidate(candidate, jobId) {
 
 
 async function handleRemoteBlockDownloaded({ block }) {
-    // If we're in the middle of a major sync, defer the block.
-    if (workerState.isSyncing) {
-        await db.saveDeferredBlock(block);
-        return;
-    }
-
-    if (workerState.isDownloadingChain) {
-        log(`[DEBUG] Skipping request handling during chain download for block ${block.height}`);
-        return;
-    }
-
-    log(`[DEBUG] Processing block #${block.height} hash: ${block.hash.substring(0,12)}...`);
-
+    const release = await globalMutex.acquire();
     try {
-        // RATIONALE: Encode the JavaScript block object into Protobuf binary format.
-        // This is required by the new, more secure 'ingest_block_bytes' Rust function.
-        const blockBytes = p2p.Block.encode(block).finish();
+        const currentHeight = (await pluribit.get_blockchain_state()).current_height;
 
-
-        // RATIONALE (BUGFIX): The `ingest_block_bytes` function returns a `JsValue`
-        // from Rust, which `wasm-bindgen` automatically converts into a plain JavaScript
-        // object. The original code incorrectly tried to deserialize this object again
-        // using a non-existent `serde_wasm_bindgen.fromValue` function, causing the TypeError.
-        //
-        // The fix is to use the returned JavaScript object directly, as it is already
-        // in the correct format.
-        const result_js = await pluribit.ingest_block_bytes(blockBytes);
-        const result = result_js; // Use the object directly.
-
-        const t = String(result?.type || '').toLowerCase();
-        const reason = String(result?.reason || '').toLowerCase();
-        log(`[DEBUG] ingest_block returned type: ${result?.type}, full result: ${JSON.stringify(result)}`);
-
-        if (t === 'needparent'){
-          const h = result.hash;
-          if (!reorgState.requestedBlocks.has(h)) {
-            trackRequest(h);
-            log(`Requesting missing parent ${h.substring(0,12)}...`, 'info');
-            await workerState.p2p.publish(TOPICS.BLOCK_REQUEST, { hash: h });
-          }
-          return; // wait for parent
-        }
-
-        if (t === 'acceptedandextended') {
-          try {
-            await workerState.p2p.publish(TOPICS.BLOCK_ANNOUNCEMENTS, { hash: block.hash, height: block.height });
-          } catch(e) {
-            console.error(`[MINING DEBUG] Failed to announce block:`, e);
-          }
-
-          try {
-            await workerState.p2p.publish(TOPICS.BLOCKS, block);
-            log(`[MINING DEBUG] Full block broadcast on ${TOPICS.BLOCKS}`, 'debug');
-          } catch (e) {
-            log(`[MINING DEBUG] Failed to publish full block: ${e?.message || e}`, 'warn');
-          }
-
-          log(`[DEBUG] Active wallets in workerState: ${Array.from(workerState.wallets.keys()).join(', ')}`);
-          const blockForWasm = convertLongsToBigInts(block);
-
-          // Acquire global mutex before modifying ANY wallet state
-          // RATIONALE: Prevents race condition between block scanning and transaction creation.
-          // Without this mutex, a new transaction can select UTXOs that a concurrent block
-          // scan is marking as spent, leading to wallet state corruption and Rust panics.
-          const release = await globalMutex.acquire();
-          try {
-            for (const walletId of workerState.wallets.keys()) {
-              try {
-                // Use the converted block object here
-                await pluribit.wallet_session_scan_block(walletId, blockForWasm); 
-                const updatedJson = await pluribit.wallet_session_export(walletId);
-                await db.saveWallet(walletId, updatedJson);
-                const newBalance = await pluribit.wallet_session_get_balance(walletId);
-                parentPort.postMessage({ type: 'walletBalance', payload: { wallet_id: walletId, balance: newBalance }});
-                log(`Balance updated for ${walletId} after new block.`, 'debug');
-              } catch (e) {
-                log(`Wallet scan/save failed for ${walletId}: ${e?.message || e}`, 'warn');
-              }
+        // If we're in a formal sync OR if the block is way ahead of us, defer it.
+        if (workerState.isSyncing || BigInt(block.height) > BigInt(currentHeight) + 1n) {
+            if (!workerState.isSyncing) {
+                log(`[DEFER] Deferring out-of-order block #${block.height} while at height ${currentHeight}. Triggering sync check.`, 'info');
+                // This is a good place to trigger a sync check, as we've clearly missed blocks.
+                setTimeout(safe(bootstrapSync), 500);
             }
-          } finally {
-            release(); // Always release the mutex, even if an error occurs
-          }
-
-          if (workerState.minerActive) {
-            log('[MINING] New block accepted. Restarting miner for next block...', 'info');
-            (async () => { await abortCurrentMiningJob(); await startPoSTMining(); })();
-          }
-          return;
-        }
-
-        if (t === 'storedonside') {
-            try {
-                // Use the hash from the result, not the block object
-                const blockHash = result.tip_hash || block.hash || 'unknown';
-                const blockHashShort = blockHash.length >= 12 ? blockHash.substring(0, 12) : blockHash;
-                log(`[REORG] Block ${blockHashShort} is a fork tip. Planning reorg...`, 'warn');
-                
-                const plan_js = await pluribit.plan_reorg_for_tip(blockHash);
-                const plan = plan_js; // Use the object directly.
-
-                if (plan.requests && plan.requests.length > 0) {
-                    log(`[REORG] Plan requires missing parents. Requesting ${plan.requests.length} block(s)...`, 'info');
-                    for (const hash of plan.requests) {
-                        if (!reorgState.requestedBlocks.has(hash)) {
-                            trackRequest(hash);
-                            await workerState.p2p.publish(TOPICS.BLOCK_REQUEST, { hash: hash });
-                        }
-                    }
-                    return;
-                }
-
-                if (plan.should_switch) {
-                    log(`[REORG] Fork is heavier. Applying reorg: -${plan.detach?.length||0} +${plan.attach?.length||0}`, 'warn');
-                    workerState.wasMinerActiveBeforeReorg = workerState.minerActive;
-                    const __resumeMining = workerState.minerActive;
-
-                    await abortCurrentMiningJob();
-                    workerState.isReorging = true;
-                    try {
-                        await pluribit.atomic_reorg(plan_js);
-                    } finally {
-                        workerState.isReorging = false;
-                    }
-
-                    if (__resumeMining) {
-                        workerState.minerActive = true;
-                        await startPoSTMining();
-                    }
-                    workerState.wasMinerActiveBeforeReorg = false;
-                } else {
-                    log(`[REORG] No switch needed; staying on current canonical chain.`, 'info');
-                }
-            } catch (e) {
-                const util = await import('node:util');
-                const errorDetails = util.inspect(e, { depth: 5 });
-                log(`[REORG] Failed to plan/execute reorg: ${errorDetails}`, 'error');
-            }
+            await db.saveDeferredBlock(block);
             return;
         }
 
-        if (t === 'invalid') {
-          log(`Invalid block rejected: ${result.reason ?? ''}`, 'warn');
-          return;
+        if (workerState.isDownloadingChain) {
+            log(`[DEBUG] Skipping request handling during chain download for block ${block.height}`);
+            return;
         }
 
-        log(`Unhandled ingest result: ${JSON.stringify(result)}`, 'debug');
+        log(`[DEBUG] Processing block #${block.height} hash: ${block.hash.substring(0,12)}...`);
 
-    } catch (e) {
-        log(`Failed to process downloaded block: ${e.stack || e.message || e}`, 'error');
+        try {
+            // RATIONALE: Encode the JavaScript block object into Protobuf binary format.
+            // This is required by the new, more secure 'ingest_block_bytes' Rust function.
+            const blockBytes = p2p.Block.encode(block).finish();
+
+
+            // RATIONALE (BUGFIX): The `ingest_block_bytes` function returns a `JsValue`
+            // from Rust, which `wasm-bindgen` automatically converts into a plain JavaScript
+            // object. The original code incorrectly tried to deserialize this object again
+            // using a non-existent `serde_wasm_bindgen.fromValue` function, causing the TypeError.
+            //
+            // The fix is to use the returned JavaScript object directly, as it is already
+            // in the correct format.
+            const result_js = await pluribit.ingest_block_bytes(blockBytes);
+            const result = result_js; // Use the object directly.
+
+            const t = String(result?.type || '').toLowerCase();
+            const reason = String(result?.reason || '').toLowerCase();
+            log(`[DEBUG] ingest_block returned type: ${result?.type}, full result: ${JSON.stringify(result)}`);
+
+            if (t === 'needparent'){
+              const h = result.hash;
+              if (!reorgState.requestedBlocks.has(h)) {
+                trackRequest(h);
+                log(`Requesting missing parent ${h.substring(0,12)}...`, 'info');
+                await workerState.p2p.publish(TOPICS.BLOCK_REQUEST, { hash: h });
+              }
+              return; // wait for parent
+            }
+
+            if (t === 'acceptedandextended') {
+              try {
+                await workerState.p2p.publish(TOPICS.BLOCK_ANNOUNCEMENTS, { 
+                    hash: block.hash, 
+                    height: block.height.toString() 
+                });
+              } catch(e) {
+                console.error(`[MINING DEBUG] Failed to announce block:`, e);
+              }
+
+              try {
+                await workerState.p2p.publish(TOPICS.BLOCKS, block);
+                log(`[MINING DEBUG] Full block broadcast on ${TOPICS.BLOCKS}`, 'debug');
+              } catch (e) {
+                log(`[MINING DEBUG] Failed to publish full block: ${e?.message || e}`, 'warn');
+              }
+
+              log(`[DEBUG] Active wallets in workerState: ${Array.from(workerState.wallets.keys()).join(', ')}`);
+              const blockForWasm = convertLongsToBigInts(block);
+
+              try {
+                for (const walletId of workerState.wallets.keys()) {
+                  try {
+                    // Use the converted block object here
+                    await pluribit.wallet_session_scan_block(walletId, blockForWasm); 
+                    const updatedJson = await pluribit.wallet_session_export(walletId);
+                    await db.saveWallet(walletId, updatedJson);
+                    const newBalance = await pluribit.wallet_session_get_balance(walletId);
+                    parentPort.postMessage({ type: 'walletBalance', payload: { wallet_id: walletId, balance: newBalance }});
+                    log(`Balance updated for ${walletId} after new block.`, 'debug');
+                  } catch (e) {
+                    log(`Wallet scan/save failed for ${walletId}: ${e?.message || e}`, 'warn');
+                  }
+                }
+              } catch (e) {
+                  const msg = e?.stack || e?.message || String(e);
+                  log(`Fatal error during wallet scan loop: ${msg}`, 'error');
+              }
+
+              if (workerState.minerActive) {
+                log('[MINING] New block accepted. Restarting miner for next block...', 'info');
+                (async () => { await abortCurrentMiningJob(); await startPoSTMining(); })();
+              }
+              return;
+            }
+
+            if (t === 'storedonside') {
+                try {
+                    const blockHash = result.tip_hash || block.hash || 'unknown'; 
+                    const blockHashShort = blockHash.length >= 12 ? blockHash.substring(0, 12) : blockHash; 
+                    log(`[REORG] Block ${blockHashShort} is a fork tip. Planning reorg...`, 'warn'); 
+                    
+                    const plan_js = await pluribit.plan_reorg_for_tip(blockHash); 
+                    const plan = plan_js; 
+
+                    if (plan.requests && plan.requests.length > 0) {
+                        log(`[REORG] Plan requires missing blocks. Requesting ${plan.requests.length} block(s)...`, 'info'); 
+                        
+                        for (const hash of plan.requests) {
+                            if (!reorgState.requestedBlocks.has(hash)) { 
+                                trackRequest(hash);
+                                
+                                log(`[REORG] Broadcasting request for missing block ${hash.substring(0,12)}`);
+                                // Publish a general request. The block will be processed by this same function when it arrives.
+                                await workerState.p2p.publish(TOPICS.BLOCK_REQUEST, { hash }); 
+                            }
+                        }
+                        
+                        // After requesting blocks, we must wait for them to arrive before retrying the plan.
+                        // The retry logic is now handled by the arrival of the requested blocks which will trigger this function again.
+                        return; // Stop processing this path for now.
+                    }
+
+                    if (plan.should_switch) { 
+                        log(`[REORG] Fork is heavier. Applying reorg: -${plan.detach?.length||0} +${plan.attach?.length||0}`, 'warn'); 
+                        workerState.wasMinerActiveBeforeReorg = workerState.minerActive; 
+                        const __resumeMining = workerState.minerActive; 
+
+                        await abortCurrentMiningJob(); 
+                        workerState.isReorging = true;
+                        try {
+                            await pluribit.atomic_reorg(plan_js); 
+                        } finally {
+                            workerState.isReorging = false; 
+                        }
+
+                        if (__resumeMining) { 
+                            workerState.minerActive = true; 
+                            await startPoSTMining(); 
+                        }
+                        workerState.wasMinerActiveBeforeReorg = false; 
+                    } else {
+                        log(`[REORG] No switch needed; staying on current canonical chain.`, 'info'); 
+                    }
+                } catch (e) {
+                    const util = await import('node:util'); 
+                    const errorDetails = util.inspect(e, { depth: 5 }); 
+                    log(`[REORG] Failed to plan/execute reorg: ${errorDetails}`, 'error'); 
+                }
+                return;
+            }
+
+            if (t === 'invalid') {
+              log(`Invalid block rejected: ${result.reason ?? ''}`, 'warn');
+              return;
+            }
+
+            log(`Unhandled ingest result: ${JSON.stringify(result)}`, 'debug');
+
+        } catch (e) {
+            log(`Failed to process downloaded block: ${e.stack || e.message || e}`, 'error');
+        }
+    } finally {
+        release();
     }
 }
 
@@ -1332,7 +1465,7 @@ setInterval(safe(debugReorgState), 60000); // Every 60 seconds
 
     // Ensure genesis block exists in DB for new chains.
     const tipHeight = await db.getTipHeight();
-    if (tipHeight === 0 && !(await db.loadBlock(0))) {
+    if (tipHeight === 0n && !(await db.loadBlock(0))) { 
         log('Creating and saving new genesis block to DB.', 'info');
         // We get the genesis block from Rust and save it to the DB at height 0.
         const genesisBlock = await pluribit.create_genesis_block();
@@ -1511,27 +1644,28 @@ if (verifiedPeers.length === 0) {
 
     const tipResponses = new Map();
     const tipHandler = (message, { from }) => {
-        try {
-            if (message.type === 'TIP_RESPONSE') {
-                log(
-                    `[SYNC] Received TIP_RESPONSE from ${from.toString().slice(-6)}: ` +
-                    `Height=${message.height}, Work=${message.totalWork}, Hash=${message.tipHash.substring(0, 12)}...`,
-                    'debug'
-                );
-                tipResponses.set(from.toString(), {
-                    hash: message.tipHash,
-                    height: message.height,
-                    totalWork: BigInt(message.totalWork)
-                });
-            }
-        } catch (e) { log(`[SYNC] Error in tipHandler: ${e?.message || e}`, 'warn'); }
+        // The 'message' is now the SyncMessage object. Check its 'payload' oneof field.
+        if (message.payload === 'tipResponse') {
+            const response = message.tipResponse; // Get the nested data
+            log(
+                `[SYNC] Received TIP_RESPONSE from ${from.toString().slice(-6)}: ` +
+                `Height=${response.height}, Work=${response.totalWork}, Hash=${response.tipHash.substring(0, 12)}...`,
+                'debug'
+            );
+            tipResponses.set(from.toString(), {
+                hash: response.tipHash,
+                height: BigInt(response.height),
+                totalWork: BigInt(response.totalWork)
+            });
+        }
     };
 
     await p2p.subscribe(TOPICS.SYNC, tipHandler);
-    await p2p.publish(TOPICS.SYNC, { type: 'TIP_REQUEST' });
+    // Publish the new wrapped message for a request
+    await p2p.publish(TOPICS.SYNC, { tipRequest: {} });
 
     // --- START: CORRECTED setTimeout LOGIC ---
-    setTimeout(() => {
+setTimeout(() => {
         (async () => {
             await p2p.unsubscribe(TOPICS.SYNC, tipHandler);
 
@@ -1546,6 +1680,8 @@ if (verifiedPeers.length === 0) {
                 log(`[SYNC] Consensus Phase: Collected ${tipResponses.size} valid tip(s) for evaluation.`, 'info');
                 
                 const bestTip = [...tipResponses.values()].sort((a, b) => (b.totalWork > a.totalWork) ? 1 : -1)[0];
+                
+                
                 const peersForBestTip = [];
                 for (const [peer, tip] of tipResponses.entries()) {
                     if (tip.hash === bestTip.hash) {
@@ -1558,7 +1694,7 @@ if (verifiedPeers.length === 0) {
                 
                 if (agreement < CONSENSUS_THRESHOLD || peersForBestTip.length < MIN_AGREEING_PEERS) {
                     log(`[SYNC] No consensus on best chain tip. Best candidate (Work=${bestTip.totalWork}) only had ${Math.round(agreement * 100)}% agreement.`, 'warn');
-                    syncState.syncProgress.status = 'IDLE'; // Reset state after failed consensus
+                    syncState.syncProgress.status = 'IDLE';
                     return; 
                 }
 
@@ -1566,29 +1702,30 @@ if (verifiedPeers.length === 0) {
                 if (bestTip.totalWork > BigInt(myState.total_work)) {
                     log(`[SYNC] Consensus reached on better chain (Height=${bestTip.height}, Work=${bestTip.totalWork}).`, 'success');
                     
-                    // *** THIS IS THE NEW LOGIC ***
+                    // SET THE SYNC FLAG IMMEDIATELY to prevent the gossip handler from interfering.
+                    workerState.isSyncing = true;
+                    
                     if (bestTip.height > myState.current_height) {
-                        // Scenario 1: The better chain is longer. Sync forward.
+                        // Scenario 1: The better chain is longer. This is a simple fast-forward.
                         log(`[SYNC] Better chain is longer. Starting forward sync...`, 'info');
                         await syncForward(bestTip.height, bestTip.hash, peersForBestTip);
                     } else {
-                        // Scenario 2: Better chain has more work at same/lower height. Trigger a reorg.
+                        // Scenario 2: The better chain has more work but isn't longer. This is a fork that requires a reorg.
                         log(`[SYNC] Fork with more work detected. Fetching tip to initiate reorg...`, 'info');
                         syncState.syncProgress.status = 'DOWNLOADING'; // Use same status to prevent concurrent syncs
-                        workerState.isSyncing = true;
                         
-                        // Fetch the single block that is the tip of the better fork.
+                        // Fetch only the single block that is the tip of the better fork.
                         const tipBlock = await fetchBlockDirectly(peersForBestTip[0], bestTip.hash);
                         
                         if (tipBlock) {
-                            // Feed this block into the regular ingestion pipeline.
-                            // The Rust `ingest_block` function will see it's a fork and trigger the reorg planner.
+                            // Feed this block into the regular ingestion pipeline. The Rust `ingest_block_bytes`
+                            // function will see it's a fork tip and trigger the reorg planner automatically.
                             await handleRemoteBlockDownloaded({ block: tipBlock });
                         } else {
                             throw new Error(`Failed to fetch fork tip ${bestTip.hash} to start reorg.`);
                         }
 
-                        // After reorg is handled, reset state.
+                        // After the reorg is handled (or fails), reset the sync state.
                         syncState.syncProgress.status = 'IDLE';
                         workerState.isSyncing = false;
                         parentPort.postMessage({ type: 'syncComplete' });
@@ -1596,10 +1733,10 @@ if (verifiedPeers.length === 0) {
 
                 } else {
                     log('[SYNC] Already synced to the best known chain.', 'info');
-                    syncState.syncProgress.status = 'IDLE'; // Reset state if we are already synced
+                    syncState.syncProgress.status = 'IDLE';
                 }
             } catch (err) {
-                 log(`[SYNC] Error during consensus or reorg trigger: ${err.message}`, 'error');
+                 log(`[SYNC] Error during consensus or sync trigger: ${err.message}`, 'error');
                  syncState.syncProgress.status = 'IDLE'; // Reset on error
             }
         })();
@@ -1644,8 +1781,8 @@ async function requestAllHashes(peerId, startHeight) {
     try {
         // 3. Publish the request *after* releasing the lock.
         await workerState.p2p.publish(TOPICS.GET_HASHES_REQUEST, {
-            start_height: startHeight,
-            request_id: requestId
+             startHeight: startHeight.toString(),
+            requestId: requestId
         });
 
         // 4. Await the promise. The response handler can now acquire the lock to resolve it.
@@ -1706,45 +1843,11 @@ await p2p.subscribe(TOPICS.BLOCKS, async (block) => {
                 const bytes = new TextEncoder().encode(blockString);
 
                 if (bytes.byteLength <= CONFIG.MAX_MESSAGE_SIZE) {
-                    // Block is small enough, send as a single message
-                    await p2p.publish(TOPICS.BLOCKS, {
-                        type: 'BLOCK_DATA',
-                        payload: block
-                    });
+                    // Block is small enough, send it
+                    await p2p.publish(TOPICS.BLOCKS, block);
                 } else {
-                    // Block is too large, send it in chunks
-                    log(`Block ${hash.substring(0,12)} is too large (${bytes.byteLength} bytes), sending in chunks...`, 'info');
-                    const chunkId = crypto.randomUUID();
-                    const chunkSize = CONFIG.MAX_MESSAGE_SIZE - 1024; // Use a safe chunk size with 1KB overhead
-                    const totalChunks = Math.ceil(bytes.byteLength / chunkSize);
-
-                    // 1. Send the start message
-                    await p2p.publish(TOPICS.BLOCKS, {
-                        type: 'BLOCK_CHUNK_START',
-                        payload: {
-                            chunk_id: chunkId,
-                            total_chunks: totalChunks,
-                            hash: block.hash
-                        }
-                    });
-
-                    // 2. Send all the data chunks
-                    for (let i = 0; i < totalChunks; i++) {
-                        const start = i * chunkSize;
-                        const end = start + chunkSize;
-                        const chunkData = Buffer.from(bytes.subarray(start, end)).toString('base64');
-
-                        await p2p.publish(TOPICS.BLOCKS, {
-                            type: 'BLOCK_CHUNK_DATA',
-                            payload: { chunk_id: chunkId, index: i, data: chunkData }
-                        });
-                    }
-
-                    // 3. Send the end message
-                    await p2p.publish(TOPICS.BLOCKS, {
-                        type: 'BLOCK_CHUNK_END',
-                        payload: { chunk_id: chunkId }
-                    });
+                    // Block is too large - log and skip
+                    log(`Block ${hash.substring(0,12)} is too large (${bytes.byteLength} bytes). Cannot send via gossipsub.`, 'warn');
                 }
             }
         } catch (e) {
@@ -1755,9 +1858,13 @@ await p2p.subscribe(TOPICS.BLOCKS, async (block) => {
 
     // Handle lightweight block announcements (no change)
     await p2p.subscribe(TOPICS.BLOCK_ANNOUNCEMENTS, async (message, { from }) => {
-        const { payload } = message || {};
-        const h = payload?.hash;
+        const h = message?.hash;  
         if (!h) return;
+        // Skip if this is our own broadcast echoing back
+        if (from.toString() === workerState.p2p.node.peerId.toString()) {
+            log(`[DEBUG] Ignoring our own block announcement for ${h.substring(0,12)}`);
+            return;
+        }
         try {
             const have = await pluribit.get_block_by_hash(h);
             if (have) return; // already have it
@@ -1774,7 +1881,8 @@ await p2p.subscribe(TOPICS.BLOCKS, async (block) => {
             }
 
             // Fallback: broadcast a network request (pubsub)
-            await p2p.publish(TOPICS.BLOCK_REQUEST, { type: 'BLOCK_REQUEST', hash: h });
+            await p2p.publish(TOPICS.BLOCK_REQUEST, { hash: h });
+
         } catch (e) {
             log(`ANN handler error: ${e.message || e}`, 'warn');
         }
@@ -1791,14 +1899,14 @@ await p2p.subscribe(TOPICS.BLOCKS, async (block) => {
 
     // New handler to respond to hash requests from other peers
     await p2p.subscribe(TOPICS.GET_HASHES_REQUEST, async (message, { from }) => {
-
         // A node should not respond to its own requests.
         if (from.toString() === workerState.p2p.node.peerId.toString()) {
             return;
         }
-
         try {
-            const { start_height, request_id } = message;
+            const start_height = BigInt(message.startHeight);
+            const { requestId } = message;
+            
             // RATIONALE (Fix #6): Add rate limiting for this expensive request.
             const now = Date.now();
             const peerIdStr = from.toString();
@@ -1807,23 +1915,25 @@ await p2p.subscribe(TOPICS.BLOCKS, async (block) => {
                 return;
             }
             syncState.peerHashRequestTimes.set(peerIdStr, now);
-
+            
             // RATIONALE (Fix #10): Validate the requested start height to prevent abuse.
             const tipHeight = await db.getTipHeight();
-            if (start_height < tipHeight - CONFIG.SYNC.MAX_HASH_REQUEST_RANGE) {
+            // FIX: Convert the config value to a BigInt before performing arithmetic.
+            if (start_height < tipHeight - BigInt(CONFIG.SYNC.MAX_HASH_REQUEST_RANGE)) {
                 log(`[SYNC] Ignoring hash request for start height ${start_height} (too far behind tip ${tipHeight})`, 'warn');
                 return;
             }
-
-            const hashes = await pluribit.get_canonical_hashes_after(BigInt(start_height));
-
+            
+            // FIX: Removed redundant BigInt() wrapper - start_height is already BigInt
+            const hashes = await pluribit.get_canonical_hashes_after(start_height);
+            
             const HASH_CHUNK_SIZE = 1000; // Send 1000 hashes per message
-
+            
             if (hashes.length === 0) {
                 await p2p.publish(TOPICS.HASHES_RESPONSE, { 
                     hashes: [], 
-                    request_id, 
-                    final_chunk: true 
+                    requestId, 
+                    finalChunk: true 
                 });
             } else {
                 for (let i = 0; i < hashes.length; i += HASH_CHUNK_SIZE) {
@@ -1832,25 +1942,28 @@ await p2p.subscribe(TOPICS.BLOCKS, async (block) => {
                     
                     await p2p.publish(TOPICS.HASHES_RESPONSE, { 
                         hashes: chunk, 
-                        request_id, 
-                        final_chunk: isFinal 
+                        requestId: requestId,   
+                        finalChunk: isFinal      
                     });
                 }
             }
             log(`SYNC: Sent ${hashes.length} hashes to peer ${String(from).slice(-6)} in chunks`, 'info');
         } catch (e) {
-            log(`SYNC: Failed to serve hashes to peer: ${e.message}`, 'warn');
+            // Better error handling for non-Error objects
+            const errorMsg = e?.message || e?.toString() || String(e);
+            log(`SYNC: Failed to serve hashes to peer: ${errorMsg}`, 'warn');
         }
     });
 
     // New handler to receive the list of hashes
     await p2p.subscribe(TOPICS.HASHES_RESPONSE, async (message, { from }) => {
-        const { hashes, request_id, final_chunk } = message;
+        const { hashes, requestId, finalChunk } = message; 
+
         
         // RATIONALE: Use mutex to prevent race conditions on shared state.
         const release = await syncState.hashRequestMutex.acquire();
         try {
-            const request = syncState.hashRequestState.get(request_id);
+            const request = syncState.hashRequestState.get(requestId);
             if (!request) {
                 return; // Ignore stale or unknown responses
             }
@@ -1861,7 +1974,7 @@ await p2p.subscribe(TOPICS.BLOCKS, async (block) => {
             if (request.hashes.length + (hashes || []).length > CONFIG.SYNC.MAX_HASHES_PER_SYNC) {
                 const error = new Error(`Peer ${request.peerId} exceeded max hash limit of ${CONFIG.SYNC.MAX_HASHES_PER_SYNC}`);
                 request.reject(error);
-                syncState.hashRequestState.delete(request_id);
+                syncState.hashRequestState.delete(requestId);
                 // Penalize the peer for this behavior.
                 const PENALTY = 50; // A large penalty for a severe infraction.
                 const currentScore = workerState.peerScores.get(request.peerId) || 100;
@@ -1880,9 +1993,9 @@ await p2p.subscribe(TOPICS.BLOCKS, async (block) => {
             // RATIONALE: The sync promise will time out if it's never resolved. This
             // guard ensures we only resolve when we receive a message that explicitly
             // marks the end of the hash stream.
-            if (final_chunk === true) {
+            if (finalChunk === true) {
                 request.resolve(request.hashes);
-                syncState.hashRequestState.delete(request_id);
+                syncState.hashRequestState.delete(requestId);
             }
         } finally {
             release();
@@ -1890,32 +2003,25 @@ await p2p.subscribe(TOPICS.BLOCKS, async (block) => {
     });
  
 
-    await p2p.subscribe(TOPICS.SYNC, async (message, { from }) => {
-        try {
-            if (message.type === 'TIP_REQUEST') {
-                const st = await pluribit.get_blockchain_state();
+await p2p.subscribe(TOPICS.SYNC, async (message, { from }) => {
+        // 'message' is the SyncMessage. Check if it's a request.
+        if (message.payload === 'tipRequest') {
+            const st = await pluribit.get_blockchain_state();
 
-                // --- START: ADD THIS LOGGING BLOCK ---
-                // This log shows what this node is advertising as its current best chain.
-                // It helps confirm if the synced node is correctly reporting its advanced state.
-                log(
-                    `[SYNC] Received TIP_REQUEST from ${from.toString().slice(-6)}. Responding with my tip: ` +
-                    `Height=${st.current_height}, Work=${st.total_work}, Hash=${st.tip_hash.substring(0, 12)}...`,
-                    'debug'
-                );
-                // --- END: ADD THIS LOGGING BLOCK ---
+            log(
+                `[SYNC] Received TIP_REQUEST from ${from.toString().slice(-6)}. Responding with my tip: ` +
+                `Height=${st.current_height}, Work=${st.total_work}, Hash=${st.tip_hash.substring(0, 12)}...`, 
+                'debug'
+            );
 
-                await p2p.publish(TOPICS.SYNC, {
-                   type: 'TIP_RESPONSE',
+            // Publish the new wrapped response message
+            await p2p.publish(TOPICS.SYNC, {
+                tipResponse: {
                    height: st.current_height,
                    totalWork: String(st.total_work),
                    tipHash: st.tip_hash,
-                });
-            } else if (message.type === 'TIP_RESPONSE') { // This is now handled by the temporary handler in bootstrapSync
-                // No-op in the main handler
-            }
-        } catch (e) {
-            log(`SYNC handler error: ${e.message || e}`, 'warn');
+                }
+            });
         }
     });
 }
@@ -1942,53 +2048,62 @@ async function updateWalletsAfterReorg() {
 }
 
 async function handleInitWallet({ walletId }) {
+    // The mutex is no longer needed here since it doesn't call another locked function.
     if (!walletId) return log('Wallet ID cannot be empty.', 'error');
     if (await db.walletExists(walletId)) {
         return log(`Wallet '${walletId}' already exists. Use 'load'.`, 'error');
     }
-      // Create a brand-new wallet session fully in Rust
-      await pluribit.wallet_session_create(walletId);
-      // Export once so it’s persisted (plaintext for now; can encrypt later)
-      const blob = await pluribit.wallet_session_export(walletId);
-      await db.saveWallet(walletId, blob);
-    log(`New wallet '${walletId}' created and saved.`, 'success');
-    await handleLoadWallet({ walletId });
+    // Create a brand-new wallet session fully in Rust
+    await pluribit.wallet_session_create(walletId);
+    // Export once so it’s persisted (plaintext for now; can encrypt later)
+    const blob = await pluribit.wallet_session_export(walletId);
+    await db.saveWallet(walletId, blob);
+
+    // Instruct the user on the next step instead of calling the function directly.
+    log(`New wallet '${walletId}' created. Use 'load ${walletId}' to activate it.`, 'success');
 }
 
 async function handleLoadWallet({ walletId }) {
-      let walletRecord;
-      try {
-        walletRecord = await db.loadWallet(walletId);
-      } catch (e) {
-        if (e?.code === 'WALLET_PASSPHRASE_REQUIRED') {
-          return log(`Wallet '${walletId}' is encrypted. Set PLURIBIT_WALLET_PASSPHRASE and retry.`, 'error');
-        }
-        return log(`Failed to load wallet '${walletId}': ${e?.message || e}`, 'error');
-      }
-      if (walletRecord == null) {
-        return log(`Wallet '${walletId}' not found.`, 'error');
-      }
+    const release = await globalMutex.acquire();
+        try {
+          await pluribit.wallet_session_clear_all();
+          workerState.wallets.clear();
+          let walletRecord;
+          try {
+            walletRecord = await db.loadWallet(walletId);
+          } catch (e) {
+            if (e?.code === 'WALLET_PASSPHRASE_REQUIRED') {
+              return log(`Wallet '${walletId}' is encrypted. Set PLURIBIT_WALLET_PASSPHRASE and retry.`, 'error');
+            }
+            return log(`Failed to load wallet '${walletId}': ${e?.message || e}`, 'error');
+          }
+          if (walletRecord == null) {
+            return log(`Wallet '${walletId}' not found.`, 'error');
+          }
 
-    // Load JSON blob straight into Rust session (JS never parses keys)
-    const walletJson = (typeof walletRecord === 'string') ? walletRecord : JSON.stringify(walletRecord);
-    await pluribit.wallet_session_open(walletId, walletJson);
+        // Load JSON blob straight into Rust session (JS never parses keys)
+        const walletJson = (typeof walletRecord === 'string') ? walletRecord : JSON.stringify(walletRecord);
+        await pluribit.wallet_session_open(walletId, walletJson);
 
-    log(`Scanning blockchain for wallet '${walletId}'...`, 'info');
-    await pluribit.wallet_session_scan_chain(walletId);
+        log(`Scanning blockchain for wallet '${walletId}'...`, 'info');
+        await pluribit.wallet_session_scan_chain(walletId);
 
-    // Persist updated state (from Rust session) and report summary
-    const persisted = await pluribit.wallet_session_export(walletId);
-    await db.saveWallet(walletId, persisted);
-    const balance = await pluribit.wallet_session_get_balance(walletId);
-    const address = await pluribit.wallet_session_get_address(walletId);
+        // Persist updated state (from Rust session) and report summary
+        const persisted = await pluribit.wallet_session_export(walletId);
+        await db.saveWallet(walletId, persisted);
+        const balance = await pluribit.wallet_session_get_balance(walletId);
+        const address = await pluribit.wallet_session_get_address(walletId);
 
-    // Instead of storing the full wallet data, just mark the session as active.
-    workerState.wallets.set(walletId, true); 
+        // Instead of storing the full wallet data, just mark the session as active.
+        workerState.wallets.set(walletId, true); 
 
-    parentPort.postMessage({
-        type: 'walletLoaded',
-        payload: { walletId, balance, address }
-    });
+        parentPort.postMessage({
+            type: 'walletLoaded',
+            payload: { walletId, balance, address }
+        });
+   } finally {
+        release();
+    }
 }
 
 async function handleCreateTransaction({ from, to, amount, fee }) {
@@ -2020,15 +2135,27 @@ async function handleCreateTransaction({ from, to, amount, fee }) {
     // The Transaction schema expects fields like 'inputs', 'outputs', 'kernels',
     // NOT wrapper fields like 'type' and 'payload'. The wrapper causes encoding
     // to fail, resulting in a malformed message that peers silently drop.
+    //try {
+    //  await workerState.p2p.publish(TOPICS.TRANSACTIONS, result.transaction);
+    //    } catch (e) {
+    //        // FIX #6: Broadcast failed - clear pending marks
+    //        const commitments = result.transaction.inputs.map(inp => inp.commitment);
+    //        await pluribit.wallet_clear_pending_utxos(commitments);
+    //        log(`[RUST] Transaction broadcast failed, UTXOs unmarked: ${e?.message || e}`, 'warn');
+    //        throw e;
+    //   }
+
+
+    // ✨ CHANGED: Use Dandelion stem instead of direct broadcast
     try {
-      await workerState.p2p.publish(TOPICS.TRANSACTIONS, result.transaction);
-        } catch (e) {
-            // FIX #6: Broadcast failed - clear pending marks
-            const commitments = result.transaction.inputs.map(inp => inp.commitment);
-            await pluribit.wallet_clear_pending_utxos(commitments);
-            log(`[RUST] Transaction broadcast failed, UTXOs unmarked: ${e?.message || e}`, 'warn');
-            throw e;
-       }
+      await workerState.p2p.stemTransaction(result.transaction); // Instead of publish
+    } catch (e) {
+        const commitments = result.transaction.inputs.map(inp => inp.commitment);
+        await pluribit.wallet_clear_pending_utxos(commitments);
+        log(`[RUST] Transaction broadcast failed, UTXOs unmarked: ${e?.message || e}`, 'warn');
+        throw e;
+    }
+
 
     // 4. ONLY if broadcast succeeds, persist the new wallet state.
     const persisted = await pluribit.wallet_session_export(from);

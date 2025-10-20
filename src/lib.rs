@@ -344,7 +344,11 @@ async fn load_blocks_from_db(start: u64, end: u64) -> Result<Vec<Block>, JsValue
 async fn get_tip_height_from_db() -> Result<u64, JsValue> {
     let promise = get_tip_height_from_db_raw();
     let result_js = wasm_bindgen_futures::JsFuture::from(promise).await?;
-    Ok(result_js.as_f64().unwrap_or(0.0) as u64)
+    
+    // FIX: Use serde_wasm_bindgen to correctly deserialize the JS value (which could be a Number or a BigInt)
+    // into your WasmU64 type, then convert it to a plain u64.
+    let wasm_u64: WasmU64 = serde_wasm_bindgen::from_value(result_js)?;
+    Ok(*wasm_u64) 
 }
 
 // =========================
@@ -669,6 +673,8 @@ pub async fn init_blockchain_from_db() -> Result<JsValue, JsValue> {
     } else {
         // If the DB is empty (height 0), initialize with a fresh genesis state.
         *chain = Blockchain::new();
+        let genesis = Block::genesis();
+        save_block_to_db(genesis).await?; 
         log("[RUST] Initialized new blockchain with genesis block.");
     }
     
@@ -851,23 +857,11 @@ pub async fn ingest_block_bytes(block_bytes: Vec<u8>) -> Result<JsValue, JsValue
     }
  
 
-    // Parent present?
-    if load_block_from_db(block.height.saturating_sub(1)).await?.is_none() && *block.height > 0 {
-        // Stash and request parent
-        let parent = block.prev_hash.clone();
-        let h = block.hash();
-        store_side_block(h, block);
-        let res = IngestResult::NeedParent {
-            hash: parent,
-            reason: "Block was stored on a side-chain pending parent download".to_string(),
-        };
-        return serde_wasm_bindgen::to_value(&res).map_err(|e| e.into());
-    }
+
 
     // Parent equals canonical tip? Fast-path extend canonical chain.
     let (tip_h, tip_ht) = tip_hash_and_height();
-    log(&format!("[RUST DEBUG] Current tip: hash={}, height={}", tip_h, tip_ht));
-    log(&format!("[RUST DEBUG] Block wants: prev_hash={}, height={}", block.prev_hash, block.height));
+
     
     if block.height == tip_ht + 1 && block.prev_hash == tip_h {
         log("[RUST DEBUG] Block extends canonical tip, processing...");
@@ -918,6 +912,23 @@ pub async fn ingest_block_bytes(block_bytes: Vec<u8>) -> Result<JsValue, JsValue
         mempool_hygiene_after_block(&block);
         let res = IngestResult::AcceptedAndExtended;
         log("[RUST DEBUG] Returning AcceptedAndExtended");  
+        return serde_wasm_bindgen::to_value(&res).map_err(|e| e.into());
+    }
+    
+    // Log the state only if the fast-path check fails
+    log(&format!("[RUST DEBUG] Current tip: hash={}, height={}", tip_h, tip_ht));
+    log(&format!("[RUST DEBUG] Block wants: prev_hash={}, height={}", block.prev_hash, block.height));
+    
+    // --- If not a fast-path extension, THEN check for parent ---
+    if load_block_from_db(block.height.saturating_sub(1)).await?.is_none() && *block.height > 0 {
+        // Stash and request parent
+        let parent = block.prev_hash.clone();
+        let h = block.hash();
+        store_side_block(h, block);
+        let res = IngestResult::NeedParent {
+            hash: parent,
+            reason: "Block was stored on a side-chain pending parent download".to_string(),
+        };
         return serde_wasm_bindgen::to_value(&res).map_err(|e| e.into());
     }
 
@@ -1037,28 +1048,74 @@ pub async fn plan_reorg_for_tip(tip_hash: String) -> Result<JsValue, JsValue> {
     }
 
     let mut canon_history: HashMap<u64, String> = HashMap::new();
-    // First, load the canonical tip block directly from the DB to get a trusted starting point.
-    let tip_block_from_db = load_block_from_db(canon_tip_height).await?
-        .ok_or_else(|| JsValue::from_str(&format!("Failed to load canonical tip block {} from DB", canon_tip_height)))?;
-
-    // Now, initialize the history and the hash for the backward walk from this trusted block.
-    canon_history.insert(canon_tip_height, tip_block_from_db.hash());
-    let mut current_hash = tip_block_from_db.prev_hash;
-
-    // Walk backwards from the block BEFORE the tip, with the integrity check still in place.
-    for h in (0..canon_tip_height).rev() {
-        if let Some(block) = load_block_from_db(h).await? {
-            if block.hash() == current_hash {
-                canon_history.insert(h, current_hash.clone());
-                current_hash = block.prev_hash;
-            } else {
-                return Err(JsValue::from_str(&format!("Chain history broken in DB at height {}", h)));
-            }
-        } else {
-             if h > 0 {
-                 return Err(JsValue::from_str(&format!("Failed to load canonical block {} from DB", h)));
-             }
+    let mut missing_blocks: Vec<String> = Vec::new();
+    
+    // Load the canonical tip block
+    let tip_block_from_db = match load_block_from_db(canon_tip_height).await? {
+        Some(block) => block,
+        None => {
+            // If we can't even load the tip, request it and abort
+            log(&format!("[REORG] Cannot load canonical tip at height {}", canon_tip_height));
+            let plan = ReorgPlan {
+                detach: vec![],
+                attach: vec![],
+                new_tip_hash: canon_tip_hash.clone(),
+                new_height: canon_tip_height,
+                requests: vec![canon_tip_hash], // Request the tip itself
+            };
+            return serde_wasm_bindgen::to_value(&plan).map_err(|e| e.into());
         }
+    };
+
+    canon_history.insert(*tip_block_from_db.height, tip_block_from_db.hash());
+    let mut current_hash = tip_block_from_db.prev_hash;
+    let mut current_expected_height = canon_tip_height - 1;
+
+    // Walk backwards from the tip
+    while current_expected_height > 0 {
+        match load_block_from_db(current_expected_height).await? {
+            Some(block) => {
+                if block.hash() == current_hash {
+                    // Good, this block matches expectations
+                    canon_history.insert(current_expected_height, current_hash.clone());
+                    current_hash = block.prev_hash;
+                    current_expected_height -= 1;
+                } else {
+                    // We have a block but it's not the one we expected
+                    log(&format!("[REORG] Block mismatch at height {}: expected {} but found {}", 
+                        current_expected_height, current_hash, block.hash()));
+                    missing_blocks.push(current_hash.clone());
+                    break; // Can't continue without the right block
+                }
+            }
+            None => {
+                // Missing block entirely
+                log(&format!("[REORG] Missing block at height {}, hash {}", 
+                    current_expected_height, current_hash));
+                missing_blocks.push(current_hash.clone());
+                break; // Can't continue without this block
+            }
+        }
+    }
+    
+    // Handle genesis special case
+    if current_expected_height == 0 {
+        if let Some(genesis) = load_block_from_db(0).await? {
+            canon_history.insert(0, genesis.hash());
+        }
+    }
+
+    // If we found missing blocks, request them before continuing
+    if !missing_blocks.is_empty() {
+        log(&format!("[REORG] Cannot build complete canonical history. Missing {} blocks", missing_blocks.len()));
+        let plan = ReorgPlan {
+            detach: vec![],
+            attach: vec![],
+            new_tip_hash: canon_tip_hash,
+            new_height: canon_tip_height,
+            requests: missing_blocks,
+        };
+        return serde_wasm_bindgen::to_value(&plan).map_err(|e| e.into());
     }
 
     let mut fork_path: Vec<Block> = Vec::new();
@@ -1411,9 +1468,15 @@ pub async fn atomic_reorg(plan_js: JsValue) -> Result<(), JsValue> {
     // ============================================================================
     // PHASE 1: DATA FETCHING (ASYNC, NO LOCKS HELD)
     // ============================================================================
-    
+
     log("[REORG] Phase 1: Fetching blocks from database");
-    
+
+    // Get current tip height early (needed for loading detach blocks by height)
+    let current_tip_height = {
+        let chain = BLOCKCHAIN.lock().unwrap();
+        *chain.current_height
+    };
+
     let mut blocks_to_attach = Vec::new();
     for hash in &plan.attach { 
         let block = match get_block_any(hash) {
@@ -1428,11 +1491,32 @@ pub async fn atomic_reorg(plan_js: JsValue) -> Result<(), JsValue> {
         blocks_to_attach.push(block); 
     }
 
+    // FIXED: Load canonical blocks by height, not hash
     let mut blocks_to_detach = Vec::new();
-    for hash in &plan.detach {
-        let block = load_block_by_hash(hash).await?
-            .ok_or_else(|| JsValue::from_str(&format!("Could not load block {}", hash)))?;
-        blocks_to_detach.push(block);
+    if !plan.detach.is_empty() {
+        // Calculate the height of the common ancestor
+        let ancestor_height = current_tip_height - plan.detach.len() as u64;
+        
+        // Load blocks by height (canonical chain) and verify hashes match the plan
+        for (i, expected_hash) in plan.detach.iter().enumerate() {
+            let height = ancestor_height + 1 + i as u64;
+            
+            let block = load_block_from_db(height).await?
+                .ok_or_else(|| JsValue::from_str(&format!(
+                    "Could not load canonical block at height {} for detachment", 
+                    height
+                )))?;
+            
+            // Verify the hash matches what the plan expects (detects race conditions)
+            if &block.hash() != expected_hash {
+                return Err(JsValue::from_str(&format!(
+                    "Canonical chain mismatch during reorg: block at height {} has hash {}..., but plan expects {}... (another block may have been mined)",
+                    height, &block.hash()[..12], &expected_hash[..12]
+                )));
+            }
+            
+            blocks_to_detach.push(block);
+        }
     }
 
     // Fetch source blocks for restoring spent inputs
@@ -1931,12 +2015,46 @@ pub fn get_tx_pool() -> Result<JsValue, JsValue> {
 }
 
 #[wasm_bindgen]
+pub fn get_mempool_data() -> Result<JsValue, JsValue> {
+    let pool = TX_POOL.lock().unwrap();
+    
+    #[derive(Serialize)]
+    struct MempoolData {
+        pending_count: usize,
+        fee_total: u64,
+        transactions: Vec<Transaction>,
+    }
+    
+    let data = MempoolData {
+        pending_count: pool.pending.len(),
+        fee_total: pool.fee_total,
+        transactions: pool.pending.clone(),
+    };
+    
+    serde_wasm_bindgen::to_value(&data)
+        .map_err(|e| JsValue::from_str(&e.to_string()))
+}
+
+#[wasm_bindgen]
+pub fn wallet_session_clear_all() -> Result<(), JsValue> {
+    let mut map = WALLET_SESSIONS.lock().map_err(|e| JsValue::from_str(&e.to_string()))?;
+    map.clear();
+    log("[RUST] All active wallet sessions cleared.");
+    Ok(())
+}
+
+#[wasm_bindgen]
 pub async fn audit_total_supply() -> Result<String, JsValue> {
     // The total supply is the sum of the base block rewards for all blocks
     // in the canonical chain. Transaction fees represent a transfer of existing
     // value from users to the miner, not the creation of new supply.
-    let tip_height = get_tip_height_from_db().await?;
-    
+
+    // Use the authoritative in-memory state directly instead of calling back to JS.
+    let tip_height = {
+        let chain = BLOCKCHAIN.lock().unwrap();
+        *chain.current_height
+    };
+
     let mut total_supply: u128 = 0;
 
     // Iterate from genesis+1 (height 1) to the current tip (genesis has no coinbase)
@@ -2375,16 +2493,18 @@ pub fn wallet_session_scan_block(wallet_id: &str, block_js: JsValue) -> Result<(
 pub async fn get_canonical_hashes_after(start_height: u64) -> Result<JsValue, JsValue> {
     let tip_height = get_tip_height_from_db().await?;
     let mut hashes = Vec::new();
-
+    
+    let start = start_height;
+    
     // Iterate from the block after the requester's tip to our current tip
-    for height in (start_height + 1)..=tip_height {
+    for height in (start + 1)..=tip_height {
         if let Some(block) = load_block_from_db(height).await? {
             hashes.push(block.hash());
         } else {
             return Err(JsValue::from_str(&format!("Could not load canonical block at height {}", height)));
         }
     }
-
+    
     serde_wasm_bindgen::to_value(&hashes).map_err(|e| e.into())
 }
 

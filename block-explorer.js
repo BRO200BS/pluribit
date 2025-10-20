@@ -1,12 +1,69 @@
 import express from 'express';
+import rateLimit from 'express-rate-limit';
+import helmet from 'helmet';
 
 const app = express();
 const PORT = process.env.EXPLORER_PORT || 3000;
 const NODE_API = process.env.NODE_API_URL || 'http://localhost:3001';
+const BIND_ADDRESS = '127.0.0.1'; // Only bind to localhost
 
+// Security: Helmet adds various HTTP headers for security
+app.use(helmet({
+    contentSecurityPolicy: {
+        directives: {
+            defaultSrc: ["'self'"],
+            styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
+            fontSrc: ["'self'", "https://fonts.gstatic.com"],
+            scriptSrc: ["'self'", "'unsafe-inline'", "https://cdn.jsdelivr.net"],
+            scriptSrcAttr: ["'unsafe-inline'"], // This allows onclick handlers
+            imgSrc: ["'self'", "data:"],
+        }
+    }
+}));
+
+// Security: Rate limiting to prevent abuse
+const apiLimiter = rateLimit({
+    windowMs: 1 * 60 * 1000, // 1 minute
+    max: 60, // 60 requests per minute per IP
+    message: 'Too many requests from this IP, please try again later.',
+    standardHeaders: true,
+    legacyHeaders: false,
+});
+
+// Apply rate limiting to all API routes
+app.use('/api/', apiLimiter);
+
+// Security: Disable x-powered-by header
+app.disable('x-powered-by');
+
+// Serve static files (if needed)
 app.use(express.static('public'));
 
-// API proxy endpoints (unchanged)
+// Input validation helper
+function validateHeight(height) {
+    const num = parseInt(height);
+    if (isNaN(num) || num < 0 || num > Number.MAX_SAFE_INTEGER) {
+        throw new Error('Invalid block height');
+    }
+    return num;
+}
+
+function validateHash(hash) {
+    if (typeof hash !== 'string' || !/^[a-f0-9]+$/i.test(hash) || hash.length > 128) {
+        throw new Error('Invalid hash format');
+    }
+    return hash;
+}
+
+function validateCount(count) {
+    const num = parseInt(count);
+    if (isNaN(num) || num < 1 || num > 100) {
+        return 20; // Default
+    }
+    return num;
+}
+
+// API proxy endpoints with validation
 app.get('/api/stats', async (req, res) => {
     try {
         const response = await fetch(`${NODE_API}/api/stats`);
@@ -17,34 +74,46 @@ app.get('/api/stats', async (req, res) => {
     }
 });
 
+app.get('/api/mempool', async (req, res) => {
+    try {
+        const response = await fetch(`${NODE_API}/api/mempool`);
+        const data = await response.json();
+        res.json(data);
+    } catch (e) {
+        res.status(500).json({ error: 'Failed to load mempool' });
+    }
+});
+
 app.get('/api/blocks/recent', async (req, res) => {
     try {
-        const count = req.query.count || 20;
+        const count = validateCount(req.query.count);
         const response = await fetch(`${NODE_API}/api/blocks/recent?count=${count}`);
         const data = await response.json();
         res.json(data);
     } catch (e) {
-        res.status(500).json({ error: 'Failed to load blocks' });
+        res.status(500).json({ error: e.message || 'Failed to load blocks' });
     }
 });
 
 app.get('/api/block/:height', async (req, res) => {
     try {
-        const response = await fetch(`${NODE_API}/api/block/${req.params.height}`);
+        const height = validateHeight(req.params.height);
+        const response = await fetch(`${NODE_API}/api/block/${height}`);
         const data = await response.json();
         res.json(data);
     } catch (e) {
-        res.status(500).json({ error: 'Failed to load block' });
+        res.status(500).json({ error: e.message || 'Failed to load block' });
     }
 });
 
 app.get('/api/block/hash/:hash', async (req, res) => {
     try {
-        const response = await fetch(`${NODE_API}/api/block/hash/${req.params.hash}`);
+        const hash = validateHash(req.params.hash);
+        const response = await fetch(`${NODE_API}/api/block/hash/${hash}`);
         const data = await response.json();
         res.json(data);
     } catch (e) {
-        res.status(404).json({ error: 'Block not found' });
+        res.status(404).json({ error: e.message || 'Block not found' });
     }
 });
 
@@ -85,7 +154,7 @@ app.get('/', (req, res) => {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Pluriƀit Explorer</title>
+    <title>pluriƀit Explorer</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
@@ -108,6 +177,7 @@ app.get('/', (req, res) => {
             --accent-hover: #3dbdb5;
             --accent-dim: #2a9d96;
             --accent-red: #FF6B6B;
+            --accent-orange: #f59e0b;
             --success: #22c55e;
         }
 
@@ -122,6 +192,7 @@ app.get('/', (req, res) => {
             --accent-hover: #3dbdb5;
             --accent-dim: #2a9d96;
             --accent-red: #FF6B6B;
+            --accent-orange: #f59e0b;
             --success: #22c55e;
         }
 
@@ -159,6 +230,34 @@ app.get('/', (req, res) => {
             display: flex;
             align-items: center;
             gap: 0.5rem;
+        }
+
+        .nav-tabs {
+            display: flex;
+            gap: 0.5rem;
+        }
+
+        .nav-tab {
+            padding: 0.5rem 1rem;
+            background: none;
+            border: 1px solid transparent;
+            border-radius: 6px;
+            color: var(--text-dim);
+            cursor: pointer;
+            font-size: 0.875rem;
+            font-weight: 600;
+            transition: all 0.2s;
+        }
+
+        .nav-tab:hover {
+            color: var(--text);
+            border-color: var(--border);
+        }
+
+        .nav-tab.active {
+            background: var(--accent);
+            color: #fff;
+            border-color: var(--accent);
         }
 
         .search-box {
@@ -252,6 +351,14 @@ app.get('/', (req, res) => {
             padding: 2rem 1.5rem;
         }
 
+        .view {
+            display: none;
+        }
+
+        .view.active {
+            display: block;
+        }
+
         .stats-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
@@ -285,6 +392,102 @@ app.get('/', (req, res) => {
             font-weight: 700;
             color: var(--accent);
             font-variant-numeric: tabular-nums;
+        }
+
+        .mempool-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1rem;
+        }
+
+        .mempool-title {
+            font-size: 1.125rem;
+            font-weight: 700;
+        }
+
+        .mempool-stats {
+            display: flex;
+            gap: 1.5rem;
+            font-size: 0.875rem;
+            color: var(--text-dim);
+        }
+
+        .mempool-stat {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .mempool-stat-value {
+            color: var(--accent);
+            font-weight: 600;
+        }
+
+        .tx-list {
+            display: flex;
+            flex-direction: column;
+            gap: 0.75rem;
+        }
+
+        .tx-item {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 1rem;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .tx-item:hover {
+            border-color: var(--accent);
+            transform: translateX(2px);
+        }
+
+        .tx-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 0.75rem;
+        }
+
+        .tx-hash {
+            font-family: 'Courier New', monospace;
+            font-size: 0.875rem;
+            color: var(--accent);
+            font-weight: 600;
+        }
+
+        .tx-fee {
+            font-size: 0.875rem;
+            color: var(--accent-orange);
+            font-weight: 600;
+        }
+
+        .tx-details {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+            gap: 1rem;
+        }
+
+        .tx-detail-item {
+            display: flex;
+            flex-direction: column;
+            gap: 0.25rem;
+        }
+
+        .tx-detail-label {
+            color: var(--text-dim);
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .tx-detail-value {
+            font-family: 'Courier New', monospace;
+            font-size: 0.8125rem;
+            color: var(--text);
         }
 
         .block-train-section {
@@ -523,7 +726,7 @@ app.get('/', (req, res) => {
             background: var(--surface);
             border: 1px solid var(--border);
             border-radius: 12px;
-            max-width: 800px;
+            max-width: 900px;
             width: 100%;
             max-height: calc(100vh - 8rem);
             overflow-y: auto;
@@ -595,7 +798,7 @@ app.get('/', (req, res) => {
 
         .detail-row {
             display: grid;
-            grid-template-columns: 140px 1fr;
+            grid-template-columns: 160px 1fr;
             gap: 1rem;
         }
 
@@ -611,6 +814,35 @@ app.get('/', (req, res) => {
             word-break: break-all;
         }
 
+        .tx-section {
+            margin-top: 1rem;
+            padding: 1rem;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+        }
+
+        .tx-section-header {
+            font-weight: 600;
+            margin-bottom: 0.75rem;
+            color: var(--accent);
+            font-size: 0.875rem;
+        }
+
+        .io-grid {
+            display: grid;
+            gap: 0.5rem;
+        }
+
+        .io-item {
+            padding: 0.5rem;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            font-family: 'Courier New', monospace;
+            font-size: 0.75rem;
+        }
+
         .code-block {
             background: var(--bg);
             border: 1px solid var(--border);
@@ -621,6 +853,7 @@ app.get('/', (req, res) => {
             font-size: 0.75rem;
             line-height: 1.5;
             color: var(--text-dim);
+            max-height: 400px;
         }
 
         .loading {
@@ -641,6 +874,18 @@ app.get('/', (req, res) => {
 
         @keyframes spin {
             to { transform: rotate(360deg); }
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 3rem;
+            color: var(--text-dim);
+        }
+
+        .empty-state-icon {
+            font-size: 3rem;
+            margin-bottom: 1rem;
+            opacity: 0.5;
         }
 
         @media (max-width: 768px) {
@@ -674,7 +919,11 @@ app.get('/', (req, res) => {
     <header class="header">
         <nav class="nav">
             <div class="logo">
-                 Pluriƀit Explorer
+                pluriƀit Explorer
+            </div>
+            <div class="nav-tabs">
+                <button class="nav-tab active" onclick="switchView('blockchain')">Blockchain</button>
+                <button class="nav-tab" onclick="switchView('mempool')">Mempool</button>
             </div>
             <div class="search-box">
                 <input 
@@ -698,73 +947,116 @@ app.get('/', (req, res) => {
     </header>
 
     <main class="container">
-        <section class="stats-grid">
-            <div class="stat-card">
-                <div class="stat-label">Height</div>
-                <div class="stat-value" id="height">-</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-label">Total Work</div>
-                <div class="stat-value" id="work">-</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-label">UTXO Set</div>
-                <div class="stat-value" id="utxo">-</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-label">Block Time</div>
-                <div class="stat-value" id="blockTime">-</div>
-            </div>
-        </section>
-
-        <section class="block-train-section">
-            <div class="block-train-header">
-                <h2 class="train-title">Latest Blocks</h2>
-            </div>
-            <div class="block-train-container">
-                <div class="block-train" id="blockTrain"></div>
-            </div>
-        </section>
-
-        <section class="chart-container">
-            <div class="chart-header">
-                <h2 class="chart-title">Block Height Over Time</h2>
-            </div>
-            <canvas id="blockChart" height="80"></canvas>
-        </section>
-
-        <section class="chart-container">
-            <div class="chart-header">
-                <h2 class="chart-title">Mining Difficulty (VRF Threshold & VDF Iterations)</h2>
-            </div>
-            <canvas id="difficultyChart" height="80"></canvas>
-        </section>
-
-        <section class="chart-container">
-            <div class="chart-header">
-                <h2 class="chart-title">Block Rewards</h2>
-            </div>
-            <canvas id="rewardChart" height="80"></canvas>
-        </section>
-
-        <section class="chart-container">
-            <div class="chart-header">
-                <h2 class="chart-title">Supply & Stock-to-Flow</h2>
-            </div>
-            <canvas id="supplyChart" height="80"></canvas>
-        </section>
-
-        <section>
-            <div class="section-header">
-                <h2 class="section-title">Recent Blocks</h2>
-            </div>
-            <div class="blocks-container" id="blocksContainer">
-                <div class="loading">
-                    <div class="spinner"></div>
-                    <p>Loading blocks...</p>
+        <!-- Blockchain View -->
+        <div id="blockchainView" class="view active">
+            <section class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-label">Height</div>
+                    <div class="stat-value" id="height">-</div>
                 </div>
-            </div>
-        </section>
+                <div class="stat-card">
+                    <div class="stat-label">Total Work</div>
+                    <div class="stat-value" id="work">-</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">UTXO Set</div>
+                    <div class="stat-value" id="utxo">-</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Block Time</div>
+                    <div class="stat-value" id="blockTime">-</div>
+                </div>
+            </section>
+
+            <section class="block-train-section">
+                <div class="block-train-header">
+                    <h2 class="train-title">Latest Blocks</h2>
+                </div>
+                <div class="block-train-container">
+                    <div class="block-train" id="blockTrain"></div>
+                </div>
+            </section>
+
+            <section class="chart-container">
+                <div class="chart-header">
+                    <h2 class="chart-title">Block Height Over Time</h2>
+                </div>
+                <canvas id="blockChart" height="80"></canvas>
+            </section>
+
+            <section class="chart-container">
+                <div class="chart-header">
+                    <h2 class="chart-title">Mining Difficulty (VRF Threshold & VDF Iterations)</h2>
+                </div>
+                <canvas id="difficultyChart" height="80"></canvas>
+            </section>
+
+            <section class="chart-container">
+                <div class="chart-header">
+                    <h2 class="chart-title">Block Rewards</h2>
+                </div>
+                <canvas id="rewardChart" height="80"></canvas>
+            </section>
+
+            <section class="chart-container">
+                <div class="chart-header">
+                    <h2 class="chart-title">Supply & Stock-to-Flow</h2>
+                </div>
+                <canvas id="supplyChart" height="80"></canvas>
+            </section>
+
+            <section>
+                <div class="section-header">
+                    <h2 class="section-title">Recent Blocks</h2>
+                </div>
+                <div class="blocks-container" id="blocksContainer">
+                    <div class="loading">
+                        <div class="spinner"></div>
+                        <p>Loading blocks...</p>
+                    </div>
+                </div>
+            </section>
+        </div>
+
+        <!-- Mempool View -->
+        <div id="mempoolView" class="view">
+            <section class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-label">Pending Transactions</div>
+                    <div class="stat-value" id="mempoolCount">-</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Total Fees</div>
+                    <div class="stat-value" id="mempoolFees">-</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Avg Fee</div>
+                    <div class="stat-value" id="mempoolAvgFee">-</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Memory Usage</div>
+                    <div class="stat-value" id="mempoolSize">-</div>
+                </div>
+            </section>
+
+            <section>
+                <div class="mempool-header">
+                    <h2 class="mempool-title">Pending Transactions</h2>
+                    <div class="mempool-stats">
+                        <div class="mempool-stat">
+                            <span>Auto-refresh:</span>
+                            <span class="mempool-stat-value">5s</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="tx-list" id="txList">
+                    <div class="loading">
+                        <div class="spinner"></div>
+                        <p>Loading mempool...</p>
+                    </div>
+                </div>
+            </section>
+        </div>
     </main>
 
     <div class="modal" id="blockModal">
@@ -780,11 +1072,51 @@ app.get('/', (req, res) => {
     <script>
         let state = {
             blocks: [],
+            mempool: { pending: [], fee_total: 0, pending_count: 0 },
             stats: {},
             charts: {},
-            lastBlockHeight: 0
+            lastBlockHeight: 0,
+            currentView: 'blockchain'
         };
-
+        
+        function bigIntReviver(key, value) {
+            if (value && typeof value === 'object' && value.__type === 'BigInt') {
+                return BigInt(value.value);
+            }
+            return value;
+        }
+        
+        function parseUint8Array(data) {
+            if (!data) return new Uint8Array(0);
+            if (data instanceof Uint8Array) return data;
+            if (data.value && data.__type === 'Uint8Array') {
+                // Decode base64
+                try {
+                    return Uint8Array.from(atob(data.value), function(c) { return c.charCodeAt(0); });
+                } catch (e) {
+                    console.error('Failed to decode Uint8Array:', e);
+                    return new Uint8Array(0);
+                }
+            }
+            if (Array.isArray(data)) return new Uint8Array(data);
+            return new Uint8Array(0);
+        }
+        
+        function switchView(view) {
+            state.currentView = view;
+            document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+            document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
+            
+            if (view === 'blockchain') {
+                document.getElementById('blockchainView').classList.add('active');
+                document.querySelector('.nav-tab:first-child').classList.add('active');
+            } else if (view === 'mempool') {
+                document.getElementById('mempoolView').classList.add('active');
+                document.querySelector('.nav-tab:nth-child(2)').classList.add('active');
+                loadMempool();
+            }
+        }
+        
         function toggleTheme() {
             const html = document.documentElement;
             const currentTheme = html.getAttribute('data-theme') || 'dark';
@@ -927,7 +1259,7 @@ app.get('/', (req, res) => {
         async function loadStats() {
             try {
                 const res = await fetch('/api/stats');
-                const stats = await res.json();
+                const stats = JSON.parse(await res.text(), bigIntReviver);
                 
                 document.getElementById('height').textContent = stats.height.toLocaleString();
                 document.getElementById('work').textContent = formatNumber(stats.totalWork);
@@ -939,10 +1271,250 @@ app.get('/', (req, res) => {
             }
         }
 
+        async function loadMempool() {
+            try {
+                const res = await fetch('/api/mempool');
+                const data = JSON.parse(await res.text(), bigIntReviver);
+                
+                state.mempool = data;
+                
+                document.getElementById('mempoolCount').textContent = data.pending_count.toLocaleString();
+                document.getElementById('mempoolFees').textContent = formatBits(data.fee_total);
+                
+                const avgFee = data.pending_count > 0 ? data.fee_total / data.pending_count : 0;
+                document.getElementById('mempoolAvgFee').textContent = formatBits(avgFee);
+                
+                // Rough memory estimate
+                const memSize = data.pending_count * 2048; // ~2KB per tx
+                document.getElementById('mempoolSize').textContent = formatBytes(memSize);
+                
+                renderMempool(data.transactions || []);
+            } catch (e) {
+                console.error('Failed to load mempool:', e);
+                document.getElementById('txList').innerHTML = 
+                    '<div class="loading"><p style="color: var(--text-dim);">Failed to load mempool</p></div>';
+            }
+        }
+
+        function renderMempool(transactions) {
+            const container = document.getElementById('txList');
+            
+            if (!transactions || transactions.length === 0) {
+                container.innerHTML = '<div class="empty-state">' +
+                    '<div class="empty-state-icon">📭</div>' +
+                    '<p>No pending transactions</p>' +
+                    '</div>';
+                return;
+            }
+            
+            // Sort by fee (highest first)
+            const sorted = [...transactions].sort(function(a, b) {
+                const feeA = a.kernels ? a.kernels.reduce(function(sum, k) { 
+                    return sum + (Number(k.fee) || 0); 
+                }, 0) : 0;
+                const feeB = b.kernels ? b.kernels.reduce(function(sum, k) { 
+                    return sum + (Number(k.fee) || 0); 
+                }, 0) : 0;
+                return feeB - feeA;
+            });
+            
+            const items = [];
+            for (let i = 0; i < sorted.length; i++) {
+                const tx = sorted[i];
+                const fee = tx.kernels ? tx.kernels.reduce(function(sum, k) { 
+                    return sum + (Number(k.fee) || 0); 
+                }, 0) : 0;
+                const inputs = tx.inputs ? tx.inputs.length : 0;
+                const outputs = tx.outputs ? tx.outputs.length : 0;
+                const kernels = tx.kernels ? tx.kernels.length : 0;
+                
+                let hash = 'unknown';
+                if (tx.kernels && tx.kernels[0] && tx.kernels[0].excess) {
+                    try {
+                        // Handle both regular arrays and Uint8Array objects
+                        let excessData = tx.kernels[0].excess;
+                        if (excessData.value && excessData.__type === 'Uint8Array') {
+                            // Decode base64 if needed
+                            excessData = Uint8Array.from(atob(excessData.value), c => c.charCodeAt(0));
+                        }
+                        const excessBytes = Array.from(excessData).slice(0, 8);
+                        hash = excessBytes.map(function(b) { 
+                            return b.toString(16).padStart(2, '0'); 
+                        }).join('') + '...';
+                    } catch (e) {
+                        console.error('Error processing hash:', e);
+                    }
+                }
+                
+                // Store transaction in a global variable for onclick
+                const txIndex = window.mempoolTransactions ? window.mempoolTransactions.length : 0;
+                if (!window.mempoolTransactions) window.mempoolTransactions = [];
+                window.mempoolTransactions[txIndex] = tx;
+                
+                items.push(
+                    '<div class="tx-item" onclick="viewTransaction(window.mempoolTransactions[' + txIndex + '])">' +
+                        '<div class="tx-header">' +
+                            '<div class="tx-hash">' + hash + '</div>' +
+                            '<div class="tx-fee">' + formatBits(fee) + ' fee</div>' +
+                        '</div>' +
+                        '<div class="tx-details">' +
+                            '<div class="tx-detail-item">' +
+                                '<div class="tx-detail-label">Inputs</div>' +
+                                '<div class="tx-detail-value">' + inputs + '</div>' +
+                            '</div>' +
+                            '<div class="tx-detail-item">' +
+                                '<div class="tx-detail-label">Outputs</div>' +
+                                '<div class="tx-detail-value">' + outputs + '</div>' +
+                            '</div>' +
+                            '<div class="tx-detail-item">' +
+                                '<div class="tx-detail-label">Kernels</div>' +
+                                '<div class="tx-detail-value">' + kernels + '</div>' +
+                            '</div>' +
+                        '</div>' +
+                    '</div>'
+                );
+            }
+            
+            container.innerHTML = items.join('');
+        }
+
+        function viewTransaction(tx) {
+            const modal = document.getElementById('blockModal');
+            const modalTitle = document.getElementById('modalTitle');
+            const modalBody = document.getElementById('modalBody');
+            
+            let hash = 'unknown';
+            if (tx.kernels && tx.kernels[0] && tx.kernels[0].excess) {
+                try {
+                    const excessData = parseUint8Array(tx.kernels[0].excess);
+                    const excessBytes = Array.from(excessData);
+                    hash = excessBytes.map(function(b) { 
+                        return b.toString(16).padStart(2, '0'); 
+                    }).join('');
+                } catch (e) {
+                    console.error('Error processing transaction hash:', e);
+                }
+            }
+            
+            modalTitle.textContent = 'Transaction Details';
+            
+            const fee = tx.kernels ? tx.kernels.reduce(function(sum, k) { 
+                return sum + (Number(k.fee) || 0); 
+            }, 0) : 0;
+            
+            let inputsHtml = '<div class="io-grid">';
+            if (tx.inputs && tx.inputs.length > 0) {
+                for (let i = 0; i < tx.inputs.length; i++) {
+                    const input = tx.inputs[i];
+                    try {
+                        const commitmentData = parseUint8Array(input.commitment);
+                        const commitmentBytes = Array.from(commitmentData).slice(0, 16);
+                        const commitment = commitmentBytes.map(function(b) { 
+                            return b.toString(16).padStart(2, '0'); 
+                        }).join('') + '...';
+                        inputsHtml += '<div class="io-item">' +
+                            '<strong>Input ' + (i + 1) + ':</strong> ' + commitment +
+                            '</div>';
+                    } catch (e) {
+                        inputsHtml += '<div class="io-item">Input ' + (i + 1) + ': [error parsing]</div>';
+                    }
+                }
+            } else {
+                inputsHtml += '<div class="io-item">Coinbase (no inputs)</div>';
+            }
+            inputsHtml += '</div>';
+            
+            let outputsHtml = '<div class="io-grid">';
+            if (tx.outputs && tx.outputs.length > 0) {
+                for (let i = 0; i < tx.outputs.length; i++) {
+                    const output = tx.outputs[i];
+                    try {
+                        const commitmentData = parseUint8Array(output.commitment);
+                        const commitmentBytes = Array.from(commitmentData).slice(0, 16);
+                        const commitment = commitmentBytes.map(function(b) { 
+                            return b.toString(16).padStart(2, '0'); 
+                        }).join('') + '...';
+                        outputsHtml += '<div class="io-item">' +
+                            '<strong>Output ' + (i + 1) + ':</strong> ' + commitment +
+                            '</div>';
+                    } catch (e) {
+                        outputsHtml += '<div class="io-item">Output ' + (i + 1) + ': [error parsing]</div>';
+                    }
+                }
+            }
+            outputsHtml += '</div>';
+            
+            let kernelsHtml = '<div class="io-grid">';
+            if (tx.kernels && tx.kernels.length > 0) {
+                for (let i = 0; i < tx.kernels.length; i++) {
+                    const kernel = tx.kernels[i];
+                    try {
+                        const excessData = parseUint8Array(kernel.excess);
+                        const excessBytes = Array.from(excessData).slice(0, 16);
+                        const excess = excessBytes.map(function(b) { 
+                            return b.toString(16).padStart(2, '0'); 
+                        }).join('') + '...';
+                        kernelsHtml += '<div class="io-item">' +
+                            '<strong>Kernel ' + (i + 1) + ':</strong><br>' +
+                            'Excess: ' + excess + '<br>' +
+                            'Fee: ' + formatBits(Number(kernel.fee) || 0) +
+                            '</div>';
+                    } catch (e) {
+                        kernelsHtml += '<div class="io-item">Kernel ' + (i + 1) + ': [error parsing]</div>';
+                    }
+                }
+            }
+            kernelsHtml += '</div>';
+            
+            modalBody.innerHTML = '<div class="detail-section">' +
+                '<div class="detail-section-title">Transaction Information</div>' +
+                '<div class="detail-grid">' +
+                    '<div class="detail-row">' +
+                        '<div class="detail-key">Hash</div>' +
+                        '<div class="detail-val">' + hash + '</div>' +
+                    '</div>' +
+                    '<div class="detail-row">' +
+                        '<div class="detail-key">Total Fee</div>' +
+                        '<div class="detail-val">' + formatBits(fee) + '</div>' +
+                    '</div>' +
+                    '<div class="detail-row">' +
+                        '<div class="detail-key">Inputs</div>' +
+                        '<div class="detail-val">' + (tx.inputs ? tx.inputs.length : 0) + '</div>' +
+                    '</div>' +
+                    '<div class="detail-row">' +
+                        '<div class="detail-key">Outputs</div>' +
+                        '<div class="detail-val">' + (tx.outputs ? tx.outputs.length : 0) + '</div>' +
+                    '</div>' +
+                    '<div class="detail-row">' +
+                        '<div class="detail-key">Kernels</div>' +
+                        '<div class="detail-val">' + (tx.kernels ? tx.kernels.length : 0) + '</div>' +
+                    '</div>' +
+                '</div>' +
+                '</div>' +
+                '<div class="detail-section">' +
+                    '<div class="detail-section-title">Inputs</div>' +
+                    inputsHtml +
+                '</div>' +
+                '<div class="detail-section">' +
+                    '<div class="detail-section-title">Outputs</div>' +
+                    outputsHtml +
+                '</div>' +
+                '<div class="detail-section">' +
+                    '<div class="detail-section-title">Kernels</div>' +
+                    kernelsHtml +
+                '</div>' +
+                '<div class="detail-section">' +
+                    '<div class="detail-section-title">Raw Data</div>' +
+                    '<div class="code-block">' + JSON.stringify(tx, null, 2) + '</div>' +
+                '</div>';
+            
+            modal.classList.add('active');
+        }
+
         async function loadBlocks() {
             try {
                 const res = await fetch('/api/blocks/recent?count=20');
-                const blocks = await res.json();
+                const blocks = JSON.parse(await res.text(), bigIntReviver);
                 
                 if (blocks.length > 0 && blocks[0].height > state.lastBlockHeight) {
                     state.lastBlockHeight = blocks[0].height;
@@ -1031,7 +1603,7 @@ app.get('/', (req, res) => {
         async function loadDifficultyMetrics() {
             try {
                 const res = await fetch('/api/metrics/difficulty');
-                const metrics = await res.json();
+                const metrics = JSON.parse(await res.text(), bigIntReviver);
                 
                 const ctx = document.getElementById('difficultyChart');
                 const theme = document.documentElement.getAttribute('data-theme') || 'dark';
@@ -1142,7 +1714,7 @@ app.get('/', (req, res) => {
         async function loadRewardMetrics() {
             try {
                 const res = await fetch('/api/metrics/rewards');
-                const rewards = await res.json();
+                const rewards = JSON.parse(await res.text(), bigIntReviver);
                 
                 const ctx = document.getElementById('rewardChart');
                 const theme = document.documentElement.getAttribute('data-theme') || 'dark';
@@ -1154,7 +1726,7 @@ app.get('/', (req, res) => {
                         labels: rewards.map(r => '#' + r.height),
                         datasets: [{
                             label: 'Block Reward (ƀ)',
-                            data: rewards.map(r => r.reward / 100_000_000),
+                            data: rewards.map(r => Number(r.reward / 100_000_000n)),
                             borderColor: '#8b5cf6',
                             backgroundColor: 'rgba(139, 92, 246, 0.1)',
                             tension: 0.1,
@@ -1203,7 +1775,7 @@ app.get('/', (req, res) => {
         async function loadSupplyMetrics() {
             try {
                 const res = await fetch('/api/metrics/supply');
-                const supply = await res.json();
+                const supply = JSON.parse(await res.text(), bigIntReviver);
                 
                 const ctx = document.getElementById('supplyChart');
                 const theme = document.documentElement.getAttribute('data-theme') || 'dark';
@@ -1325,7 +1897,25 @@ app.get('/', (req, res) => {
                 return;
             }
             
-            container.innerHTML = blocks.map(block => {
+            container.innerHTML = blocks.map(function(block) {
+                // Parse miner display
+                let minerDisplay = 'N/A';
+                if (block.miner) {
+                    minerDisplay = block.miner;
+                } else if (block.minerPubkey) {
+                    try {
+                        const minerData = parseUint8Array(block.minerPubkey);
+                        if (minerData.length > 0) {
+                            const minerBytes = Array.from(minerData);
+                            minerDisplay = minerBytes.map(function(b) { 
+                                return b.toString(16).padStart(2, '0'); 
+                            }).join('').slice(0, 16) + '...';
+                        }
+                    } catch (e) {
+                        minerDisplay = 'N/A';
+                    }
+                }
+                
                 return '<div class="block-row" onclick="viewBlock(' + block.height + ')">' +
                     '<div class="block-main">' +
                         '<div>' +
@@ -1343,7 +1933,7 @@ app.get('/', (req, res) => {
                         '</div>' +
                         '<div class="info-item">' +
                             '<div class="info-label">Miner</div>' +
-                            '<div class="info-value">' + block.miner + '</div>' +
+                            '<div class="info-value">' + minerDisplay + '</div>' +
                         '</div>' +
                     '</div>' +
                 '</div>';
@@ -1362,51 +1952,203 @@ app.get('/', (req, res) => {
             try {
                 const res = await fetch('/api/block/' + height);
                 if (!res.ok) throw new Error('Block not found');
-                const block = await res.json();
+                const block = JSON.parse(await res.text(), bigIntReviver);
                 
-                modalBody.innerHTML = 
-                    '<div class="detail-section">' +
-                        '<div class="detail-section-title">Block Information</div>' +
-                        '<div class="detail-grid">' +
-                            '<div class="detail-row">' +
-                                '<div class="detail-key">Height</div>' +
-                                '<div class="detail-val">' + block.height.toLocaleString() + '</div>' +
+                let txListHtml = '';
+                if (block.transactions && block.transactions.length > 0) {
+                    const txSections = [];
+                    for (let i = 0; i < block.transactions.length; i++) {
+                        const tx = block.transactions[i];
+                        const isCoinbase = !tx.inputs || tx.inputs.length === 0;
+                        const fee = tx.kernels ? tx.kernels.reduce(function(sum, k) { 
+                            return sum + (Number(k.fee) || 0); 
+                        }, 0) : 0;
+                        
+                        let section = '<div class="tx-section">' +
+                            '<div class="tx-section-header">' +
+                                'Transaction ' + (i + 1) + (isCoinbase ? ' (Coinbase)' : '') +
                             '</div>' +
-                            '<div class="detail-row">' +
-                                '<div class="detail-key">Hash</div>' +
-                                '<div class="detail-val">' + block.hash + '</div>' +
-                            '</div>' +
-                            '<div class="detail-row">' +
-                                '<div class="detail-key">Previous Hash</div>' +
-                                '<div class="detail-val">' + block.prevHash + '</div>' +
-                            '</div>' +
-                            '<div class="detail-row">' +
-                                '<div class="detail-key">Timestamp</div>' +
-                                '<div class="detail-val">' + new Date(block.timestamp).toLocaleString() + '</div>' +
-                            '</div>' +
-                            '<div class="detail-row">' +
-                                '<div class="detail-key">Transactions</div>' +
-                                '<div class="detail-val">' + (block.transactions ? block.transactions.length : 0) + '</div>' +
-                            '</div>' +
+                            '<div class="detail-grid">' +
+                                '<div class="detail-row">' +
+                                    '<div class="detail-key">Inputs</div>' +
+                                    '<div class="detail-val">' + (tx.inputs ? tx.inputs.length : 0) + '</div>' +
+                                '</div>' +
+                                '<div class="detail-row">' +
+                                    '<div class="detail-key">Outputs</div>' +
+                                    '<div class="detail-val">' + (tx.outputs ? tx.outputs.length : 0) + '</div>' +
+                                '</div>' +
+                                '<div class="detail-row">' +
+                                    '<div class="detail-key">Kernels</div>' +
+                                    '<div class="detail-val">' + (tx.kernels ? tx.kernels.length : 0) + '</div>' +
+                                '</div>' +
+                                '<div class="detail-row">' +
+                                    '<div class="detail-key">Fee</div>' +
+                                    '<div class="detail-val">' + formatBits(fee) + '</div>' +
+                                '</div>' +
+                            '</div>';
+                        
+                        if (tx.inputs && tx.inputs.length > 0) {
+                            section += '<div style="margin-top: 0.75rem;">' +
+                                '<div class="tx-section-header">Inputs</div>' +
+                                '<div class="io-grid">';
+                            for (let idx = 0; idx < tx.inputs.length; idx++) {
+                                const inp = tx.inputs[idx];
+                                try {
+                                    const commitmentData = parseUint8Array(inp.commitment);
+                                    const commitmentBytes = Array.from(commitmentData);
+                                    const commitmentHex = commitmentBytes.map(function(b) { 
+                                        return b.toString(16).padStart(2, '0'); 
+                                    }).join('');
+                                    section += '<div class="io-item">' +
+                                        'Input ' + (idx + 1) + ': ' + truncateHash(commitmentHex) +
+                                        '<br><small>Source Height: ' + (inp.sourceHeight || 'N/A') + '</small>' +
+                                        '</div>';
+                                } catch (e) {
+                                    section += '<div class="io-item">Input ' + (idx + 1) + ': [error parsing]</div>';
+                                }
+                            }
+                            section += '</div></div>';
+                        }
+                        
+                        if (tx.outputs && tx.outputs.length > 0) {
+                            section += '<div style="margin-top: 0.75rem;">' +
+                                '<div class="tx-section-header">Outputs</div>' +
+                                '<div class="io-grid">';
+                            for (let idx = 0; idx < tx.outputs.length; idx++) {
+                                const out = tx.outputs[idx];
+                                try {
+                                    const commitmentData = parseUint8Array(out.commitment);
+                                    const commitmentBytes = Array.from(commitmentData);
+                                    const commitmentHex = commitmentBytes.map(function(b) { 
+                                        return b.toString(16).padStart(2, '0'); 
+                                    }).join('');
+                                    
+                                    const hasEphemeralKey = out.ephemeralKey && 
+                                        (out.ephemeralKey.value || out.ephemeralKey.length > 0);
+                                    const hasStealthPayload = out.stealthPayload && 
+                                        (out.stealthPayload.value || out.stealthPayload.length > 0);
+                                    
+                                    section += '<div class="io-item">' +
+                                        'Output ' + (idx + 1) + ': ' + truncateHash(commitmentHex) +
+                                        '<br><small>Stealth: ' + (hasEphemeralKey && hasStealthPayload ? 'Yes' : 'No') + '</small>' +
+                                        '</div>';
+                                } catch (e) {
+                                    section += '<div class="io-item">Output ' + (idx + 1) + ': [error parsing]</div>';
+                                }
+                            }
+                            section += '</div></div>';
+                        }
+                        
+                        if (tx.kernels && tx.kernels.length > 0) {
+                            section += '<div style="margin-top: 0.75rem;">' +
+                                '<div class="tx-section-header">Kernels</div>' +
+                                '<div class="io-grid">';
+                            for (let idx = 0; idx < tx.kernels.length; idx++) {
+                                const kernel = tx.kernels[idx];
+                                try {
+                                    const excessData = parseUint8Array(kernel.excess);
+                                    const excessBytes = Array.from(excessData);
+                                    const excessHex = excessBytes.map(function(b) { 
+                                        return b.toString(16).padStart(2, '0'); 
+                                    }).join('');
+                                    section += '<div class="io-item">' +
+                                        '<strong>Kernel ' + (idx + 1) + '</strong><br>' +
+                                        'Excess: ' + truncateHash(excessHex) + '<br>' +
+                                        'Fee: ' + formatBits(Number(kernel.fee) || 0) + '<br>' +
+                                        '<small>Min Height: ' + (kernel.minHeight || 0) + '</small>' +
+                                        '</div>';
+                                } catch (e) {
+                                    section += '<div class="io-item">Kernel ' + (idx + 1) + ': [error parsing]</div>';
+                                }
+                            }
+                            section += '</div></div>';
+                        }
+                        
+                        section += '</div>';
+                        txSections.push(section);
+                    }
+                    txListHtml = txSections.join('');
+                }
+                
+                // Parse miner pubkey
+                let minerDisplay = 'N/A';
+                try {
+                    const minerData = parseUint8Array(block.minerPubkey);
+                    if (minerData.length > 0) {
+                        const minerBytes = Array.from(minerData);
+                        minerDisplay = minerBytes.map(function(b) { 
+                            return b.toString(16).padStart(2, '0'); 
+                        }).join('').slice(0, 16) + '...';
+                    }
+                } catch (e) {
+                    console.error('Error parsing miner pubkey:', e);
+                }
+                
+                // Parse VRF threshold
+                let vrfDisplay = 'N/A';
+                try {
+                    const vrfData = parseUint8Array(block.vrfThreshold);
+                    if (vrfData.length > 0) {
+                        const vrfBytes = Array.from(vrfData).slice(0, 8);
+                        vrfDisplay = vrfBytes.map(function(b) { 
+                            return b.toString(16).padStart(2, '0'); 
+                        }).join('') + '...';
+                    }
+                } catch (e) {
+                    console.error('Error parsing VRF threshold:', e);
+                }
+                
+                modalBody.innerHTML = '<div class="detail-section">' +
+                    '<div class="detail-section-title">Block Information</div>' +
+                    '<div class="detail-grid">' +
+                        '<div class="detail-row">' +
+                            '<div class="detail-key">Height</div>' +
+                            '<div class="detail-val">' + (typeof block.height === 'bigint' ? block.height.toString() : block.height) + '</div>' +
                         '</div>' +
+                        '<div class="detail-row">' +
+                            '<div class="detail-key">Hash</div>' +
+                            '<div class="detail-val">' + (block.hash || 'N/A') + '</div>' +
+                        '</div>' +
+                        '<div class="detail-row">' +
+                            '<div class="detail-key">Previous Hash</div>' +
+                            '<div class="detail-val">' + (block.prevHash || 'N/A') + '</div>' +
+                        '</div>' +
+                        '<div class="detail-row">' +
+                            '<div class="detail-key">Timestamp</div>' +
+                            '<div class="detail-val">' + new Date(Number(block.timestamp)).toLocaleString() + '</div>' +
+                        '</div>' +
+                        '<div class="detail-row">' +
+                            '<div class="detail-key">Transactions</div>' +
+                            '<div class="detail-val">' + (block.transactions ? block.transactions.length : 0) + '</div>' +
+                        '</div>' +
+                        '<div class="detail-row">' +
+                            '<div class="detail-key">Miner</div>' +
+                            '<div class="detail-val">' + minerDisplay + '</div>' +
+                        '</div>' +
+                    '</div>' +
                     '</div>' +
                     '<div class="detail-section">' +
                         '<div class="detail-section-title">Consensus Data</div>' +
                         '<div class="detail-grid">' +
                             '<div class="detail-row">' +
                                 '<div class="detail-key">VDF Iterations</div>' +
-                                '<div class="detail-val">' + (block.vdfIterations ? block.vdfIterations.toLocaleString() : 'N/A') + '</div>' +
+                                '<div class="detail-val">' + (block.vdfIterations ? Number(block.vdfIterations).toLocaleString() : 'N/A') + '</div>' +
                             '</div>' +
                             '<div class="detail-row">' +
                                 '<div class="detail-key">VRF Threshold</div>' +
-                                '<div class="detail-val">' + (block.vrfThreshold ? truncateHash(JSON.stringify(block.vrfThreshold)) : 'N/A') + '</div>' +
+                                '<div class="detail-val">' + vrfDisplay + '</div>' +
                             '</div>' +
                             '<div class="detail-row">' +
                                 '<div class="detail-key">Lottery Nonce</div>' +
-                                '<div class="detail-val">' + (block.lotteryNonce || 'N/A') + '</div>' +
+                                '<div class="detail-val">' + (block.lotteryNonce ? Number(block.lotteryNonce) : 'N/A') + '</div>' +
+                            '</div>' +
+                            '<div class="detail-row">' +
+                                '<div class="detail-key">Total Work</div>' +
+                                '<div class="detail-val">' + (block.totalWork ? formatNumber(block.totalWork) : 'N/A') + '</div>' +
                             '</div>' +
                         '</div>' +
                     '</div>' +
+                    (txListHtml ? '<div class="detail-section"><div class="detail-section-title">Transactions</div>' + txListHtml + '</div>' : '') +
                     '<div class="detail-section">' +
                         '<div class="detail-section-title">Raw Data</div>' +
                         '<div class="code-block">' + JSON.stringify(block, null, 2) + '</div>' +
@@ -1432,7 +2174,7 @@ app.get('/', (req, res) => {
             try {
                 const res = await fetch('/api/block/hash/' + query);
                 if (res.ok) {
-                    const block = await res.json();
+                    const block = JSON.parse(await res.text(), bigIntReviver);
                     viewBlock(block.height);
                 } else {
                     alert('Block not found');
@@ -1446,14 +2188,37 @@ app.get('/', (req, res) => {
             setInterval(async () => {
                 await loadStats();
                 await loadBlocks();
-            }, 10000);
+                if (state.currentView === 'mempool') {
+                    await loadMempool();
+                }
+            }, 5000); // 5 seconds
         }
 
         function formatNumber(num) {
-            if (num >= 1e9) return (num / 1e9).toFixed(2) + 'B';
-            if (num >= 1e6) return (num / 1e6).toFixed(2) + 'M';
-            if (num >= 1e3) return (num / 1e3).toFixed(2) + 'K';
-            return num.toString();
+            // Convert BigInt to Number if needed
+            if (typeof num === 'bigint') {
+                num = Number(num);
+            }
+            
+            const billion = 1e9;
+            const million = 1e6;
+            const thousand = 1e3;
+
+            if (num >= billion) return (num / billion).toFixed(2) + 'B';
+            if (num >= million) return (num / million).toFixed(2) + 'M';
+            if (num >= thousand) return (num / thousand).toFixed(2) + 'K';
+            return num.toLocaleString();
+        }
+
+        function formatBits(sats) {
+            const coins = Number(sats) / 100_000_000;
+            return coins.toFixed(8) + ' ƀ';
+        }
+
+        function formatBytes(bytes) {
+            if (bytes >= 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(2) + ' MB';
+            if (bytes >= 1024) return (bytes / 1024).toFixed(2) + ' KB';
+            return bytes + ' B';
         }
 
         function truncateHash(hash) {
@@ -1493,7 +2258,9 @@ app.get('/', (req, res) => {
     `);
 });
 
-app.listen(PORT, () => {
-    console.log(`🔍 Pluriƀit Block Explorer running on http://localhost:${PORT}`);
+// Security: Only bind to localhost
+app.listen(PORT, BIND_ADDRESS, () => {
+    console.log(`🔒 Pluriƀit Block Explorer running securely on http://${BIND_ADDRESS}:${PORT}`);
     console.log(`📡 Connected to node at ${NODE_API}`);
+    console.log(`⚠️  Only accessible from localhost for security`);
 });

@@ -1,5 +1,6 @@
 /target
 /node_modules
+/pluribit_data
 webpack
 server-https.py
 landing.html
@@ -10,3 +11,4 @@ cert.pem
 package-lock.json
 ccfiles.sh
 concatenated_output.txt
+cleanup.sh

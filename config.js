@@ -36,7 +36,27 @@ export const CONFIG = {
     MAX_HASH_REQUEST_RANGE: 100_000, // Peer can't ask for hashes more than this many blocks behind the tip.
     // (Circuit Breaker) Stops sync attempts after too many consecutive failures.
     MAX_CONSECUTIVE_SYNC_FAILURES: 5,
+  },
+  
+  
+  // Dandelion++ Protocol Settings
+  DANDELION: {
+    // Probability of continuing stem phase (vs switching to fluff)
+    STEM_PROBABILITY: 0.90, // 90% chance to continue stem
+    
+    // Maximum stem phase hops before forced fluff
+    MAX_STEM_HOPS: 10,
+    
+    // Minimum stem phase hops before allowing fluff
+    MIN_STEM_HOPS: 1,
+    
+    // Embargo timer: max time to hold a transaction in stem (ms)
+    EMBARGO_TIMEOUT_MS: 30000, // 30 seconds
+    
+    // How often to refresh stem relay peers (ms)
+    STEM_RELAY_REFRESH_INTERVAL_MS: 600000, // 10 minutes
+    
+    // Enable Dandelion protocol
+    ENABLED: true
   }
-  
-  
 };

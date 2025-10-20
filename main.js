@@ -16,13 +16,14 @@ const rl = readline.createInterface({
 });
 
 // --- State Management ---
+/** @type {string | null} */
 let loadedWalletId = null;
 let isMining = false;
 let isStaking = false;
 let isNetworkOnline = false;
 
 // --- Worker Setup ---
-const worker = new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
+const worker = new Worker(new URL('./worker.js', import.meta.url));
 
 worker.on('message', (event) => {
     const { type, payload, error } = event;
@@ -32,28 +33,35 @@ worker.on('message', (event) => {
             // Hide debug-level messages to reduce console noise
             if (payload.level === 'debug' && payload.message.startsWith('[P2P]')) break;
 
+            /** @type {Record<string, typeof chalk>} */
             const levelColor = {
                 info: chalk.blue,
                 success: chalk.green,
                 warn: chalk.yellow,
                 error: chalk.red,
-            }[payload.level] || chalk.white;
+            };
+            const colorFn = levelColor[payload.level] || chalk.white;
             // Clear the current line, print the log, then redraw the prompt
             readline.clearLine(process.stdout, 0);
             readline.cursorTo(process.stdout, 0);
-            console.log(`[${levelColor(payload.level.toUpperCase())}] ${payload.message}`);
+            console.log(`[${colorFn(payload.level.toUpperCase())}] ${payload.message}`);
             rl.prompt(true);
             break;
 
         case 'syncProgress': {
             // This handler draws a single-line progress bar that updates in place.
             const { current, target, startTime } = payload;
-            const percent = ((current / target) * 100).toFixed(2);
+            
+            // FIX: Explicitly convert BigInts to Numbers for calculation
+            const percent = ((Number(current) / Number(target)) * 100).toFixed(2);
+            
             const elapsedTime = (Date.now() - startTime) / 1000; // in seconds
-            const blocksPerSecond = elapsedTime > 0 ? (current / elapsedTime).toFixed(1) : 0;
+            
+            // FIX: Explicitly convert BigInt to Number here as well
+            const blocksPerSecond = elapsedTime > 0 ? (Number(current) / elapsedTime).toFixed(1) : 0;
 
             const barWidth = 30;
-            const filledWidth = Math.floor(barWidth * (percent / 100));
+            const filledWidth = Math.floor(barWidth * (Number(percent) / 100));
             const progressBar = '█'.repeat(filledWidth) + '░'.repeat(barWidth - filledWidth);
 
             // Use process.stdout.write with a carriage return (\r) to update the line in place.
@@ -86,7 +94,7 @@ worker.on('message', (event) => {
             if (payload.length === 0) {
                 console.log('  (None)');
             } else {
-                payload.forEach(peer => console.log(`  - ${peer.id}`));
+                payload.forEach((/** @type {any} */ peer) => console.log(`  - ${peer.id}`));
             }
             rl.prompt(true);
             break;        
@@ -143,9 +151,11 @@ worker.on('exit', (code) => {
 // --- Command Handling ---
 rl.on('line', (line) => {
     const args = line.trim().split(' ');
-    const command = args.shift().toLowerCase();
+    const command = args.shift();
 
-    handleCommand(command, args);
+    if (command) {
+        handleCommand(command.toLowerCase(), args);
+    }
     
 }).on('close', () => {
     console.log(chalk.cyan('Shutting down...'));
@@ -153,6 +163,10 @@ rl.on('line', (line) => {
     process.exit(0);
 });
 
+/**
+ * @param {string} command
+ * @param {string[]} args
+ */
 async function handleCommand(command, args) {
     switch (command) {
         case 'help':
@@ -204,7 +218,7 @@ async function handleCommand(command, args) {
         case 'send':
             if (args.length < 2) {
                 console.log('Usage: send <to_address> <amount>');
-            } else if (!loadedWalletId) {
+            } else if (loadedWalletId === null) {
                 console.log(chalk.red('Error: No wallet loaded.'));
             } else {
                 const amt = Number(args[1]);
@@ -225,7 +239,7 @@ async function handleCommand(command, args) {
         case 'mine':
             if (!isNetworkOnline) {
                 console.log(chalk.red('Error: Network is not yet online. Please wait.'));
-            } else if (!loadedWalletId) {
+            } else if (loadedWalletId === null) {
                 console.log(chalk.red('Error: Load a wallet before mining.'));
             } else {
                 worker.postMessage({ action: 'setMinerActive', active: !isMining, minerId: loadedWalletId });
@@ -242,7 +256,7 @@ async function handleCommand(command, args) {
             break;
 
         case 'balance':
-            if (!loadedWalletId) {
+            if (loadedWalletId === null) {
                 console.log(chalk.red('Error: No wallet loaded.'));
             } else {
                 worker.postMessage({ action: 'getBalance', walletId: loadedWalletId });
@@ -276,22 +290,23 @@ async function gracefulShutdown(code = 0) {
   try { worker.postMessage({ action: 'shutdown' }); } catch {}
 
   // Wait for the worker to exit, with a fallback terminator
+  /** @type {Promise<void>} */
   const done = new Promise((resolve) => {
     const onExit = () => {
       worker.removeListener('exit', onExit);
       resolve();
     };
     worker.on('exit', onExit);
-    // Hard fallback after 5s if worker doesn’t exit by itself
+    // Hard fallback after 5s if worker doesn't exit by itself
     setTimeout(() => {
-      worker.terminate().finally(resolve);
+      worker.terminate().finally(() => resolve());
     }, 5000);
   });
   await done;
   process.exit(code);
 }
 
-// Handle Ctrl-C directly (so we don’t crash mdns sockets)
+// Handle Ctrl-C directly (so we don't crash mdns sockets)
 process.on('SIGINT', () => rl.close());
 process.on('SIGTERM', () => rl.close());
 
