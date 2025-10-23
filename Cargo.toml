@@ -32,6 +32,7 @@ curve25519-dalek = { version = "4", features = ["serde", "rand_core"] }
 bulletproofs = { version = "5.0", features = ["std"] }
 merlin = "3.0"
 rand = "0.8"
+bip39 = "2.0"
 
 # VDF (Verifiable Delay Function) dependencies - unchanged
 num-bigint = { version = "0.4", features = ["rand"] }

@@ -3,7 +3,7 @@
 // ─── Consensus timing ──────────────────────────────────────────────────────────
 
 /// Target block time (seconds).
-pub const TARGET_BLOCK_TIME: u64 = 300; // 5 minutes
+pub const TARGET_BLOCK_TIME: u64 = 30; // 30 seconds
 
 /// Retarget window (≈ 1 hour @ 5 min/blk).
 pub const DIFFICULTY_ADJUSTMENT_INTERVAL: u64 = 12;
@@ -102,7 +102,7 @@ pub const VRF_MAX_THRESHOLD: [u8; 32] = [0xFF; 32];
 // ─── Spending rules ────────────────────────────────────────────────────────────
 
 /// Confirmations required before a coinbase output is spendable.
-pub const COINBASE_MATURITY: u64 = 696; // blocks ~ 2.5 days
+pub const COINBASE_MATURITY: u64 = 6; // will be 696 for mainnet blocks ~ 2.5 days
 
 // ─── Domain separation tags (single source of truth) ───────────────────────────
 

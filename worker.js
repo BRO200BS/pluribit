@@ -560,7 +560,8 @@ export async function main() {
         try {
             switch (action) {
                 case 'initializeNetwork': await initializeNetwork(); break;
-                case 'initWallet': await handleInitWallet(params); break;
+               case 'createWalletWithMnemonic': await handleCreateWalletWithMnemonic(params); break; 
+               case 'restoreWalletFromMnemonic': await handleRestoreWalletFromMnemonic(params); break; 
                 case 'inspectBlock':
                     try {
                         const height = parseInt(params.height);
@@ -2230,20 +2231,57 @@ async function updateWalletsAfterReorg() {
     }
 }
 
-async function handleInitWallet({ walletId }) {
-    // The mutex is no longer needed here since it doesn't call another locked function.
+
+
+async function handleCreateWalletWithMnemonic({ walletId }) {
     if (!walletId) return log('Wallet ID cannot be empty.', 'error');
     if (await db.walletExists(walletId)) {
         return log(`Wallet '${walletId}' already exists. Use 'load'.`, 'error');
     }
-    // Create a brand-new wallet session fully in Rust
-    await pluribit.wallet_session_create(walletId);
-    // Export once so it’s persisted (plaintext for now; can encrypt later)
-    const blob = await pluribit.wallet_session_export(walletId);
-    await db.saveWallet(walletId, blob);
+    try {
+        // Call the new Rust function
+        const phrase = await pluribit.wallet_session_create_with_mnemonic(walletId);
 
-    // Instruct the user on the next step instead of calling the function directly.
-    log(`New wallet '${walletId}' created. Use 'load ${walletId}' to activate it.`, 'success');
+        // Export immediately to save the newly created wallet state
+        const blob = await pluribit.wallet_session_export(walletId);
+        await db.saveWallet(walletId, blob);
+
+        log(`New wallet '${walletId}' created successfully.`, 'success');
+        log('IMPORTANT: Write down your 12-word mnemonic phrase and keep it safe:', 'warn'); // Use 'warn' level?
+        log(phrase, 'info'); // Log phrase plainly or maybe 'success'?
+        log('This phrase is required to restore your wallet.', 'warn'); // Use 'warn' level?
+        parentPort.postMessage({ type: 'log', payload: { level: 'success', message: `Wallet '${walletId}' created. Mnemonic logged above.`}}); // Notify main
+    } catch (e) {
+        log(`Failed to create wallet '${walletId}': ${e?.message || e}`, 'error');
+        // Clean up session if creation failed partially
+        try { await pluribit.wallet_session_clear(walletId); } catch {}
+    }
+}
+
+async function handleRestoreWalletFromMnemonic({ walletId, phrase }) {
+    if (!walletId) return log('Wallet ID cannot be empty.', 'error');
+    if (await db.walletExists(walletId)) {
+        return log(`Wallet '${walletId}' already exists. Use 'load'.`, 'error');
+    }
+    if (!phrase || phrase.split(' ').length !== 12) {
+         return log(`Invalid mnemonic phrase provided. Must be 12 words.`, 'error');
+    }
+    try {
+        // Call the new Rust restore function
+        await pluribit.wallet_session_restore_from_mnemonic(walletId, phrase);
+
+        // Export immediately to save the restored wallet state
+        const blob = await pluribit.wallet_session_export(walletId);
+        await db.saveWallet(walletId, blob);
+
+        log(`Wallet '${walletId}' restored successfully from mnemonic phrase.`, 'success');
+        log(`Use 'load ${walletId}' to activate it.`, 'info');
+         parentPort.postMessage({ type: 'log', payload: { level: 'success', message: `Wallet '${walletId}' restored.`}}); // Notify main
+    } catch (e) {
+        log(`Failed to restore wallet '${walletId}': ${e?.message || e}`, 'error');
+        // Clean up session if restore failed partially
+        try { await pluribit.wallet_session_clear(walletId); } catch {}
+    }
 }
 
 async function handleLoadWallet({ walletId }) {

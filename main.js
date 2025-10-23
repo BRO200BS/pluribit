@@ -171,7 +171,8 @@ async function handleCommand(command, args) {
     switch (command) {
         case 'help':
             console.log('\nAvailable Commands:');
-            console.log('  create <wallet_name>   - Create a new wallet');
+            console.log('  create <wallet_name>   - Create a new wallet (outputs mnemonic)');
+            console.log('  restore <wallet_name> "<mnemonic phrase>" - Restore wallet from phrase');
             console.log('  load <wallet_name>     - Load an existing wallet');
             console.log('  send <to> <amount>     - Send a transaction');
             console.log('  mine                   - Toggle PoW+PoST mining on/off');
@@ -198,10 +199,29 @@ async function handleCommand(command, args) {
             break;
 
         case 'create':
-            if (args[0]) worker.postMessage({ action: 'initWallet', walletId: args[0] });
-            else console.log('Usage: create <wallet_name>');
+            if (args[0]) {
+                worker.postMessage({ action: 'createWalletWithMnemonic', walletId: args[0] });
+            } else {
+                console.log('Usage: create <wallet_name>');
+            }
             break;
-            
+
+        case 'restore':
+            // Expect: restore wallet_name "word1 word2 ... word12"
+            if (args.length < 2) {
+                console.log('Usage: restore <wallet_name> "<mnemonic phrase>"');
+                break;
+            }
+            const walletName = args[0];
+            // Join the rest of the args, assuming they might contain spaces if not quoted properly
+            const phrase = args.slice(1).join(' ').replace(/^"(.*)"$/, '$1'); // Remove surrounding quotes if present
+            if (phrase.split(' ').length !== 12) {
+                 console.log(chalk.red('Error: Mnemonic phrase must be 12 words. Ensure it is enclosed in quotes if it contains spaces.'));
+            } else {
+                worker.postMessage({ action: 'restoreWalletFromMnemonic', walletId: walletName, phrase: phrase });
+            }
+            break;
+
         case 'load':
             if (args[0]) worker.postMessage({ action: 'loadWallet', walletId: args[0] });
             else console.log('Usage: load <wallet_name>');

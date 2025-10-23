@@ -4,7 +4,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use curve25519_dalek::scalar::Scalar;
 use bulletproofs::RangeProof;
 use curve25519_dalek::ristretto::{RistrettoPoint, CompressedRistretto};
-use rand::rngs::OsRng;
+use rand::{rngs::OsRng, RngCore};
 use crate::merkle;
 use lazy_static::lazy_static;
 use std::sync::Mutex;
@@ -12,6 +12,9 @@ use crate::blockchain::COINBASE_INDEX;
 use crate::constants::COINBASE_MATURITY; 
 use crate::WasmU64;
 use std::collections::HashMap;
+use sha2::{Sha256, Digest};
+use bip39::{Mnemonic, Language};
+
 
 lazy_static! {
     static ref PENDING_UTXOS: Mutex<HashSet<Vec<u8>>> = Mutex::new(HashSet::new());
@@ -82,6 +85,41 @@ pub struct Wallet {
     pub owned_utxos: Vec<WalletUtxo>,
 }
 
+
+/// Derives scan and spend private keys from a BIP39 seed using domain separation.
+fn derive_keys_from_seed(seed_bytes: &[u8]) -> Result<(Scalar, Scalar), String> { // Accept slice, return Result
+    // Ensure the seed is the expected length (standard BIP39 seed is 64 bytes)
+    if seed_bytes.len() != 64 {
+        return Err(format!("Invalid seed length: expected 64, got {}", seed_bytes.len()));
+    }
+    // Use HKDF or simple hashing with domain separation
+
+
+    // Derive scan private key
+    let mut scan_hasher = Sha256::new();
+    scan_hasher.update(b"pluribit_scan_key_v1"); // Domain separator
+    scan_hasher.update(seed_bytes);
+    let scan_hash: [u8; 32] = scan_hasher.finalize().into();
+    
+    // Use wide reduction to ensure uniformity
+    let mut wide_bytes = [0u8; 64];
+    wide_bytes[..32].copy_from_slice(&scan_hash);
+    let scan_priv = Scalar::from_bytes_mod_order_wide(&wide_bytes);
+
+    // Derive spend private key
+    let mut spend_hasher = Sha256::new();
+    spend_hasher.update(b"pluribit_spend_key_v1"); // Different domain separator
+    spend_hasher.update(seed_bytes);
+    let spend_hash: [u8; 32] = spend_hasher.finalize().into();
+    
+    // Use wide reduction
+    let mut spend_wide = [0u8; 64];
+    spend_wide[..32].copy_from_slice(&spend_hash);
+    let spend_priv = Scalar::from_bytes_mod_order_wide(&spend_wide);
+
+    Ok((scan_priv, spend_priv))
+}
+
 impl Wallet {
     /// Creates a new wallet with randomly generated scan and spend keys.
     pub fn new() -> Self {
@@ -98,6 +136,66 @@ impl Wallet {
             owned_utxos: Vec::new(),
         }
     }
+
+
+    /// Creates a new wallet, generating a BIP39 mnemonic and deriving keys.
+    /// Returns the Wallet instance and the generated mnemonic phrase.
+    pub fn new_with_mnemonic() -> Result<(Self, String), String> {
+        // Generate entropy (128 bits for 12 words)
+        let mut entropy = [0u8; 16];
+        OsRng.fill_bytes(&mut entropy);
+
+        // Create mnemonic from entropy
+        let mnemonic = Mnemonic::from_entropy(&entropy)
+            .map_err(|e| format!("Failed to generate mnemonic: {}", e))?;
+
+        let phrase = mnemonic.word_iter().collect::<Vec<&str>>().join(" ");
+
+        // Create a seed from the mnemonic (using an empty passphrase)
+        let seed = mnemonic.to_seed("");
+
+
+        // Pass the seed slice to the derive function
+        let (scan_priv, spend_priv) = derive_keys_from_seed(&seed)?;
+
+        let scan_pub = mimblewimble::derive_public_key(&scan_priv);
+        let spend_pub = mimblewimble::derive_public_key(&spend_priv);
+
+        Ok((
+            Wallet {
+                scan_priv,
+                spend_priv,
+                scan_pub,
+                spend_pub,
+                owned_utxos: Vec::new(),
+            },
+            phrase
+        ))
+    }
+
+    /// Restores a wallet from a BIP39 mnemonic phrase.
+    pub fn from_mnemonic(phrase: &str) -> Result<Self, String> {
+        let mnemonic = Mnemonic::parse(phrase) 
+            .map_err(|e| format!("Invalid mnemonic phrase: {}", e))?;
+
+        // Create seed (using an empty passphrase)
+        let seed = mnemonic.to_seed("");
+
+        // Pass the seed slice to the derive function
+        let (scan_priv, spend_priv) = derive_keys_from_seed(&seed)?;
+
+        let scan_pub = mimblewimble::derive_public_key(&scan_priv);
+        let spend_pub = mimblewimble::derive_public_key(&spend_priv);
+
+        Ok(Wallet {
+            scan_priv,
+            spend_priv,
+            scan_pub,
+            spend_pub,
+            owned_utxos: Vec::new(),
+        })
+    }
+
 
     /// Remove UTXOs that came from a specific block (for reorg handling)
     pub fn remove_block_utxos(&mut self, block_commitments: &HashSet<Vec<u8>>) -> usize {
@@ -204,14 +302,14 @@ impl Wallet {
          // 1. Acquire necessary snapshots BEFORE locking PENDING_UTXOS
          let (valid_commitments, coinbase_creation_heights, current_tip_height): (HashSet<Vec<u8>>, HashMap<Vec<u8>, u64>, u64) = {
              // Lock UTXO_SET first
-             let utxo_set = crate::blockchain::UTXO_SET.lock().unwrap(); // 
+             let utxo_set = crate::blockchain::UTXO_SET.lock().expect("Failed to lock UTXO_SET for snapshot"); // 
              let commitments = utxo_set.keys().cloned().collect();
              // Lock COINBASE_INDEX next
-             let coinbase_index = COINBASE_INDEX.lock().unwrap(); // 
+             let coinbase_index = COINBASE_INDEX.lock().expect("Failed to lock COINBASE_INDEX for snapshot");// 
              let heights = coinbase_index.clone(); // Clone the map for the snapshot
              // Lock BLOCKCHAIN last
-             let chain = crate::BLOCKCHAIN.lock().unwrap(); // 
-             let height = *chain.current_height; // [cite: 1418]
+             let chain = crate::BLOCKCHAIN.lock().expect("Failed to lock BLOCKCHAIN for snapshot height");// 
+             let height = *chain.current_height; 
 
              (commitments, heights, height) // Return tuple, locks are released here
          }; // Snapshots created, locks released
@@ -222,7 +320,7 @@ impl Wallet {
          let mut total_from_selected: u64 = 0;
 
          // 2. Now acquire the PENDING_UTXOS lock to perform the atomic selection.
-         let mut pending = PENDING_UTXOS.lock().unwrap(); // 
+         let mut pending = PENDING_UTXOS.lock().expect("Failed to lock PENDING_UTXOS for selection");
 
          self.owned_utxos.retain_mut(|utxo| {
              if total_from_selected >= total_needed {
@@ -293,7 +391,7 @@ impl Wallet {
              log("[WALLET] Insufficient funds.");
              self.owned_utxos.extend(selected_utxos); // Add the UTXOs back.
              // --- Need to re-acquire pending lock to unmark ---
-             let mut pending_revert = PENDING_UTXOS.lock().unwrap(); // Acquire lock again
+             let mut pending_revert = PENDING_UTXOS.lock().expect("Failed to lock PENDING_UTXOS for revert"); // Acquire lock again
              for input in selected_inputs {
                  pending_revert.remove(&input.commitment); // Un-mark as pending.
              }
@@ -319,7 +417,7 @@ impl Wallet {
         }
 
         // 4. Create the Transaction Kernel
-        let current_height = crate::BLOCKCHAIN.lock().unwrap().current_height;
+        let current_height = crate::BLOCKCHAIN.lock().expect("Failed to lock BLOCKCHAIN for kernel height").current_height;
         #[cfg(target_arch = "wasm32")]
         let timestamp = js_sys::Date::now() as u64;
         #[cfg(not(target_arch = "wasm32"))]
@@ -340,7 +438,7 @@ impl Wallet {
                 // If kernel creation fails, we must also revert
                 self.owned_utxos.extend(selected_utxos);
                 // --- Need to re-acquire pending lock to unmark ---
-                  let mut pending_revert = PENDING_UTXOS.lock().unwrap(); // Acquire lock again
+                  let mut pending_revert = PENDING_UTXOS.lock().expect("Failed to lock PENDING_UTXOS for kernel fail revert"); // Acquire lock again
                   for input in &selected_inputs { // Use a borrow (&) instead of moving 
                       pending_revert.remove(&input.commitment); 
                   }

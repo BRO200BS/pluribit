@@ -2033,6 +2033,36 @@ pub async fn get_block_by_hash(hash: String) -> Result<JsValue, JsValue> {
     serde_wasm_bindgen::to_value(&Option::<Block>::None).map_err(|e| e.into())
 }
 
+/// Creates a new wallet session AND generates a mnemonic phrase.
+/// Returns the mnemonic phrase to the caller.
+#[wasm_bindgen]
+pub fn wallet_session_create_with_mnemonic(wallet_id: &str) -> Result<String, JsValue> {
+    let mut map = WALLET_SESSIONS.lock().map_err(|e| JsValue::from_str(&e.to_string()))?;
+    if map.contains_key(wallet_id) {
+        return Err(JsValue::from_str("Wallet session already exists"));
+    }
+    // Use the new wallet constructor
+    let (w, phrase) = wallet::Wallet::new_with_mnemonic()
+        .map_err(|e| JsValue::from_str(&e))?;
+
+    map.insert(wallet_id.to_string(), w);
+    Ok(phrase) // Return the mnemonic phrase
+}
+
+/// Creates a wallet session by restoring keys from a mnemonic phrase.
+#[wasm_bindgen]
+pub fn wallet_session_restore_from_mnemonic(wallet_id: &str, phrase: &str) -> Result<(), JsValue> {
+    let mut map = WALLET_SESSIONS.lock().map_err(|e| JsValue::from_str(&e.to_string()))?;
+    if map.contains_key(wallet_id) {
+        return Err(JsValue::from_str("Wallet session already exists for this ID"));
+    }
+    // Use the new restore function
+    let w = wallet::Wallet::from_mnemonic(phrase)
+        .map_err(|e| JsValue::from_str(&e))?;
+
+    map.insert(wallet_id.to_string(), w);
+    Ok(())
+}
 
 // Get wallet balance
 #[wasm_bindgen]
