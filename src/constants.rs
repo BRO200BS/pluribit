@@ -102,7 +102,7 @@ pub const VRF_MAX_THRESHOLD: [u8; 32] = [0xFF; 32];
 // ─── Spending rules ────────────────────────────────────────────────────────────
 
 /// Confirmations required before a coinbase output is spendable.
-pub const COINBASE_MATURITY: u64 = 6; // blocks ~ 2.5 days
+pub const COINBASE_MATURITY: u64 = 696; // blocks ~ 2.5 days
 
 // ─── Domain separation tags (single source of truth) ───────────────────────────
 
