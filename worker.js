@@ -216,7 +216,16 @@ function startApiServer() {
         
         try {
             const url = new URL(req.url, `http://localhost:${API_PORT}`);
-            
+
+            // Regex patterns
+            const hashPattern = /^\/api\/block\/hash\/([a-f0-9]{64})$/i; // Matches hash requests
+            const heightPattern = /^\/api\/block\/(\d+)$/;          // Matches height requests
+
+            // Match results
+            const hashMatch = url.pathname.match(hashPattern);
+            const heightMatch = url.pathname.match(heightPattern);
+
+
             if (url.pathname === '/api/stats') {
                 const tipHeight = await db.getTipHeight();
                 const totalWork = await db.loadTotalWork();
@@ -254,8 +263,34 @@ function startApiServer() {
                 }
             }
             
-            else if (url.pathname.startsWith('/api/block/')) {
-                const height = BigInt(url.pathname.split('/')[3]);
+            else if (hashMatch) { // <<< Check for HASH match first
+                const hash = hashMatch[1]; // Get captured hash from regex group 1
+                log(`[API /api/block/hash/] Matched hash: ${hash.substring(0,12)}...`);
+                const tipHeight = await db.getTipHeight();
+                 
+                let foundBlock = null; // Initialize foundBlock
+                // Search backwards (consider adding a depth limit if needed)
+                for (let h = tipHeight; h >= 0n; h--) {
+                    const block = await db.loadBlock(h);
+                    if (block && block.hash === hash) {
+                        foundBlock = block; // Assign the found block
+                        break; // Exit loop once found
+                    }
+                }
+                
+                if (foundBlock) { // Check if foundBlock has a value
+                    res.writeHead(200);
+                    res.end(JSONStringifyWithBigInt(foundBlock)); // Send the found block
+                } else {
+                    res.writeHead(404);
+                    res.end(JSONStringifyWithBigInt({ error: 'Block not found' }));
+                }
+            }
+            else if (heightMatch) { // <<< Check for HEIGHT match second
+                try {
+                    const heightStr = heightMatch[1]; // Get captured height string
+                    const height = BigInt(heightStr);
+                    log(`[API /api/block/:height] Matched height: ${height}`);
                 
                 const block = await db.loadBlock(height);
                 if (!block) {
@@ -263,25 +298,13 @@ function startApiServer() {
                     res.end(JSONStringifyWithBigInt({ error: 'Block not found' }));
                     return;
                 }
-                
-                res.writeHead(200);
-                res.end(JSONStringifyWithBigInt(block));
-            }
-            else if (url.pathname.startsWith('/api/block/hash/')) {
-                const hash = url.pathname.split('/')[4];
-                const tipHeight = await db.getTipHeight();
-                
-                for (let h = tipHeight; h >= 0n; h--) {
-                    const block = await db.loadBlock(h);
-                    if (block && block.hash === hash) {
-                        res.writeHead(200);
-                        res.end(JSONStringifyWithBigInt(block));
-                        return;
-                    }
-                }
-                
-                res.writeHead(404);
-                res.end(JSONStringifyWithBigInt({ error: 'Block not found' }));
+                        res.writeHead(200);
+                        res.end(JSONStringifyWithBigInt(block));
+                } catch (e) {
+                    log(`[API /api/block/:height] Invalid height format or DB error: ${e.message}`, 'warn');
+                    res.writeHead(400); // Bad Request for invalid BigInt conversion
+                    res.end(JSONStringifyWithBigInt({ error: 'Invalid block height format or database error' }));
+                }
             }
             else if (url.pathname.startsWith('/api/blocks/recent')) {
                 const count = BigInt(Math.min(parseInt(url.searchParams.get('count') || '10'), 100));
@@ -392,13 +415,65 @@ function startApiServer() {
                     annualIssuanceInCoins: parseFloat(toCoinString(annualIssuance))
                 }));
             }
-            else {
+            else if (pathname.startsWith('/api/tx/')) { // <<< ADD TRANSACTION SEARCH ENDPOINT
+                const txHash = pathname.split('/')[3]; // Get hash from path
+
+                // Validate hash format (64 hex characters)
+                if (!/^[a-f0-9]{64}$/i.test(txHash)) {
+                    res.writeHead(400); // Bad Request
+                    res.end(JSONStringifyWithBigInt({ error: 'Invalid transaction hash format' }));
+                    return;
+                }
+
+                log(`[API /api/tx/] Searching for transaction hash: ${txHash.substring(0, 12)}...`);
+                let foundBlock = null;
+                const tipHeight = await db.getTipHeight();
+                // Search backwards from the tip (limit depth for performance)
+                const searchDepth = Math.min(Number(tipHeight), 1000); // Example: Search last 1000 blocks
+
+                for (let h = tipHeight; h > tipHeight - BigInt(searchDepth) && h >= 0n; h--) {
+                    const block = await db.loadBlock(h); // Load from LevelDB
+                    if (block && block.transactions) {
+                        for (const tx of block.transactions) {
+                            // Check kernel excess (assuming it's the TX hash)
+                            if (tx.kernels && tx.kernels[0] && tx.kernels[0].excess) {
+                                try {
+                                    // Ensure excess is treated as bytes and convert to hex
+                                    const currentTxHash = Buffer.from(tx.kernels[0].excess || []).toString('hex');
+                                    if (currentTxHash === txHash) {
+                                        foundBlock = block; // Store the block containing the tx
+                                        break; // Found in this tx
+                                    }
+                                } catch (e) {
+                                    log(`[API /api/tx/] Error calculating hash for tx in block ${h}: ${e.message}`, 'warn');
+                                }
+                            }
+                        }
+                    }
+                    if (foundBlock) break; // Found in this block, stop searching earlier blocks
+                }
+
+                if (foundBlock) {
+                    log(`[API /api/tx/] Found transaction ${txHash.substring(0,12)} in block #${foundBlock.height}`);
+                    res.writeHead(200);
+                    // Return the block height and hash where the transaction was found
+                    res.end(JSONStringifyWithBigInt({ blockHeight: foundBlock.height, blockHash: foundBlock.hash }));
+                } else {
+                    log(`[API /api/tx/] Transaction ${txHash.substring(0,12)} not found within search depth.`);
+                    res.writeHead(404); // Not Found
+                    res.end(JSONStringifyWithBigInt({ error: 'Transaction not found (or is too old)' }));
+                }
+            }
+             else {
                 res.writeHead(404);
                 res.end(JSONStringifyWithBigInt({ error: 'Not found' }));
             }
         } catch (e) {
             log(`[API] Error: ${e.message}`, 'error');
-            res.writeHead(500);
+            // Avoid setting headers if already sent (e.g., from within a handler)
+            if (!res.headersSent) {
+                res.writeHead(500);
+            }
             res.end(JSONStringifyWithBigInt({ error: e.message }));
         }
     });

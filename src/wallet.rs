@@ -290,7 +290,7 @@ impl Wallet {
                                      }
                                      log(&format!("[SCAN_BLOCK] Output {}: Commitment MATCH! Verifying range proof...", out_commitment_hex));
                                      // Verify range proof
-                                     let proof = match RangeProof::from_bytes(&output.range_proof) {
+                                     let proof = match RangeProof::from_bytes(&tx.aggregated_range_proof) {
                                          Ok(p) => p,
                                          Err(_) => {
                                              log(&format!("[WALLET] Invalid range proof format for output {}",
@@ -501,12 +501,15 @@ impl Wallet {
         }
 
         let change_amount = total_from_selected - total_needed;
-        if change_amount > 0 {
+        let change_blinding_opt = if change_amount > 0 {
             log(&format!("[WALLET] Change amount: {}", change_amount));
             let (change_output, change_blinding) = create_stealth_output(change_amount, &self.scan_pub)?;
             outputs.push(change_output);
             output_blinding_sum += change_blinding;
-        }
+            Some(change_blinding)
+        } else {
+            None
+        };
 
         // 4. Create the Transaction Kernel
         let current_height = crate::BLOCKCHAIN.lock().expect("Failed to lock BLOCKCHAIN for kernel height").current_height;
@@ -539,11 +542,25 @@ impl Wallet {
             
         // 5. Assemble the final transaction
         log("[WALLET] Assembling final transaction...");
+
+        // V2: Create aggregated range proof for all outputs
+        let (output_values, output_blindings) = if let Some(change_blinding) = change_blinding_opt {
+            (vec![amount, change_amount], vec![recipient_blinding, change_blinding])
+        } else {
+            (vec![amount], vec![recipient_blinding])
+        };
+        
+        let (aggregated_proof, _commitments) = mimblewimble::create_aggregated_range_proof(
+            &output_values,
+            &output_blindings,
+        ).map_err(|e| e.to_string())?;
+
         Ok(Transaction {
             inputs: selected_inputs,
             outputs,
             kernels: vec![kernel],
             timestamp: WasmU64::from(timestamp),
+            aggregated_range_proof: aggregated_proof.to_bytes(),
         })
     }
     
@@ -577,7 +594,6 @@ pub fn create_stealth_output(
     Ok((
         TransactionOutput {
             commitment: commitment.to_bytes().to_vec(),
-            range_proof: range_proof.to_bytes(),
             ephemeral_key: Some(ephemeral_key.compress().to_bytes().to_vec()),
             stealth_payload: Some(payload),
              view_tag: Some(vec![view_tag]),
@@ -603,7 +619,7 @@ mod tests {
         let value = 1000;
         let r = Scalar::random(&mut OsRng);
         let blinding = Scalar::random(&mut OsRng);
-        let (ephemeral_key, payload) = stealth::encrypt_stealth_out(
+        let (ephemeral_key, payload, view_tag) = stealth::encrypt_stealth_out(
             &r,
             &recipient_wallet.scan_pub,
             value,
@@ -613,9 +629,9 @@ mod tests {
         let (range_proof, _) = mimblewimble::create_range_proof(value, &blinding).unwrap();
         let output = TransactionOutput {
             commitment: commitment.compress().to_bytes().to_vec(),
-            range_proof: range_proof.to_bytes(),
             ephemeral_key: Some(ephemeral_key.compress().to_bytes().to_vec()),
             stealth_payload: Some(payload),
+            view_tag: Some(vec![view_tag]),
         };
         let tx = Transaction {
             inputs: vec![],
@@ -623,11 +639,12 @@ mod tests {
             kernels: vec![TransactionKernel {
                 excess: vec![0; 32],
                 signature: vec![0; 64],
-                fee: 0,
-                min_height: 0, // Added missing field
-                timestamp: 1,
+                fee: WasmU64::from(0),
+                min_height: WasmU64::from(0),
+                timestamp: WasmU64::from(1),
             }],
-            timestamp: 1,
+            timestamp: WasmU64::from(1),
+            aggregated_range_proof: range_proof.to_bytes(),
         };
         let mut block = Block::genesis();
         block.transactions.push(tx);
@@ -668,9 +685,9 @@ fn test_wallet_create_transaction() {
     // Add to global UTXO set so create_transaction can find it
     let utxo_output = crate::transaction::TransactionOutput {
         commitment: utxo_commitment.clone(),
-        range_proof: vec![0; 675], // Dummy proof for test
         ephemeral_key: None,
         stealth_payload: None,
+        view_tag: None,
     };
     {
         crate::blockchain::UTXO_SET.lock().unwrap().insert(utxo_commitment.clone(), utxo_output);
@@ -717,9 +734,9 @@ fn test_wallet_create_transaction() {
         // Add to global UTXO set
         let utxo_output = crate::transaction::TransactionOutput {
             commitment: utxo_commitment.clone(),
-            range_proof: vec![0; 675],
             ephemeral_key: None,
             stealth_payload: None,
+            view_tag: None,
         };
         {
             crate::blockchain::UTXO_SET.lock().unwrap().insert(utxo_commitment.clone(), utxo_output);

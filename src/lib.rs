@@ -38,6 +38,9 @@ pub mod wallet;
 pub mod address;
 pub mod merkle;
 pub mod vrf;
+pub mod adaptor;
+pub mod payment_channel;
+pub mod atomic_swap;
 
 // RATIONALE: Prevent DoS via extremely deep reorgs
 const MAX_REORG_DEPTH: u64 = 1000000000; 
@@ -2495,7 +2498,7 @@ pub fn add_transaction_to_pool(tx_json: JsValue) -> Result<(), JsValue> {
     for output in &tx.outputs {
         let commitment = CompressedRistretto::from_slice(&output.commitment)
             .map_err(|_| JsValue::from_str("Invalid output commitment"))?;
-        let proof = RangeProof::from_bytes(&output.range_proof)
+         let proof = RangeProof::from_bytes(&tx.aggregated_range_proof)
             .map_err(|_| JsValue::from_str("Invalid range proof format"))?;
         if !mimblewimble::verify_range_proof(&proof, &commitment) {
             return Err(JsValue::from_str("Range proof verification failed"));

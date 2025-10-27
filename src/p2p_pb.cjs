@@ -1880,7 +1880,6 @@ $root.p2p = (function() {
          * @memberof p2p
          * @interface ITransactionOutput
          * @property {Uint8Array|null} [commitment] TransactionOutput commitment
-         * @property {Uint8Array|null} [rangeProof] TransactionOutput rangeProof
          * @property {Uint8Array|null} [ephemeralKey] TransactionOutput ephemeralKey
          * @property {Uint8Array|null} [stealthPayload] TransactionOutput stealthPayload
          * @property {Uint8Array|null} [viewTag] TransactionOutput viewTag
@@ -1908,14 +1907,6 @@ $root.p2p = (function() {
          * @instance
          */
         TransactionOutput.prototype.commitment = $util.newBuffer([]);
-
-        /**
-         * TransactionOutput rangeProof.
-         * @member {Uint8Array} rangeProof
-         * @memberof p2p.TransactionOutput
-         * @instance
-         */
-        TransactionOutput.prototype.rangeProof = $util.newBuffer([]);
 
         /**
          * TransactionOutput ephemeralKey.
@@ -2003,8 +1994,6 @@ $root.p2p = (function() {
                 writer = $Writer.create();
             if (message.commitment != null && Object.hasOwnProperty.call(message, "commitment"))
                 writer.uint32(/* id 1, wireType 2 =*/10).bytes(message.commitment);
-            if (message.rangeProof != null && Object.hasOwnProperty.call(message, "rangeProof"))
-                writer.uint32(/* id 2, wireType 2 =*/18).bytes(message.rangeProof);
             if (message.ephemeralKey != null && Object.hasOwnProperty.call(message, "ephemeralKey"))
                 writer.uint32(/* id 3, wireType 2 =*/26).bytes(message.ephemeralKey);
             if (message.stealthPayload != null && Object.hasOwnProperty.call(message, "stealthPayload"))
@@ -2049,10 +2038,6 @@ $root.p2p = (function() {
                 switch (tag >>> 3) {
                 case 1: {
                         message.commitment = reader.bytes();
-                        break;
-                    }
-                case 2: {
-                        message.rangeProof = reader.bytes();
                         break;
                     }
                 case 3: {
@@ -2106,9 +2091,6 @@ $root.p2p = (function() {
             if (message.commitment != null && message.hasOwnProperty("commitment"))
                 if (!(message.commitment && typeof message.commitment.length === "number" || $util.isString(message.commitment)))
                     return "commitment: buffer expected";
-            if (message.rangeProof != null && message.hasOwnProperty("rangeProof"))
-                if (!(message.rangeProof && typeof message.rangeProof.length === "number" || $util.isString(message.rangeProof)))
-                    return "rangeProof: buffer expected";
             if (message.ephemeralKey != null && message.hasOwnProperty("ephemeralKey")) {
                 properties._ephemeralKey = 1;
                 if (!(message.ephemeralKey && typeof message.ephemeralKey.length === "number" || $util.isString(message.ephemeralKey)))
@@ -2144,11 +2126,6 @@ $root.p2p = (function() {
                     $util.base64.decode(object.commitment, message.commitment = $util.newBuffer($util.base64.length(object.commitment)), 0);
                 else if (object.commitment.length >= 0)
                     message.commitment = object.commitment;
-            if (object.rangeProof != null)
-                if (typeof object.rangeProof === "string")
-                    $util.base64.decode(object.rangeProof, message.rangeProof = $util.newBuffer($util.base64.length(object.rangeProof)), 0);
-                else if (object.rangeProof.length >= 0)
-                    message.rangeProof = object.rangeProof;
             if (object.ephemeralKey != null)
                 if (typeof object.ephemeralKey === "string")
                     $util.base64.decode(object.ephemeralKey, message.ephemeralKey = $util.newBuffer($util.base64.length(object.ephemeralKey)), 0);
@@ -2180,7 +2157,7 @@ $root.p2p = (function() {
             if (!options)
                 options = {};
             var object = {};
-            if (options.defaults) {
+            if (options.defaults)
                 if (options.bytes === String)
                     object.commitment = "";
                 else {
@@ -2188,18 +2165,8 @@ $root.p2p = (function() {
                     if (options.bytes !== Array)
                         object.commitment = $util.newBuffer(object.commitment);
                 }
-                if (options.bytes === String)
-                    object.rangeProof = "";
-                else {
-                    object.rangeProof = [];
-                    if (options.bytes !== Array)
-                        object.rangeProof = $util.newBuffer(object.rangeProof);
-                }
-            }
             if (message.commitment != null && message.hasOwnProperty("commitment"))
                 object.commitment = options.bytes === String ? $util.base64.encode(message.commitment, 0, message.commitment.length) : options.bytes === Array ? Array.prototype.slice.call(message.commitment) : message.commitment;
-            if (message.rangeProof != null && message.hasOwnProperty("rangeProof"))
-                object.rangeProof = options.bytes === String ? $util.base64.encode(message.rangeProof, 0, message.rangeProof.length) : options.bytes === Array ? Array.prototype.slice.call(message.rangeProof) : message.rangeProof;
             if (message.ephemeralKey != null && message.hasOwnProperty("ephemeralKey")) {
                 object.ephemeralKey = options.bytes === String ? $util.base64.encode(message.ephemeralKey, 0, message.ephemeralKey.length) : options.bytes === Array ? Array.prototype.slice.call(message.ephemeralKey) : message.ephemeralKey;
                 if (options.oneofs)
@@ -2615,6 +2582,7 @@ $root.p2p = (function() {
          * @property {Array.<p2p.ITransactionOutput>|null} [outputs] Transaction outputs
          * @property {Array.<p2p.ITransactionKernel>|null} [kernels] Transaction kernels
          * @property {number|Long|null} [timestamp] Transaction timestamp
+         * @property {Uint8Array|null} [aggregatedRangeProof] Transaction aggregatedRangeProof
          */
 
         /**
@@ -2668,6 +2636,14 @@ $root.p2p = (function() {
         Transaction.prototype.timestamp = $util.Long ? $util.Long.fromBits(0,0,true) : 0;
 
         /**
+         * Transaction aggregatedRangeProof.
+         * @member {Uint8Array} aggregatedRangeProof
+         * @memberof p2p.Transaction
+         * @instance
+         */
+        Transaction.prototype.aggregatedRangeProof = $util.newBuffer([]);
+
+        /**
          * Creates a new Transaction instance using the specified properties.
          * @function create
          * @memberof p2p.Transaction
@@ -2702,6 +2678,8 @@ $root.p2p = (function() {
                     $root.p2p.TransactionKernel.encode(message.kernels[i], writer.uint32(/* id 3, wireType 2 =*/26).fork()).ldelim();
             if (message.timestamp != null && Object.hasOwnProperty.call(message, "timestamp"))
                 writer.uint32(/* id 4, wireType 0 =*/32).uint64(message.timestamp);
+            if (message.aggregatedRangeProof != null && Object.hasOwnProperty.call(message, "aggregatedRangeProof"))
+                writer.uint32(/* id 5, wireType 2 =*/42).bytes(message.aggregatedRangeProof);
             return writer;
         };
 
@@ -2758,6 +2736,10 @@ $root.p2p = (function() {
                     }
                 case 4: {
                         message.timestamp = reader.uint64();
+                        break;
+                    }
+                case 5: {
+                        message.aggregatedRangeProof = reader.bytes();
                         break;
                     }
                 default:
@@ -2825,6 +2807,9 @@ $root.p2p = (function() {
             if (message.timestamp != null && message.hasOwnProperty("timestamp"))
                 if (!$util.isInteger(message.timestamp) && !(message.timestamp && $util.isInteger(message.timestamp.low) && $util.isInteger(message.timestamp.high)))
                     return "timestamp: integer|Long expected";
+            if (message.aggregatedRangeProof != null && message.hasOwnProperty("aggregatedRangeProof"))
+                if (!(message.aggregatedRangeProof && typeof message.aggregatedRangeProof.length === "number" || $util.isString(message.aggregatedRangeProof)))
+                    return "aggregatedRangeProof: buffer expected";
             return null;
         };
 
@@ -2879,6 +2864,11 @@ $root.p2p = (function() {
                     message.timestamp = object.timestamp;
                 else if (typeof object.timestamp === "object")
                     message.timestamp = new $util.LongBits(object.timestamp.low >>> 0, object.timestamp.high >>> 0).toNumber(true);
+            if (object.aggregatedRangeProof != null)
+                if (typeof object.aggregatedRangeProof === "string")
+                    $util.base64.decode(object.aggregatedRangeProof, message.aggregatedRangeProof = $util.newBuffer($util.base64.length(object.aggregatedRangeProof)), 0);
+                else if (object.aggregatedRangeProof.length >= 0)
+                    message.aggregatedRangeProof = object.aggregatedRangeProof;
             return message;
         };
 
@@ -2900,12 +2890,20 @@ $root.p2p = (function() {
                 object.outputs = [];
                 object.kernels = [];
             }
-            if (options.defaults)
+            if (options.defaults) {
                 if ($util.Long) {
                     var long = new $util.Long(0, 0, true);
                     object.timestamp = options.longs === String ? long.toString() : options.longs === Number ? long.toNumber() : long;
                 } else
                     object.timestamp = options.longs === String ? "0" : 0;
+                if (options.bytes === String)
+                    object.aggregatedRangeProof = "";
+                else {
+                    object.aggregatedRangeProof = [];
+                    if (options.bytes !== Array)
+                        object.aggregatedRangeProof = $util.newBuffer(object.aggregatedRangeProof);
+                }
+            }
             if (message.inputs && message.inputs.length) {
                 object.inputs = [];
                 for (var j = 0; j < message.inputs.length; ++j)
@@ -2926,6 +2924,8 @@ $root.p2p = (function() {
                     object.timestamp = options.longs === String ? String(message.timestamp) : message.timestamp;
                 else
                     object.timestamp = options.longs === String ? $util.Long.prototype.toString.call(message.timestamp) : options.longs === Number ? new $util.LongBits(message.timestamp.low >>> 0, message.timestamp.high >>> 0).toNumber(true) : message.timestamp;
+            if (message.aggregatedRangeProof != null && message.hasOwnProperty("aggregatedRangeProof"))
+                object.aggregatedRangeProof = options.bytes === String ? $util.base64.encode(message.aggregatedRangeProof, 0, message.aggregatedRangeProof.length) : options.bytes === Array ? Array.prototype.slice.call(message.aggregatedRangeProof) : message.aggregatedRangeProof;
             return object;
         };
 

@@ -51,7 +51,6 @@ message TransactionInput {
 
 message TransactionOutput {
   bytes commitment = 1;
-  bytes range_proof = 2;
   optional bytes ephemeral_key = 3;
   optional bytes stealth_payload = 4;
   optional bytes viewTag = 5;
@@ -70,6 +69,7 @@ message Transaction {
   repeated TransactionOutput outputs = 2;
   repeated TransactionKernel kernels = 3;
   uint64 timestamp = 4;
+  bytes aggregated_range_proof = 5; 
 }
 
 message Block {

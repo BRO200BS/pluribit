@@ -364,7 +364,7 @@ impl Blockchain {
                 for (out_idx, out) in tx.outputs.iter().enumerate() {
                     let commitment_pt = CompressedRistretto::from_slice(&out.commitment)
                         .map_err(|_| PluribitError::InvalidOutputCommitment)?;
-                    let proof = RangeProof::from_bytes(&out.range_proof)
+                    let proof = RangeProof::from_bytes(&tx.aggregated_range_proof)
                         .map_err(|_| PluribitError::InvalidRangeProof)?;
                     if !mimblewimble::verify_range_proof(&proof, &commitment_pt) {
                         log(&format!("[BLOCK VALIDATION] TX#{} Output#{}: Range proof verification FAILED", 
@@ -582,7 +582,7 @@ pub fn get_current_base_reward(height: u64) -> u64 {
     
 #[cfg(test)]
 mod tests {
-    
+    use crate::WasmU64;
     use crate::wallet::Wallet;
     use crate::transaction::{Transaction, TransactionInput, TransactionOutput, TransactionKernel};
     use crate::mimblewimble;
@@ -693,17 +693,18 @@ fn test_block_with_coinbase_and_transaction() {
             commitment: mimblewimble::commit(tx_input_value, &tx_input_blinding).unwrap()
                 .compress().to_bytes().to_vec(),
             merkle_proof: None,
-            source_height: 0,
+            source_height: WasmU64::from(0),
         }],
         outputs: vec![TransactionOutput {
             commitment: mimblewimble::commit(tx_output_value, &tx_output_blinding).unwrap()
                 .compress().to_bytes().to_vec(),
-            range_proof: vec![0; 675], // Dummy proof
             ephemeral_key: None,
             stealth_payload: None,
+            view_tag: None,
         }],
         kernels: vec![TransactionKernel::new(tx_kernel_blinding, tx_fee, 0, 1).unwrap()],
-        timestamp: 1,
+        timestamp: WasmU64::from(1),
+        aggregated_range_proof: vec![],
     };
     
     // IMPORTANT: Coinbase gets base reward + all fees from the block!
@@ -781,24 +782,27 @@ fn test_manual_block_validation_logic() {
         inputs: vec![TransactionInput {
             commitment: initial_commitment.compress().to_bytes().to_vec(),
             merkle_proof: None,
-            source_height: 0,
+            source_height: WasmU64::from(0),
         }],
         outputs: vec![
             TransactionOutput {
                 commitment: send_commitment.compress().to_bytes().to_vec(),
-                range_proof: send_proof.to_bytes(),
+                // Remove: range_proof: send_proof.to_bytes(),
                 ephemeral_key: None,
                 stealth_payload: None,
+                view_tag: None, // Add this
             },
             TransactionOutput {
                 commitment: change_commitment.compress().to_bytes().to_vec(),
-                range_proof: change_proof.to_bytes(),
+                // Remove: range_proof: change_proof.to_bytes(),
                 ephemeral_key: None,
                 stealth_payload: None,
-            }
+                view_tag: None, // Add this
+            },
         ],
         kernels: vec![kernel],
-        timestamp: 1,
+        timestamp: WasmU64::from(1), // Fix this
+        aggregated_range_proof: vec![], // Add this
     };
     
     // Coinbase gets base reward + all fees collected!

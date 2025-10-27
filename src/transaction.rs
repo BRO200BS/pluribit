@@ -25,7 +25,7 @@ pub struct TransactionInput {
 #[serde(rename_all = "camelCase")]
 pub struct TransactionOutput {
     pub commitment: Vec<u8>,
-    pub range_proof: Vec<u8>,
+    // range_proof removed - V2 uses aggregated proof at Transaction level
     pub ephemeral_key: Option<Vec<u8>>, // Stores the sender's ephemeral public key R
     pub stealth_payload: Option<Vec<u8>>, // Stores the encrypted nonce || cipher
     pub view_tag: Option<Vec<u8>>, // Now matches Protobuf 'bytes' type
@@ -47,7 +47,8 @@ pub struct Transaction {
     pub inputs: Vec<TransactionInput>,
     pub outputs: Vec<TransactionOutput>,
     pub kernels: Vec<TransactionKernel>,
-    pub timestamp: WasmU64, // CRITICAL FIX #8: Transaction creation time
+    pub timestamp: WasmU64,
+    pub aggregated_range_proof: Vec<u8>, // V2: One proof for ALL outputs
 }
 
 
@@ -162,13 +163,17 @@ impl Transaction {
             ));
         }
 
-        // 1) Range proofs
-        for output in &self.outputs {
-            let C = CompressedRistretto::from_slice(&output.commitment)
+        // 1) Verify aggregated range proof (V2)
+        if !self.outputs.is_empty() {
+            let commitments: Vec<CompressedRistretto> = self.outputs.iter()
+                .map(|output| CompressedRistretto::from_slice(&output.commitment))
+                .collect::<Result<Vec<_>, _>>()
                 .map_err(|_| PluribitError::InvalidOutputCommitment)?;
-            let proof = RangeProof::from_bytes(&output.range_proof)
+            
+            let proof = RangeProof::from_bytes(&self.aggregated_range_proof)
                 .map_err(|_| PluribitError::InvalidRangeProof)?;
-            if !mimblewimble::verify_range_proof(&proof, &C) {
+            
+            if !mimblewimble::verify_aggregated_range_proof(&proof, &commitments) {
                 return Err(PluribitError::InvalidRangeProof);
             }
         }
@@ -268,7 +273,6 @@ impl Transaction {
         
         outputs.push(TransactionOutput {
             commitment: commitment.to_bytes().to_vec(),
-            range_proof: proof.to_bytes(),
             ephemeral_key: Some(ephemeral_key.compress().to_bytes().to_vec()),
             stealth_payload: Some(payload),
              view_tag: Some(vec![view_tag]),
@@ -300,6 +304,7 @@ impl Transaction {
         outputs,
         kernels: vec![kernel],
         timestamp: WasmU64::from(timestamp),
+        aggregated_range_proof: vec![], // Coinbase has no range proofs
     })
 }
     
@@ -331,7 +336,6 @@ impl Transaction {
         sorted_outputs.sort_by(|a, b| a.commitment.cmp(&b.commitment));
         for o in &sorted_outputs {
             hasher.update(&o.commitment);
-            hasher.update(&o.range_proof);
         }
 
         // Sort kernels for deterministic hash
@@ -374,7 +378,6 @@ impl From<TransactionOutput> for p2p::TransactionOutput {
     fn from(output: TransactionOutput) -> Self {
         p2p::TransactionOutput {
             commitment: output.commitment,
-            range_proof: output.range_proof,
             ephemeral_key: output.ephemeral_key,
             stealth_payload: output.stealth_payload,
             view_tag: output.view_tag,
@@ -386,8 +389,7 @@ impl From<TransactionOutput> for p2p::TransactionOutput {
 impl From<p2p::TransactionOutput> for TransactionOutput {
     fn from(proto: p2p::TransactionOutput) -> Self {
         TransactionOutput {
-            commitment: proto.commitment,
-            range_proof: proto.range_proof,
+            commitment: proto.commitment,            
             ephemeral_key: proto.ephemeral_key,
             stealth_payload: proto.stealth_payload,
             // Convert Option<Vec<u8>> (expecting one byte) back to Option<u8>
@@ -430,6 +432,7 @@ impl From<Transaction> for p2p::Transaction {
             outputs: tx.outputs.into_iter().map(p2p::TransactionOutput::from).collect(),
             kernels: tx.kernels.into_iter().map(p2p::TransactionKernel::from).collect(),
             timestamp: *tx.timestamp,
+            aggregated_range_proof: tx.aggregated_range_proof,
         }
     }
 }
@@ -442,6 +445,7 @@ impl From<p2p::Transaction> for Transaction {
             outputs: proto.outputs.into_iter().map(TransactionOutput::from).collect(),
             kernels: proto.kernels.into_iter().map(TransactionKernel::from).collect(),
             timestamp: WasmU64::from(proto.timestamp),
+            aggregated_range_proof: proto.aggregated_range_proof,
         }
     }
 }

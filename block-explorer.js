@@ -1205,7 +1205,13 @@ app.get('/', (req, res) => {
             await loadSupplyMetrics();
             startAutoRefresh();
         }
-
+        function JSONStringifyWithBigInt(obj) {
+            return JSON.stringify(obj, (key, value) =>
+                typeof value === 'bigint'
+                    ? value.toString() // Convert BigInt to string for serialization
+                    : value // return everything else unchanged
+            , 2); // The '2' adds pretty-printing (indentation)
+        }
         function initCharts() {
             const ctx = document.getElementById('blockChart');
             const theme = document.documentElement.getAttribute('data-theme') || 'dark';
@@ -1249,10 +1255,11 @@ app.get('/', (req, res) => {
 
         function updateChart() {
             if (!state.charts.block || state.blocks.length === 0) return;
-            
+
             const blocks = state.blocks.slice(0, 20).reverse();
             state.charts.block.data.labels = blocks.map(b => '#' + b.height);
-            state.charts.block.data.datasets[0].data = blocks.map(b => b.height);
+            // Convert BigInt heights to Numbers for the chart data
+            state.charts.block.data.datasets[0].data = blocks.map(b => Number(b.height)); // <-- FIX HERE
             state.charts.block.update('none');
         }
 
@@ -1537,32 +1544,39 @@ app.get('/', (req, res) => {
 
         function updateBlockTime(blocks) {
             if (blocks.length < 2) {
-                document.getElementById('blockTime').textContent = '~2m';
+                document.getElementById('blockTime').textContent = '~30s'; // Use target block time
                 return;
             }
-            
+
             const recentBlocks = blocks.slice(0, Math.min(10, blocks.length));
-            let totalTimeDiff = 0;
+            // Initialize as BigInt
+            let totalTimeDiff = 0n; 
             let count = 0;
-            
+
             for (let i = 0; i < recentBlocks.length - 1; i++) {
-                const timeDiff = recentBlocks[i].timestamp - recentBlocks[i + 1].timestamp;
-                totalTimeDiff += timeDiff;
+                // Ensure both timestamps are BigInts before subtracting
+                const ts1 = BigInt(recentBlocks[i].timestamp);
+                const ts2 = BigInt(recentBlocks[i + 1].timestamp);
+                const timeDiff = ts1 - ts2; // BigInt - BigInt = BigInt
+                totalTimeDiff += timeDiff; // BigInt + BigInt = BigInt
                 count++;
             }
-            
+
             if (count > 0) {
-                const avgTimeMs = totalTimeDiff / count;
+                // Convert totalTimeDiff to Number *before* dividing by count (a Number)
+                const avgTimeMs = Number(totalTimeDiff) / count; 
                 const avgTimeSec = Math.round(avgTimeMs / 1000);
-                
+
                 if (avgTimeSec < 60) {
-                    document.getElementById('blockTime').textContent = avgTimeSec + 's';
+                    document.getElementById('blockTime').textContent = Math.max(0, avgTimeSec) + 's'; // Ensure non-negative
                 } else {
                     const minutes = Math.floor(avgTimeSec / 60);
                     const seconds = avgTimeSec % 60;
-                    document.getElementById('blockTime').textContent = 
+                    document.getElementById('blockTime').textContent =
                         seconds > 0 ? (minutes + 'm ' + seconds + 's') : (minutes + 'm');
                 }
+            } else {
+                 document.getElementById('blockTime').textContent = '~30s'; // Fallback if calculation fails
             }
         }
 
@@ -1614,6 +1628,9 @@ app.get('/', (req, res) => {
                     return parseInt(Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('').slice(0, 8), 16);
                 });
                 
+                // Convert BigInt VDF iterations to Numbers
+                const vdfIterationsData = metrics.map(m => Number(m.vdfIterations)); 
+                
                 state.charts.difficulty = new Chart(ctx, {
                     type: 'line',
                     data: {
@@ -1632,7 +1649,7 @@ app.get('/', (req, res) => {
                             },
                             {
                                 label: 'VDF Iterations',
-                                data: metrics.map(m => m.vdfIterations),
+                                data: vdfIterationsData,
                                 borderColor: '#f59e0b',
                                 backgroundColor: 'rgba(245, 158, 11, 0.1)',
                                 yAxisID: 'y1',
@@ -1788,7 +1805,7 @@ app.get('/', (req, res) => {
                         datasets: [
                             {
                                 label: 'Total Supply (ƀ)',
-                                data: [supply.supplyInCoins],
+                                data: [Number(supply.supplyInCoins)],
                                 borderColor: '#06b6d4',
                                 backgroundColor: 'rgba(6, 182, 212, 0.1)',
                                 yAxisID: 'y',
@@ -1798,7 +1815,7 @@ app.get('/', (req, res) => {
                             },
                             {
                                 label: 'Stock-to-Flow Ratio',
-                                data: [supply.stockToFlow],
+                                data: [Number(supply.stockToFlow)],
                                 borderColor: '#ec4899',
                                 backgroundColor: 'rgba(236, 72, 153, 0.1)',
                                 yAxisID: 'y1',
@@ -1939,7 +1956,16 @@ app.get('/', (req, res) => {
                 '</div>';
             }).join('');
         }
-
+        // Helper to prevent potential XSS if error messages contain HTML
+        function escapeHtml(unsafe) {
+            if (!unsafe) return '';
+            return unsafe
+                 .replace(/&/g, "&amp;")
+                 .replace(/</g, "&lt;")
+                 .replace(/>/g, "&gt;")
+                 .replace(/"/g, "&quot;")
+                 .replace(/'/g, "&#039;");
+        }
         async function viewBlock(height) {
             const modal = document.getElementById('blockModal');
             const modalTitle = document.getElementById('modalTitle');
@@ -2151,10 +2177,13 @@ app.get('/', (req, res) => {
                     (txListHtml ? '<div class="detail-section"><div class="detail-section-title">Transactions</div>' + txListHtml + '</div>' : '') +
                     '<div class="detail-section">' +
                         '<div class="detail-section-title">Raw Data</div>' +
-                        '<div class="code-block">' + JSON.stringify(block, null, 2) + '</div>' +
+                        // Use the new stringifier here
+                        '<div class="code-block">' + JSONStringifyWithBigInt(block) + '</div>' + // <-- FIX HERE
                     '</div>';
             } catch (e) {
-                modalBody.innerHTML = '<div class="loading"><p style="color: var(--text-dim);">Failed to load block: ' + e.message + '</p></div>';
+                // Ensure error message is displayed safely
+                const errorMessage = e instanceof Error ? e.message : String(e);
+                modalBody.innerHTML = '<div class="loading"><p style="color: var(--text-dim);">Failed to load block: ' + escapeHtml(errorMessage) + '</p></div>';
             }
         }
 
@@ -2229,14 +2258,16 @@ app.get('/', (req, res) => {
 
         function formatTime(timestamp) {
             const now = Date.now();
-            const diff = now - timestamp;
+            // Convert BigInt timestamp to Number for subtraction
+            const diff = now - Number(timestamp); 
             const seconds = Math.floor(diff / 1000);
             const minutes = Math.floor(seconds / 60);
             const hours = Math.floor(minutes / 60);
-            
+
             if (hours > 0) return hours + 'h ago';
             if (minutes > 0) return minutes + 'm ago';
-            return seconds + 's ago';
+            // Handle potential negative diff if clocks are slightly skewed
+            return Math.max(0, seconds) + 's ago'; // <-- Added Math.max(0, ...)
         }
 
         document.addEventListener('keydown', (e) => {

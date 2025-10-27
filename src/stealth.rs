@@ -237,7 +237,7 @@ mod tests {
         let r = Scalar::random(&mut OsRng);
         
         // Encrypt
-        let (ephemeral_key, ciphertext) = encrypt_stealth_out(&r, &scan_pub, value, &blinding);
+        let (ephemeral_key, ciphertext, _view_tag) = encrypt_stealth_out(&r, &scan_pub, value, &blinding);
         
         // Decrypt
         let result = decrypt_stealth_output(&scan_priv, &ephemeral_key, &ciphertext);
@@ -259,7 +259,7 @@ mod tests {
         let r = Scalar::random(&mut OsRng);
         
         // Encrypt with pub1
-        let (ephemeral_key, ciphertext) = encrypt_stealth_out(&r, &scan_pub1, value, &blinding);
+        let (ephemeral_key, ciphertext, _view_tag) = encrypt_stealth_out(&r, &scan_pub1, value, &blinding);
         
         // Try to decrypt with priv2 (wrong key)
         let result = decrypt_stealth_output(&scan_priv2, &ephemeral_key, &ciphertext);
@@ -281,8 +281,8 @@ mod tests {
         let r = Scalar::random(&mut OsRng);
         
         // Encrypt
-        let (ephemeral_key, mut ciphertext) = encrypt_stealth_out(&r, &scan_pub, value, &blinding);
-        
+        let (ephemeral_key, mut ciphertext, _view_tag) = encrypt_stealth_out(&r, &scan_pub, value, &blinding);
+
         // Tamper with ciphertext
         if ciphertext.len() > 30 {
             ciphertext[30] ^= 0xFF;
@@ -303,7 +303,8 @@ mod tests {
         let mut nonces = Vec::new();
         for _ in 0..10 {
             let r = Scalar::random(&mut OsRng);
-            let (_, ciphertext) = encrypt_stealth_out(&r, &scan_pub, value, &blinding);
+            let (_, ciphertext, _view_tag) = encrypt_stealth_out(&r, &scan_pub, value, &blinding);
+
             
             // Extract nonce (first 24 bytes)
             let nonce = &ciphertext[..24];

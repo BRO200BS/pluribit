@@ -28,7 +28,7 @@ export const CONFIG = {
     // (Fix #1) Prevents memory exhaustion from a malicious peer sending a giant list of bogus hashes.
     MAX_HASHES_PER_SYNC: 2_000_000, // Max hashes to accept (~100MB RAM usage).
     // (Fix #4) Requires a stronger majority for consensus on the best chain tip.
-    CONSENSUS_THRESHOLD: 0.51,
+    CONSENSUS_THRESHOLD: 0.5,
     MIN_AGREEING_PEERS: 1, // An absolute minimum number of peers that must agree on a tip.
     // (Fix #6) Prevents DoS from a peer spamming requests for the node's block hashes.
     MIN_HASH_REQUEST_INTERVAL_MS: 1, // 1 seconds between requests per peer.

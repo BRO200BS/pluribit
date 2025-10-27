@@ -205,10 +205,11 @@ impl Block {
         
         // Create aggregated transaction with all kernels
         let aggregated_tx = Transaction {
-            inputs: external_inputs,
-            outputs: unspent_outputs,
+            inputs: external_inputs,  // ✅ Use filtered inputs
+            outputs: unspent_outputs, // ✅ Use filtered outputs
             kernels: all_kernels,
-            timestamp: self.transactions.last().map_or(WasmU64::from(0), |tx| tx.timestamp),
+            timestamp: WasmU64::from(0),
+            aggregated_range_proof: vec![], // Aggregated tx has no proof
         };
 
         // 4. REBUILD TRANSACTION LIST
@@ -231,7 +232,6 @@ impl Block {
             .map(|(commitment, output)| {
                 let mut hasher = Sha256::new();
                 hasher.update(commitment);
-                hasher.update(&output.range_proof);
                 hasher.finalize().into()
             })
             .collect();
@@ -340,24 +340,28 @@ mod tests {
             inputs: vec![TransactionInput {
                 commitment: alice_external_commitment.clone(),
                 merkle_proof: None,
-                source_height: 0,
+                source_height: WasmU64::from(0),
             }],
             outputs: vec![
                 TransactionOutput {
                     commitment: bob_commitment.compress().to_bytes().to_vec(),
-                    range_proof: bob_range_proof.to_bytes(),
+
+                    // Remove: range_proof: bob_range_proof.to_bytes(),
                     ephemeral_key: None,
                     stealth_payload: None,
+                    view_tag: None, // Add this
                 },
                 TransactionOutput {
                     commitment: alice_change_commitment.compress().to_bytes().to_vec(),
-                    range_proof: change_range_proof.to_bytes(),
+
+                    // Remove: range_proof: change_range_proof.to_bytes(),
                     ephemeral_key: None,
                     stealth_payload: None,
-                },
-            ],
+                    view_tag: None, // Add this
+                }],
             kernels: vec![TransactionKernel::new(tx1_kernel_blinding, 1_000_000, 0, 1).unwrap()],
-            timestamp: 1,
+            timestamp: WasmU64::from(1), // Fix this
+            aggregated_range_proof: vec![], // Add this
         };
 
         // Transaction 2: Alice_change (29) -> Charlie (28) + fee (1)
@@ -371,18 +375,21 @@ mod tests {
             inputs: vec![TransactionInput {
                 commitment: alice_change_commitment.compress().to_bytes().to_vec(),
                 merkle_proof: None,
-                source_height: 0,
+                source_height: WasmU64::from(0),
             }],
             outputs: vec![
                 TransactionOutput {
                     commitment: charlie_commitment.compress().to_bytes().to_vec(),
-                    range_proof: charlie_range_proof.to_bytes(),
+
+                    // Remove: range_proof: charlie_range_proof.to_bytes(),
                     ephemeral_key: None,
                     stealth_payload: None,
+                    view_tag: None, // Add this
                 },
             ],
             kernels: vec![TransactionKernel::new(tx2_kernel_blinding, 1_000_000, 1,2).unwrap()],
-            timestamp: 2,
+            timestamp: WasmU64::from(2), // Fix this
+            aggregated_range_proof: vec![], // Add this
         };
 
         // Create coinbase transaction
@@ -392,7 +399,7 @@ mod tests {
 
         // Create a block with coinbase and the two transactions
         let mut block = Block::genesis();
-        block.height = 1;
+        block.height = WasmU64::from(1);
         block.transactions = vec![coinbase_tx, tx1, tx2];
         
         // Store original kernel count
@@ -453,20 +460,24 @@ mod tests {
             inputs: vec![TransactionInput {
                 commitment: external_commitment.clone(),
                 merkle_proof: None,
-                source_height: 0,
+                source_height: WasmU64::from(0),
             }],
-            outputs: vec![TransactionOutput {
-                commitment: bob_commitment.compress().to_bytes().to_vec(),
-                range_proof: bob_range_proof.to_bytes(),
-                ephemeral_key: None,
-                stealth_payload: None,
-            }],
+            outputs: vec![
+                TransactionOutput {
+                    commitment: bob_commitment.compress().to_bytes().to_vec(),
+                    // Remove: range_proof: bob_range_proof.to_bytes(),
+                    ephemeral_key: None,
+                    stealth_payload: None,
+                    view_tag: None, // Add this
+                },
+            ],
             kernels: vec![TransactionKernel::new(Scalar::from(888u64), 1_000_000, 0, 1).unwrap()],
-            timestamp: 1,
+            timestamp: WasmU64::from(1), // Fix this
+            aggregated_range_proof: vec![], // Add this
         };
 
         let mut block = Block::genesis();
-        block.height = 1;
+        block.height = WasmU64::from(1);
         block.transactions = vec![coinbase_tx.clone(), tx.clone()];
         
         block.apply_cut_through().unwrap();

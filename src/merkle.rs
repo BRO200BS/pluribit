@@ -141,7 +141,6 @@ pub fn generate_utxo_proof(
         .map(|(commitment, output)| {
             let mut hasher = Sha256::new();
             hasher.update(commitment);
-            hasher.update(&output.range_proof);
             hasher.finalize().into()
         })
         .collect();

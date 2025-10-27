@@ -430,7 +430,8 @@ mod tests {
         let iterations = 100; // Use a small number for a fast test
 
         // 1. Compute the VDF proof
-        let proof = vdf.compute_with_proof(input, iterations).unwrap();
+        let proof = vdf.compute_with_proof(input, WasmU64::from(iterations)).unwrap();
+
         assert!(!proof.y.is_empty());
         assert!(!proof.pi.is_empty());
 
@@ -446,7 +447,7 @@ mod tests {
         let input = b"hello world";
         let iterations = 100;
 
-        let mut proof = vdf.compute_with_proof(input, iterations).unwrap();
+        let mut proof = vdf.compute_with_proof(input, WasmU64::from(iterations)).unwrap();
         
         // Tamper with the proof
         proof.y[0] = proof.y[0].wrapping_add(1);
