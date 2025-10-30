@@ -518,8 +518,10 @@ pub fn atomic_swap_initiate(
 /// # Parameters
 /// - swap_json: Serialized AtomicSwap from initiate
 /// - bob_secret_bytes: 32-byte secret key
-/// - bob_btc_commitment: Bob's Bitcoin commitment (32 bytes)
-/// - bob_adaptor_sig: Bob's adaptor signature (64 bytes)
+/// - bob_btc_address: The P2WSH address of the HTLC
+/// - bob_btc_txid: The transaction ID that funded the HTLC
+/// - bob_btc_vout: The vout index of the HTLC
+/// - bob_adaptor_sig_bytes: Bob's adaptor signature (if needed by protocol)
 /// - bob_timeout_height: Bob's timeout block height
 ///
 /// # Returns
@@ -528,8 +530,10 @@ pub fn atomic_swap_initiate(
 pub fn atomic_swap_respond(
     swap_json: JsValue,
     bob_secret_bytes: Vec<u8>,
-    bob_btc_commitment: Vec<u8>,
-    bob_adaptor_sig: Vec<u8>,
+    bob_btc_address: String,      // FIX: Was bob_btc_commitment
+    bob_btc_txid: String,         // FIX: Added
+    bob_btc_vout: u32,            // FIX: Added
+    bob_adaptor_sig_bytes: Vec<u8>, // FIX: Renamed from bob_adaptor_sig
     bob_timeout_height: u64,
 ) -> Result<JsValue, JsValue> {
     if bob_secret_bytes.len() != 32 {
@@ -542,14 +546,15 @@ pub fn atomic_swap_respond(
     
     let mut swap: AtomicSwap = serde_wasm_bindgen::from_value(swap_json)?;
     
-swap.respond(
-    &bob_secret,
-    "".to_string(),              // bob_btc_address
-    "".to_string(),              // bob_btc_txid
-    0,                           // bob_btc_vout
-    bob_adaptor_sig,
-    bob_timeout_height,
-).map_err(|e| JsValue::from_str(&e.to_string()))?;
+    // FIX: Pass the correct arguments to the implementation [cite: 647]
+    swap.respond(
+        &bob_secret,
+        bob_btc_address,
+        bob_btc_txid,
+        bob_btc_vout,
+        bob_adaptor_sig_bytes,
+        bob_timeout_height,
+    ).map_err(|e| JsValue::from_str(&e.to_string()))?;
     
     serde_wasm_bindgen::to_value(&swap).map_err(|e| e.into())
 }

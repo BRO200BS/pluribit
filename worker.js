@@ -203,6 +203,11 @@ export const workerState = {
     // Peers start with a score of 100 and lose points for bad behavior.
     peerScores: new Map(), // peerId -> score
     processingCandidateHeight: null,
+    atomicSwaps: new Map(), // swap_id -> { swap, state, ... }
+    pendingSwapProposals: new Map(), // swap_id -> proposal
+    paymentChannels: new Map(), // channel_id -> channel_data
+    pendingChannelProposals: new Map(), // proposal_id -> proposal
+    musigSessions: new Map() // session_id -> { type, channelId, myNonce, theirNonce, ... }
 };
 
 // === HTTP API Server for Block Explorer ===
@@ -824,7 +829,39 @@ export async function main() {
                         parentPort.postMessage({ type: 'error', error: `Supply audit failed: ${msg}` });
                     }
                     break;
-                    
+
+                case 'channelOpen':
+                    await handleChannelOpen(params);
+                    break;
+                case 'channelList':
+                    await handleChannelList(params);
+                    break;
+                case 'channelAccept':
+                    await handleChannelAccept(params);
+                    break;
+                case 'channelFund':
+                    await handleChannelFund(params);
+                    break;
+                case 'channelPay':
+                    await handleChannelPay(params);
+                    break;
+                case 'channelClose':
+                    await handleChannelClose(params);
+                    break;       
+                
+                case 'swapInitiate':
+                    await handleSwapInitiate(params);
+                    break;
+                case 'swapList':
+                    await handleSwapList(params);
+                    break;
+                case 'swapRespond':
+                    await handleSwapRespond(params);
+                    break;
+                case 'swapRefund':
+                    await handleSwapRefund(params);
+                    break;
+                
                 case 'shutdown':
                   await gracefulShutdown(0); // the worker’s gracefulShutdown closes libp2p & miner, then process.exit(0)
                   break;
@@ -2080,6 +2117,55 @@ await p2p.subscribe(TOPICS.BLOCKS, async (block) => {
     }
 });
 
+
+// (Note: You will need to define new Protobuf messages for these payloads)
+    // (For now, we assume the payload is the raw JSON object for simplicity)
+
+    await p2p.subscribe(TOPICS.CHANNEL_PROPOSE, async (proposal, { from }) => {
+        await handleChannelPropose(proposal, from);
+    });
+
+    await p2p.subscribe(TOPICS.CHANNEL_ACCEPT, async (acceptance, { from }) => {
+        await handleChannelAccept(acceptance, from);
+    });
+
+    await p2p.subscribe(TOPICS.CHANNEL_FUND_NONCE, async (message, { from }) => {
+        await handleChannelFundNonce(message, from);
+    });
+
+    await p2p.subscribe(TOPICS.CHANNEL_FUND_SIG, async (message, { from }) => {
+        await handleChannelFundSig(message, from);
+    });
+
+    await p2p.subscribe(TOPICS.CHANNEL_PAY_PROPOSE, async (proposal, { from }) => {
+        await handleChannelPayPropose(proposal, from);
+    });
+
+    await p2p.subscribe(TOPICS.CHANNEL_PAY_ACCEPT, async (acceptance, { from }) => {
+        await handleChannelPayAccept(acceptance, from);
+    });
+
+    await p2p.subscribe(TOPICS.CHANNEL_CLOSE_NONCE, async (message, { from }) => {
+        await handleChannelCloseNonce(message, from);
+    });
+
+    await p2p.subscribe(TOPICS.CHANNEL_CLOSE_SIG, async (message, { from }) => {
+        await handleChannelCloseSig(message, from);
+    });
+
+
+await p2p.subscribe(TOPICS.SWAP_PROPOSE, async (proposal, { from }) => {
+        await handleSwapPropose(proposal, from);
+    });
+
+    await p2p.subscribe(TOPICS.SWAP_RESPOND, async (response, { from }) => {
+        await handleSwapRespondP2P(response, from);
+    });
+    
+    await p2p.subscribe(TOPICS.SWAP_ALICE_ADAPTOR_SIG, async (message, { from }) => {
+        await handleSwapAliceSig(message, from);
+    });
+
     // Handle incoming transactions
     // Expect raw transaction object, not wrapper.
     // RATIONALE: The P2P layer deserializes the Transaction protobuf and passes
@@ -2301,6 +2387,189 @@ await p2p.subscribe(TOPICS.SYNC, async (message, { from }) => {
         }
     });
 }
+
+
+// --- PAYMENT CHANNEL CLI HANDLERS ---
+
+async function handleChannelOpen({ walletId, counterpartyPubkey, myAmount, theirAmount }) {
+    log(`[CHANNEL] Received command to open channel with ${counterpartyPubkey}`);
+    // TODO:
+    // 1. Get wallet secret key: `const secret = await pluribit.wallet_session_get_spend_privkey(walletId);`
+    // 2. Call Wasm: `const result = await pluribit.payment_channel_open(secret, myAmount, ...);`
+    // 3. Deserialize `result`: `const { channel, proposal } = JSON.parse(result);`
+    // 4. Store channel: `workerState.paymentChannels.set(channel.channel_id, channel);`
+    // 5. Publish proposal: `await workerState.p2p.publish(TOPICS.CHANNEL_PROPOSE, proposal);`
+    // 6. Log success to user.
+    log("[CHANNEL] STUB: handleChannelOpen logic not yet implemented.", 'warn');
+}
+
+async function handleChannelList() {
+    log("[CHANNEL] STUB: handleChannelList logic not yet implemented.", 'warn');
+    // TODO: List channels from `workerState.paymentChannels`
+    // TODO: List proposals from `workerState.pendingChannelProposals`
+}
+
+
+
+async function handleChannelFund({ walletId, channelId }) {
+    log(`[CHANNEL] Received command to fund channel ${channelId}`);
+    // TODO: This is the start of the MuSig2 "dance"
+    // 1. Get channel from `workerState.paymentChannels`.
+    // 2. Generate nonces (requires a new Wasm function `generate_musig_nonces()`).
+    // 3. Store nonces in `workerState.musigSessions`.
+    // 4. Publish fund_nonce: `await workerState.p2p.publish(TOPICS.CHANNEL_FUND_NONCE, { channelId, publicNoncePoint, ... });`
+    log("[CHANNEL] STUB: handleChannelFund logic not yet implemented.", 'warn');
+}
+
+async function handleChannelPay({ walletId, channelId, amount }) {
+    log(`[CHANNEL] Received command to pay ${amount} in channel ${channelId}`);
+    // TODO: This is the start of the payment "dance"
+    // 1. Get channel and wallet keys.
+    // 2. Call Wasm `payment_channel_make_payment` (which is now `initiate_payment`).
+    // 3. This returns a `proposal`.
+    // 4. Publish proposal: `await workerState.p2p.publish(TOPICS.CHANNEL_PAY_PROPOSE, proposal);`
+    log("[CHANNEL] STUB: handleChannelPay logic not yet implemented.", 'warn');
+}
+
+async function handleChannelClose({ walletId, channelId }) {
+    log(`[CHANNEL] Received command to close channel ${channelId}`);
+    // TODO: This is the start of the *cooperative close* MuSig2 "dance"
+    // (Similar to handleChannelFund)
+    log("[CHANNEL] STUB: handleChannelClose logic not yet implemented.", 'warn');
+}
+
+// --- PAYMENT CHANNEL P2P HANDLERS ---
+
+async function handleChannelPropose(proposal, from) {
+    // TODO:
+    // 1. Generate a unique ID for the proposal.
+    // 2. Store it: `workerState.pendingChannelProposals.set(proposalId, proposal);`
+    // 3. Log to user: `log(Received channel proposal [id] from [from]. Type 'channel_accept [id]' to accept.)`
+    log(`[CHANNEL] STUB: Received channel proposal from ${from}. Logic not implemented.`, 'warn');
+}
+
+async function handleChannelAccept(acceptance, from) {
+    // TODO:
+    // 1. Get our channel: `const channel = workerState.paymentChannels.get(acceptance.channel_id);`
+    // 2. Call Wasm: `const updatedChannel = await pluribit.payment_channel_complete_open(channel, acceptance, ...);`
+    // 3. Store updated channel.
+    // 4. Log to user: `log(Channel ${acceptance.channel_id} is now ready to fund. Run 'channel_fund ...')`
+    log(`[CHANNEL] STUB: Received channel acceptance from ${from}. Logic not implemented.`, 'warn');
+}
+
+async function handleChannelFundNonce(message, from) {
+    // TODO: This is the complex part of the "dance"
+    // (See logic described in my previous response)
+    log(`[CHANNEL] STUB: Received FUND_NONCE from ${from}. Logic not implemented.`, 'warn');
+}
+
+async function handleChannelFundSig(message, from) {
+    // TODO: This is the complex part of the "dance"
+    log(`[CHANNEL] STUB: Received FUND_SIG from ${from}. Logic not implemented.`, 'warn');
+}
+
+async function handleChannelPayPropose(proposal, from) {
+    // TODO:
+    // 1. Get channel and wallet keys.
+    // 2. Call Wasm `payment_channel_accept_payment`.
+    // 3. This returns an `acceptance`.
+    // 4. Publish acceptance: `await workerState.p2p.publish(TOPICS.CHANNEL_PAY_ACCEPT, acceptance);`
+    log(`[CHANNEL] STUB: Received PAY_PROPOSE from ${from}. Logic not implemented.`, 'warn');
+}
+
+async function handleChannelPayAccept(acceptance, from) {
+    // TODO:
+    // 1. Get channel.
+    // 2. Call Wasm `payment_channel_complete_payment`.
+    // 3. Store updated channel.
+    // 4. Log to user: `log(Payment in channel ${acceptance.channel_id} complete.)`
+    log(`[CHANNEL] STUB: Received PAY_ACCEPT from ${from}. Logic not implemented.`, 'warn');
+}
+
+// --- ATOMIC SWAP CLI HANDLERS ---
+
+async function handleSwapInitiate({ walletId, counterpartyPubkey, plbAmount, btcAmount, timeoutBlocks }) {
+    log(`[SWAP] Initiating swap: ${plbAmount} PLB for ${btcAmount} sats...`);
+    // TODO:
+    // 1. Get wallet secret: `const secret = await pluribit.wallet_session_get_spend_privkey(walletId);`
+    // 2. Call Wasm: `const swapJson = await pluribit.atomic_swap_initiate(secret, plbAmount, hexToBytes(counterpartyPubkey), btcAmount, timeoutBlocks);` [cite: 859-860]
+    // 3. Deserialize: `const swap = JSON.parse(swapJson);`
+    // 4. Store: `workerState.atomicSwaps.set(swap.swap_id, { swap, role: 'alice' });`
+    // 5. Publish: `await workerState.p2p.publish(TOPICS.SWAP_PROPOSE, swap);`
+    // 6. Log to user.
+    log("[SWAP] STUB: handleSwapInitiate logic not yet implemented.", 'warn');
+}
+
+async function handleSwapList() {
+    log("[SWAP] STUB: handleSwapList logic not yet implemented.", 'warn');
+    // TODO: List swaps from `workerState.atomicSwaps`
+    // TODO: List proposals from `workerState.pendingSwapProposals`
+}
+
+async function handleSwapRespond({ walletId, swapId, btcAddress, btcTxid, btcVout }) {
+    log(`[SWAP] Responding to swap ${swapId} with HTLC ${btcTxid}:${btcVout}`);
+    // TODO:
+    // 1. Get proposal: `const proposal = workerState.pendingSwapProposals.get(swapId);`
+    // 2. Get wallet secret.
+    // 3. Get timeout (e.g., from proposal or config).
+    // 4. Call Wasm: `const swapJson = await pluribit.atomic_swap_respond(JSON.stringify(proposal), secret, btcAddress, btcTxid, btcVout, [], timeout);` 
+    // 5. Deserialize: `const swap = JSON.parse(swapJson);`
+    // 6. Store: `workerState.atomicSwaps.set(swap.swap_id, { swap, role: 'bob' });`
+    // 7. Publish: `await workerState.p2p.publish(TOPICS.SWAP_RESPOND, swap);`
+    log("[SWAP] STUB: handleSwapRespond logic not yet implemented.", 'warn');
+}
+
+async function handleSwapRefund({ walletId, swapId }) {
+    log(`[SWAP] Attempting to refund swap ${swapId}`);
+    // TODO:
+    // 1. Get swap: `const { swap, role } = workerState.atomicSwaps.get(swapId);`
+    // 2. Get wallet secret.
+    // 3. Get current height.
+    // 4. If role == 'alice':
+    //    `const refundTx = await pluribit.atomic_swap_refund_alice(JSON.stringify(swap), secret, ...);` [cite: 867-868]
+    // 5. If role == 'bob':
+    //    (This would need a Bitcoin library to broadcast a refund)
+    // 6. Broadcast Pluribit refund tx.
+    log("[SWAP] STUB: handleSwapRefund logic not yet implemented.", 'warn');
+}
+
+// --- ATOMIC SWAP P2P HANDLERS ---
+
+async function handleSwapPropose(proposal, from) {
+    // TODO:
+    // 1. Store proposal: `workerState.pendingSwapProposals.set(proposal.swap_id, proposal);`
+    // 2. Log to user: `log(Received swap proposal ${proposal.swap_id} from ${from}. Use 'swap_respond' to accept.)`
+    log(`[SWAP] STUB: Received swap proposal from ${from}. Logic not implemented.`, 'warn');
+}
+
+async function handleSwapRespondP2P(response, from) {
+    // This is Alice receiving Bob's response
+    log(`[SWAP] Received response for swap ${response.swap_id} from ${from}`);
+    // TODO:
+    // 1. Get our swap: `const { swap, role } = workerState.atomicSwaps.get(response.swap_id);`
+    // 2. Get wallet secret.
+    // 3. Call Wasm: `const updatedSwapJson = await pluribit.atomic_swap_alice_create_adaptor_sig(JSON.stringify(response), secret);` [cite: 862-863]
+    // 4. Deserialize: `const updatedSwap = JSON.parse(updatedSwapJson);`
+    // 5. Store updated swap.
+    // 6. Publish adaptor sig: `await workerState.p2p.publish(TOPICS.SWAP_ALICE_ADAPTOR_SIG, { swapId: updatedSwap.swap_id, adaptorSig: updatedSwap.alice_adaptor_sig });`
+    log("[SWAP] STUB: handleSwapRespondP2P logic not yet implemented.", 'warn');
+}
+
+async function handleSwapAliceSig(message, from) {
+    // This is Bob receiving Alice's adaptor signature
+    log(`[SWAP] Received Alice's adaptor sig for swap ${message.swapId}`);
+    // TODO:
+    // 1. Get our swap: `const { swap, role } = workerState.atomicSwaps.get(message.swapId);`
+    // 2. Store `message.adaptorSig` in our swap object.
+    // 3. Now Bob can claim. This involves:
+    //    a. Get adaptor secret (this is complex, from adaptor sig + our secret)
+    //    b. Call Wasm `atomic_swap_bob_claim` [cite: 864-865]
+    //    c. Broadcast the resulting Pluribit transaction.
+    // 4. Log to user: `log(Ready to claim swap ${message.swapId}. Run 'swap_claim ...')`
+    log("[SWAP] STUB: handleSwapAliceSig logic not yet implemented.", 'warn');
+}
+
+
 
 // Helper function to update wallets after reorg
 async function updateWalletsAfterReorg() {

@@ -17,7 +17,7 @@
 ```
 # pluriƀit
 
-An experimental, privacy-focused cryptocurrency featuring a novel consensus mechanism. Pluribit is built as a hybrid system with a Rust core compiled to WASM for cryptographic operations and a Node.js layer for networking and orchestration.
+An experimental, privacy-focused cryptocurrency featuring a new consensus mechanism. Pluribit is built as a hybrid system with a Rust core compiled to WASM to handle cryptography and consensus rules, and a Node.js layer for networking and orchestration.
 
 ## Core Features
 
@@ -31,9 +31,9 @@ An experimental, privacy-focused cryptocurrency featuring a novel consensus mech
 
 ## Architecture
 
-Pluriƀit uses a hybrid architecture to balance performance, security, and development velocity.
+Pluriƀit uses a hybrid architecture to combine performance, security, and development speed.
 
-  * **Rust Core (`pluribit_core`)**: The cryptographic engine of the project, compiled to WebAssembly. It handles all critical consensus logic, state validation, transaction construction, and MimbleWimble primitives.
+  * **Rust Core (`pluribit_core`)**: Handles the project's core cryptography and consensus rules, compiled to WebAssembly. It manages all critical consensus logic, state validation, transaction construction, and MimbleWimble primitives.
   * **Node.js Orchestration Layer (`pluribit-node`)**: The main process that runs the node. It manages the libp2p network stack, database interactions (LevelDB), mining coordination via worker threads, and a JSON RPC server for the block explorer.
   * **Web Block Explorer**: A simple web interface for viewing blockchain statistics, blocks, and mempool status, served directly by the Node.js process.
 
@@ -41,18 +41,18 @@ Pluriƀit uses a hybrid architecture to balance performance, security, and devel
 
 ## Consensus Mechanism
 
-pluriƀit's consensus is a multi-stage lottery designed to favor decentralization by neutralizing the raw hardware advantages common in pure Proof-of-Work systems.
+pluriƀit's consensus is a multi-stage process designed for decentralization by reducing the hardware advantages common in pure Proof-of-Work systems.
 
 #### 1\. Proof-of-Work (Spam Resistance)
 
   * A trivial PoW puzzle must be solved to begin the block proposal process.
-  * This acts as a rate-limiting mechanism to prevent spam, not as the primary security mechanism. It grants a "ticket" to participate in the next stage.
+  * This acts as a rate-limiting mechanism to prevent spam, not as the primary security mechanism. It allows participation in the next stage.
 
 #### 2\. Verifiable Delay Function (VDF)
 
   * The PoW solution is used as input to a VDF.
   * The VDF requires a fixed duration of sequential computation that cannot be significantly parallelized or sped up with specialized hardware.
-  * This enforces a **time cost**, equalizing the playing field between miners with different levels of computational power.
+  * This enforces a **time cost**, which makes computational power differences between miners less significant.
 
 #### 3\. Verifiable Random Function (VRF)
 
@@ -68,7 +68,12 @@ Privacy is mandatory and enforced at the protocol level.
 
   * **MimbleWimble**: Transactions consist only of inputs, outputs, and kernels. There are no on-chain addresses or transaction amounts. The protocol validates that no coins are created or destroyed without revealing the values being transacted.
   * **Stealth Addresses**: To enable non-interactive transactions, a sender uses the recipient's public scan key to generate a one-time ephemeral public key (`R`) where the funds are sent. A shared secret, known only to the sender and receiver, is used to encrypt the transaction's value and blinding factor. Only the recipient can use their private scan key to discover and spend these funds.
-  * **Block-level Cut-through**: To reduce block size and enhance privacy, transactions within the same block are aggregated. Inputs and outputs that are both created and spent within the block are "cut through" and removed from the final block data.
+  * **Block-level Cut-through**: This implementation differs from standard Mimblewimble. Instead of aggregating transactions in the mempool, cut-through is performed at the block level.
+    1.  The coinbase transaction is isolated.
+    2.  All other transactions selected for the block are scanned. "Internal spends" (outputs created and spent within the same block) are identified.
+    3.  If internal spends are found, all non-coinbase transactions are replaced by a single **aggregated transaction**.
+    4.  This aggregated transaction contains only the **external inputs** and **unspent outputs**.
+    5.  All kernels from all original transactions are concatenated into this single aggregated transaction to maintain cryptographic balance.
   * **Dandelion Propagation**: Transactions are not immediately broadcast to the entire network. They are first passed secretly along a random path of peers (the "stem" phase) before being broadcast widely (the "fluff" phase), making it difficult to trace a transaction back to its source IP.
 
 -----
@@ -125,4 +130,4 @@ The node will initialize the P2P network and begin syncing with peers. A command
 
 ## Project Status
 
-**Disclaimer:** This is an experimental project built to explore novel concepts in cryptocurrency design. It is **not intended for production use** and should not be used to store significant value. The code is provided as-is for educational and research purposes.
+**Disclaimer:** This is an experimental project built to explore new concepts in cryptocurrency design. It is **not intended for production use** and should not be used to store significant value. The code is provided as-is for educational and research purposes.

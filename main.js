@@ -288,6 +288,145 @@ async function handleCommand(command, args) {
             worker.postMessage({ action: 'getPeers' });
             break;
 
+        case 'channel_open':
+            // Usage: channel_open <counterparty_pubkey> <my_amount> <their_amount>
+            if (args.length < 3) {
+                console.log('Usage: channel_open <counterparty_pubkey> <my_amount> <their_amount>');
+            } else if (!loadedWalletId) {
+                console.log(chalk.red('Error: Load a wallet first.'));
+            } else {
+                worker.postMessage({
+                    action: 'channelOpen',
+                    walletId: loadedWalletId,
+                    counterpartyPubkey: args[0],
+                    myAmount: BigInt(args[1]),
+                    theirAmount: BigInt(args[2])
+                });
+            }
+            break;
+
+        case 'channel_list':
+            worker.postMessage({ action: 'channelList' });
+            break;
+
+        case 'channel_accept':
+            // Usage: channel_accept <proposal_id>
+            if (!args[0]) {
+                console.log('Usage: channel_accept <proposal_id>');
+            } else if (!loadedWalletId) {
+                console.log(chalk.red('Error: Load a wallet first.'));
+            } else {
+                worker.postMessage({
+                    action: 'channelAccept',
+                    walletId: loadedWalletId,
+                    proposalId: args[0]
+                });
+            }
+            break;
+
+        case 'channel_fund':
+            // Usage: channel_fund <channel_id>
+            if (!args[0]) {
+                console.log('Usage: channel_fund <channel_id>');
+            } else if (!loadedWalletId) {
+                console.log(chalk.red('Error: Load a wallet first.'));
+            } else {
+                // TODO: Need to pass funding inputs
+                worker.postMessage({
+                    action: 'channelFund',
+                    walletId: loadedWalletId,
+                    channelId: args[0]
+                });
+            }
+            break;
+
+        case 'channel_pay':
+            // Usage: channel_pay <channel_id> <amount>
+            if (args.length < 2) {
+                console.log('Usage: channel_pay <channel_id> <amount>');
+            } else if (!loadedWalletId) {
+                console.log(chalk.red('Error: Load a wallet first.'));
+            } else {
+                worker.postMessage({
+                    action: 'channelPay',
+                    walletId: loadedWalletId,
+                    channelId: args[0],
+                    amount: BigInt(args[1])
+                });
+            }
+            break;
+
+        case 'channel_close':
+            // Usage: channel_close <channel_id>
+            if (!args[0]) {
+                console.log('Usage: channel_close <channel_id>');
+            } else if (!loadedWalletId) {
+                console.log(chalk.red('Error: Load a wallet first.'));
+            } else {
+                worker.postMessage({
+                    action: 'channelClose',
+                    walletId: loadedWalletId,
+                    channelId: args[0]
+                });
+            }
+            break;
+
+        case 'swap_initiate':
+            // Usage: swap_initiate <counterparty_pubkey> <plb_amount> <btc_amount> <timeout_blocks>
+            if (args.length < 4) {
+                console.log('Usage: swap_initiate <counterparty_pubkey> <plb_amount> <btc_sats_amount> <timeout_blocks>');
+            } else if (!loadedWalletId) {
+                console.log(chalk.red('Error: Load a wallet first.'));
+            } else {
+                worker.postMessage({
+                    action: 'swapInitiate',
+                    walletId: loadedWalletId,
+                    counterpartyPubkey: args[0],
+                    plbAmount: BigInt(args[1]),
+                    btcAmount: BigInt(args[2]),
+                    timeoutBlocks: BigInt(args[3])
+                });
+            }
+            break;
+
+        case 'swap_list':
+            worker.postMessage({ action: 'swapList' });
+            break;
+
+        case 'swap_respond':
+            // Usage: swap_respond <swap_id> <btc_htlc_address> <btc_txid> <btc_vout>
+            if (args.length < 4) {
+                console.log('Usage: swap_respond <swap_id> <btc_htlc_address> <btc_txid> <btc_vout>');
+            } else if (!loadedWalletId) {
+                console.log(chalk.red('Error: Load a wallet first.'));
+            } else {
+                worker.postMessage({
+                    action: 'swapRespond',
+                    walletId: loadedWalletId,
+                    swapId: args[0],
+                    btcAddress: args[1],
+                    btcTxid: args[2],
+                    btcVout: parseInt(args[3], 10)
+                });
+            }
+            break;
+
+        case 'swap_refund':
+            // Usage: swap_refund <swap_id>
+            if (!args[0]) {
+                console.log('Usage: swap_refund <swap_id>');
+            } else if (!loadedWalletId) {
+                console.log(chalk.red('Error: Load a wallet first.'));
+            } else {
+                worker.postMessage({
+                    action: 'swapRefund',
+                    walletId: loadedWalletId,
+                    swapId: args[0]
+                });
+            }
+            break;
+
+
         case 'exit':
             await gracefulShutdown(0);
             return; // don't prompt again

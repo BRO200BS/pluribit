@@ -85,7 +85,18 @@ export const TOPICS = {
   GET_HASHES_REQUEST: `/pluribit/${NET}/get-hashes-request/1.0.0`,
   HASHES_RESPONSE: `/pluribit/${NET}/hashes-response/1.0.0`,
   BLOCK_ANNOUNCEMENTS: `/pluribit/${NET}/block-announcements/1.0.0`,
-  DANDELION_STEM: `/pluribit/${NET}/dandelion-stem/1.0.0`
+  DANDELION_STEM: `/pluribit/${NET}/dandelion-stem/1.0.0`,
+  CHANNEL_PROPOSE: `/pluribit/${NET}/channel-propose/1.0.0`,
+  CHANNEL_ACCEPT: `/pluribit/${NET}/channel-accept/1.0.0`,
+  CHANNEL_FUND_NONCE: `/pluribit/${NET}/channel-fund-nonce/1.0.0`,
+  CHANNEL_FUND_SIG: `/pluribit/${NET}/channel-fund-sig/1.0.0`,
+  CHANNEL_PAY_PROPOSE: `/pluribit/${NET}/channel-pay-propose/1.0.0`,
+  CHANNEL_PAY_ACCEPT: `/pluribit/${NET}/channel-pay-accept/1.0.0`,
+  CHANNEL_CLOSE_NONCE: `/pluribit/${NET}/channel-close-nonce/1.0.0`,
+  CHANNEL_CLOSE_SIG: `/pluribit/${NET}/channel-close-sig/1.0.0`,
+  SWAP_PROPOSE: `/pluribit/${NET}/swap-propose/1.0.0`,
+  SWAP_RESPOND: `/pluribit/${NET}/swap-respond/1.0.0`,
+  SWAP_ALICE_ADAPTOR_SIG: `/pluribit/${NET}/swap-alice-sig/1.0.0`
 };
 
 export class PluribitP2P {
