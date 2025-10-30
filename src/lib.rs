@@ -8,7 +8,8 @@ use serde::{Serialize, Deserialize};
 use serde_json;
 use sha2::{Sha256, Digest};
 use curve25519_dalek::{ristretto::{CompressedRistretto, RistrettoPoint}, scalar::Scalar, traits::Identity};
-
+use crate::atomic_swap::{AtomicSwap, SwapState};
+use crate::payment_channel::{PaymentChannel, ChannelState, Party};
 use crate::blockchain::Blockchain;
 use crate::vrf::VrfProof;
 use crate::constants::DIFFICULTY_ADJUSTMENT_INTERVAL;
@@ -286,9 +287,9 @@ async fn get_total_work_from_db() -> Result<u64, JsValue> {
 
     // Use serde_wasm_bindgen to deserialize flexibly from String, Number, or BigInt
     let wasm_u64: WasmU64 = serde_wasm_bindgen::from_value(result_js)
-        .map_err(|e| JsValue::from_str(&format!("Failed to deserialize total_work: {}", e)))?; // Add error context [cite: 2072]
+        .map_err(|e| JsValue::from_str(&format!("Failed to deserialize total_work: {}", e)))?; // Add error context
 
-    Ok(*wasm_u64) // Dereference WasmU64 to get the inner u64 [cite: 2072]
+    Ok(*wasm_u64) // Dereference WasmU64 to get the inner u64 
 }
 
 async fn clear_all_utxos_from_db() -> Result<(), JsValue> {
@@ -462,6 +463,654 @@ async fn get_tip_height_from_db() -> Result<u64, JsValue> {
     let wasm_u64: WasmU64 = serde_wasm_bindgen::from_value(result_js)?;
     Ok(*wasm_u64) 
 }
+
+// Add these wasm_bindgen wrapper functions to your src/lib.rs file
+// These expose atomic swaps and payment channels to the JavaScript client
+
+
+
+
+
+// =============================================================================
+// ATOMIC SWAP BINDINGS
+// =============================================================================
+
+/// Initiate an atomic swap (Alice's side)
+/// 
+/// # Parameters
+/// - alice_secret_bytes: 32-byte secret key
+/// - alice_amount: Amount Alice is trading (in PLB)
+/// - bob_pubkey_bytes: Bob's public key (32 bytes)
+/// - bob_amount: Amount Bob is trading (e.g., in satoshis)
+/// - timeout_blocks: Number of blocks before timeout
+///
+/// # Returns
+/// Serialized AtomicSwap object
+#[wasm_bindgen]
+pub fn atomic_swap_initiate(
+    alice_secret_bytes: Vec<u8>,
+    alice_amount: u64,
+    bob_pubkey_bytes: Vec<u8>,
+    bob_amount: u64,
+    timeout_blocks: u64,
+) -> Result<JsValue, JsValue> {
+    if alice_secret_bytes.len() != 32 {
+        return Err(JsValue::from_str("Alice secret must be 32 bytes"));
+    }
+    
+    let mut alice_secret_arr = [0u8; 32];
+    alice_secret_arr.copy_from_slice(&alice_secret_bytes);
+    let alice_secret = Scalar::from_bytes_mod_order(alice_secret_arr);
+    
+    let swap = AtomicSwap::initiate(
+        &alice_secret,
+        alice_amount,
+        bob_pubkey_bytes,
+        bob_amount,
+        timeout_blocks,
+    ).map_err(|e| JsValue::from_str(&e.to_string()))?;
+    
+    serde_wasm_bindgen::to_value(&swap).map_err(|e| e.into())
+}
+
+/// Bob responds to an atomic swap offer
+///
+/// # Parameters
+/// - swap_json: Serialized AtomicSwap from initiate
+/// - bob_secret_bytes: 32-byte secret key
+/// - bob_btc_commitment: Bob's Bitcoin commitment (32 bytes)
+/// - bob_adaptor_sig: Bob's adaptor signature (64 bytes)
+/// - bob_timeout_height: Bob's timeout block height
+///
+/// # Returns
+/// Updated AtomicSwap object
+#[wasm_bindgen]
+pub fn atomic_swap_respond(
+    swap_json: JsValue,
+    bob_secret_bytes: Vec<u8>,
+    bob_btc_commitment: Vec<u8>,
+    bob_adaptor_sig: Vec<u8>,
+    bob_timeout_height: u64,
+) -> Result<JsValue, JsValue> {
+    if bob_secret_bytes.len() != 32 {
+        return Err(JsValue::from_str("Bob secret must be 32 bytes"));
+    }
+    
+    let mut bob_secret_arr = [0u8; 32];
+    bob_secret_arr.copy_from_slice(&bob_secret_bytes);
+    let bob_secret = Scalar::from_bytes_mod_order(bob_secret_arr);
+    
+    let mut swap: AtomicSwap = serde_wasm_bindgen::from_value(swap_json)?;
+    
+swap.respond(
+    &bob_secret,
+    "".to_string(),              // bob_btc_address
+    "".to_string(),              // bob_btc_txid
+    0,                           // bob_btc_vout
+    bob_adaptor_sig,
+    bob_timeout_height,
+).map_err(|e| JsValue::from_str(&e.to_string()))?;
+    
+    serde_wasm_bindgen::to_value(&swap).map_err(|e| e.into())
+}
+
+/// Alice creates an adaptor signature for the swap
+///
+/// # Parameters
+/// - swap_json: Serialized AtomicSwap
+/// - alice_secret_bytes: 32-byte secret key
+///
+/// # Returns
+/// Updated AtomicSwap with adaptor signature
+#[wasm_bindgen]
+pub fn atomic_swap_alice_create_adaptor_sig(
+    swap_json: JsValue,
+    alice_secret_bytes: Vec<u8>,
+) -> Result<JsValue, JsValue> {
+    if alice_secret_bytes.len() != 32 {
+        return Err(JsValue::from_str("Alice secret must be 32 bytes"));
+    }
+    
+    let mut alice_secret_arr = [0u8; 32];
+    alice_secret_arr.copy_from_slice(&alice_secret_bytes);
+    let alice_secret = Scalar::from_bytes_mod_order(alice_secret_arr);
+    
+    let mut swap: AtomicSwap = serde_wasm_bindgen::from_value(swap_json)?;
+    
+    swap.alice_create_adaptor_signature(&alice_secret)
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+    
+    serde_wasm_bindgen::to_value(&swap).map_err(|e| e.into())
+}
+
+/// Bob claims the swap (creates the claim transaction)
+///
+/// # Parameters
+/// - swap_json: Serialized AtomicSwap
+/// - bob_secret_bytes: Bob's secret key (32 bytes)
+/// - adaptor_secret_bytes: The adaptor secret (32 bytes)
+/// - bob_receive_address_bytes: Bob's receive address (32 bytes compressed Ristretto point)
+///
+/// # Returns
+/// The claim transaction that Bob can broadcast
+#[wasm_bindgen]
+pub fn atomic_swap_bob_claim(
+    swap_json: JsValue,
+    bob_secret_bytes: Vec<u8>,
+    adaptor_secret_bytes: Vec<u8>,
+    bob_receive_address_bytes: Vec<u8>,
+) -> Result<JsValue, JsValue> {
+    if bob_secret_bytes.len() != 32 {
+        return Err(JsValue::from_str("Bob secret must be 32 bytes"));
+    }
+    if adaptor_secret_bytes.len() != 32 {
+        return Err(JsValue::from_str("Adaptor secret must be 32 bytes"));
+    }
+    if bob_receive_address_bytes.len() != 32 {
+        return Err(JsValue::from_str("Receive address must be 32 bytes"));
+    }
+    
+    let mut bob_secret_arr = [0u8; 32];
+    bob_secret_arr.copy_from_slice(&bob_secret_bytes);
+    let bob_secret = Scalar::from_bytes_mod_order(bob_secret_arr);
+    
+    let mut adaptor_secret_arr = [0u8; 32];
+    adaptor_secret_arr.copy_from_slice(&adaptor_secret_bytes);
+    let adaptor_secret = Scalar::from_bytes_mod_order(adaptor_secret_arr);
+    
+    let bob_receive = CompressedRistretto::from_slice(&bob_receive_address_bytes)
+        .map_err(|_| JsValue::from_str("Invalid receive address"))?
+        .decompress()
+        .ok_or_else(|| JsValue::from_str("Failed to decompress receive address"))?;
+    
+    let swap: AtomicSwap = serde_wasm_bindgen::from_value(swap_json)?;
+    
+    let claim_tx = swap.bob_claim(&bob_secret, &adaptor_secret, &bob_receive)
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+    
+    serde_wasm_bindgen::to_value(&claim_tx).map_err(|e| e.into())
+}
+
+/// Alice extracts the secret from Bob's completed signature
+///
+/// # Parameters
+/// - swap_json: Serialized AtomicSwap
+/// - bob_completed_signature_bytes: Bob's completed signature (32 bytes scalar)
+///
+/// # Returns
+/// Updated AtomicSwap with extracted secret
+#[wasm_bindgen]
+pub fn atomic_swap_alice_extract_secret(
+    swap_json: JsValue,
+    bob_completed_signature_bytes: Vec<u8>,
+) -> Result<JsValue, JsValue> {
+    if bob_completed_signature_bytes.len() != 32 {
+        return Err(JsValue::from_str("Signature must be 32 bytes"));
+    }
+    
+    let mut sig_arr = [0u8; 32];
+    sig_arr.copy_from_slice(&bob_completed_signature_bytes);
+    let bob_sig = Scalar::from_bytes_mod_order(sig_arr);
+    
+    let mut swap: AtomicSwap = serde_wasm_bindgen::from_value(swap_json)?;
+    
+    let _secret = swap.alice_extract_and_claim(&bob_sig)
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+    
+    serde_wasm_bindgen::to_value(&swap).map_err(|e| e.into())
+}
+
+/// Alice creates a refund transaction (if timeout reached)
+///
+/// # Parameters
+/// - swap_json: Serialized AtomicSwap
+/// - alice_secret_bytes: Alice's secret key (32 bytes)
+/// - alice_receive_address_bytes: Alice's refund address (32 bytes compressed point)
+/// - current_height: Current blockchain height
+///
+/// # Returns
+/// Refund transaction
+#[wasm_bindgen]
+pub fn atomic_swap_refund_alice(
+    swap_json: JsValue,
+    alice_secret_bytes: Vec<u8>,
+    alice_receive_address_bytes: Vec<u8>,
+    current_height: u64,
+) -> Result<JsValue, JsValue> {
+    if alice_secret_bytes.len() != 32 {
+        return Err(JsValue::from_str("Alice secret must be 32 bytes"));
+    }
+    if alice_receive_address_bytes.len() != 32 {
+        return Err(JsValue::from_str("Receive address must be 32 bytes"));
+    }
+    
+    let mut alice_secret_arr = [0u8; 32];
+    alice_secret_arr.copy_from_slice(&alice_secret_bytes);
+    let alice_secret = Scalar::from_bytes_mod_order(alice_secret_arr);
+    
+    let alice_receive = CompressedRistretto::from_slice(&alice_receive_address_bytes)
+        .map_err(|_| JsValue::from_str("Invalid receive address"))?
+        .decompress()
+        .ok_or_else(|| JsValue::from_str("Failed to decompress receive address"))?;
+    
+    let swap: AtomicSwap = serde_wasm_bindgen::from_value(swap_json)?;
+    
+    let refund_tx = swap.refund_alice(&alice_secret, &alice_receive, current_height)
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+    
+    serde_wasm_bindgen::to_value(&refund_tx).map_err(|e| e.into())
+}
+
+/// Get the current state of an atomic swap
+#[wasm_bindgen]
+pub fn atomic_swap_get_state(swap_json: JsValue) -> Result<String, JsValue> {
+    let swap: AtomicSwap = serde_wasm_bindgen::from_value(swap_json)?;
+    let state_str = match swap.state {
+        SwapState::Negotiating => "Negotiating",
+        SwapState::Committed => "Committed",
+        SwapState::Claimed => "Claimed",
+        SwapState::Refunded => "Refunded",
+        SwapState::Completed => "Completed",
+    };
+    Ok(state_str.to_string())
+}
+
+// =============================================================================
+// PAYMENT CHANNEL BINDINGS
+// =============================================================================
+
+/// Open a new payment channel (Party A initiates)
+///
+/// # Parameters
+/// - party_a_secret_bytes: Party A's secret key (32 bytes)
+/// - party_a_amount: Amount Party A contributes
+/// - party_b_pubkey_bytes: Party B's public key (32 bytes compressed point)
+/// - party_b_amount: Amount Party B contributes
+/// - dispute_period_blocks: Dispute resolution period in blocks
+///
+/// # Returns
+/// Serialized PaymentChannel object
+#[wasm_bindgen]
+pub fn payment_channel_open(
+    party_a_secret_bytes: Vec<u8>,
+    party_a_amount: u64,
+    party_b_pubkey_bytes: Vec<u8>,
+    party_b_amount: u64,
+    dispute_period_blocks: u64,
+) -> Result<JsValue, JsValue> {
+    if party_a_secret_bytes.len() != 32 {
+        return Err(JsValue::from_str("Party A secret must be 32 bytes"));
+    }
+    if party_b_pubkey_bytes.len() != 32 {
+        return Err(JsValue::from_str("Party B pubkey must be 32 bytes"));
+    }
+    
+    let mut party_a_secret_arr = [0u8; 32];
+    party_a_secret_arr.copy_from_slice(&party_a_secret_bytes);
+    let party_a_secret = Scalar::from_bytes_mod_order(party_a_secret_arr);
+    
+    let party_b_pubkey = CompressedRistretto::from_slice(&party_b_pubkey_bytes)
+        .map_err(|_| JsValue::from_str("Invalid Party B pubkey"))?
+        .decompress()
+        .ok_or_else(|| JsValue::from_str("Failed to decompress Party B pubkey"))?;
+    
+    // FIX (Error 1): The method is `propose`, not `open` 
+    // This also returns a proposal which must be sent to Party B.
+    let (channel, proposal) = PaymentChannel::propose(
+        &party_a_secret,
+        party_a_amount,
+        &party_b_pubkey,
+        party_b_amount,
+        dispute_period_blocks,
+    ).map_err(|e| JsValue::from_str(&e.to_string()))?;
+
+    // We must return both the channel state (for us) and the proposal (for them)
+    #[derive(Serialize)]
+    struct OpenResult {
+        channel: PaymentChannel,
+        proposal: crate::payment_channel::ChannelProposal,
+    }
+
+    let result = OpenResult { channel, proposal };
+    serde_wasm_bindgen::to_value(&result).map_err(|e| e.into())
+}
+
+/// Fund a payment channel (create on-chain funding transaction)
+///
+/// NOTE: This binding is now from ONE party's perspective. It requires
+/// arguments for the MuSig2 protocol.
+///
+/// # Parameters
+/// - channel_json: Serialized PaymentChannel
+/// - my_secret_bytes: This party's secret key (32 bytes)
+/// - my_party_str: "A" or "B"
+/// - my_nonce_bytes: This party's 32-byte secret nonce (r_i)
+/// - my_nonce_point_bytes: This party's 32-byte public nonce (R_i = r_i*G)
+/// - counterparty_nonce_point_bytes: The counterparty's 32-byte public nonce (R_j)
+/// - counterparty_pubkey_bytes: The counterparty's 32-byte public key (P_j)
+/// - my_funding_inputs_json: This party's inputs (serialized Vec<TransactionInput>)
+/// - current_height: Current blockchain height
+///
+/// # Returns
+/// Updated channel and MuSigKernelMetadata (which includes the partial signature)
+#[wasm_bindgen]
+pub fn payment_channel_fund(
+    channel_json: JsValue,
+    my_secret_bytes: Vec<u8>,
+    my_party_str: String,
+    my_nonce_bytes: Vec<u8>,
+    my_nonce_point_bytes: Vec<u8>,
+    counterparty_nonce_point_bytes: Vec<u8>,
+    counterparty_pubkey_bytes: Vec<u8>,
+    my_funding_inputs_json: JsValue,
+    current_height: u64,
+) -> Result<JsValue, JsValue> {
+    // FIX (Error 2): This function was completely refactored to support MuSig2.
+
+    // --- 1. Deserialize all arguments ---
+    let mut channel: PaymentChannel = serde_wasm_bindgen::from_value(channel_json)?;
+    let my_party = match my_party_str.as_str() {
+        "A" => Party::A,
+        "B" => Party::B,
+        _ => return Err(JsValue::from_str("my_party must be 'A' or 'B'")),
+    };
+
+    let my_secret = Scalar::from_bytes_mod_order(my_secret_bytes.try_into().map_err(|_| JsValue::from_str("my_secret must be 32 bytes"))?);
+    let my_nonce = Scalar::from_bytes_mod_order(my_nonce_bytes.try_into().map_err(|_| JsValue::from_str("my_nonce must be 32 bytes"))?);
+    
+    let my_nonce_point = CompressedRistretto::from_slice(&my_nonce_point_bytes)
+        .map_err(|_| JsValue::from_str("Invalid my_nonce_point"))?
+        .decompress().ok_or_else(|| JsValue::from_str("Failed to decompress my_nonce_point"))?;
+
+    let counterparty_nonce_point = CompressedRistretto::from_slice(&counterparty_nonce_point_bytes)
+        .map_err(|_| JsValue::from_str("Invalid counterparty_nonce_point"))?
+        .decompress().ok_or_else(|| JsValue::from_str("Failed to decompress counterparty_nonce_point"))?;
+
+    let counterparty_pubkey = CompressedRistretto::from_slice(&counterparty_pubkey_bytes)
+        .map_err(|_| JsValue::from_str("Invalid counterparty_pubkey"))?
+        .decompress().ok_or_else(|| JsValue::from_str("Failed to decompress counterparty_pubkey"))?;
+    
+    let my_funding_inputs = serde_wasm_bindgen::from_value(my_funding_inputs_json)?;
+
+    // --- 2. Call the correct implementation method ---
+    let (funding_tx, metadata) = channel.create_funding_transaction(
+        &my_secret,
+        my_party,
+        &my_nonce,
+        &my_nonce_point,
+        &counterparty_nonce_point,
+        &counterparty_pubkey,
+        my_funding_inputs,
+        current_height,
+    ).map_err(|e| JsValue::from_str(&e.to_string()))?;
+    
+    #[derive(serde::Serialize)]
+    struct FundResult {
+        channel: PaymentChannel,
+        funding_tx: crate::transaction::Transaction,
+        metadata: crate::payment_channel::MuSigKernelMetadata,
+    }
+    
+    let result = FundResult {
+        channel,
+        funding_tx,
+        metadata,
+    };
+    
+    serde_wasm_bindgen::to_value(&result).map_err(|e| e.into())
+}
+
+/// Make a payment within the channel (off-chain!)
+///
+/// # Parameters
+/// - channel_json: Serialized PaymentChannel
+/// - sender_str: "A" or "B"
+/// - sender_secret_bytes: Sender's 32-byte secret key
+/// - amount: Amount to send
+/// - current_height: Current blockchain height
+///
+/// # Returns
+/// PaymentProposal object to send to the counterparty
+#[wasm_bindgen]
+pub fn payment_channel_make_payment(
+    channel_json: JsValue,
+    sender_str: String,
+    sender_secret_bytes: Vec<u8>,
+    amount: u64,
+    current_height: u64,
+) -> Result<JsValue, JsValue> {
+    // FIX (Error 3): Renamed to `initiate_payment` and added missing args.
+    let mut channel: PaymentChannel = serde_wasm_bindgen::from_value(channel_json)?;
+    
+    let party = match sender_str.as_str() {
+        "A" => Party::A,
+        "B" => Party::B,
+        _ => return Err(JsValue::from_str("Sender must be 'A' or 'B'")),
+    };
+
+    let sender_secret = Scalar::from_bytes_mod_order(sender_secret_bytes.try_into().map_err(|_| JsValue::from_str("sender_secret must be 32 bytes"))?);
+
+    let proposal = channel.initiate_payment(party, &sender_secret, amount, current_height)
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+    
+    // Return the proposal, not the channel
+    serde_wasm_bindgen::to_value(&proposal).map_err(|e| e.into())
+}
+
+/// Close a channel cooperatively
+///
+/// # Parameters
+/// - (See `payment_channel_fund` for MuSig2 parameter descriptions)
+///
+/// # Returns
+/// (Settlement transaction with placeholder kernel, MuSig metadata)
+#[wasm_bindgen]
+pub fn payment_channel_close_cooperative(
+    channel_json: JsValue,
+    my_secret_bytes: Vec<u8>,
+    my_party_str: String,
+    my_nonce_bytes: Vec<u8>,
+    my_nonce_point_bytes: Vec<u8>,
+    counterparty_nonce_point_bytes: Vec<u8>,
+    counterparty_pubkey_bytes: Vec<u8>,
+    current_height: u64,
+) -> Result<JsValue, JsValue> {
+    // FIX (Error 4): This function was completely refactored to support MuSig2.
+    
+    // --- 1. Deserialize all arguments ---
+    let mut channel: PaymentChannel = serde_wasm_bindgen::from_value(channel_json)?;
+    let my_party = match my_party_str.as_str() {
+        "A" => Party::A,
+        "B" => Party::B,
+        _ => return Err(JsValue::from_str("my_party must be 'A' or 'B'")),
+    };
+
+    let my_secret = Scalar::from_bytes_mod_order(my_secret_bytes.try_into().map_err(|_| JsValue::from_str("my_secret must be 32 bytes"))?);
+    let my_nonce = Scalar::from_bytes_mod_order(my_nonce_bytes.try_into().map_err(|_| JsValue::from_str("my_nonce must be 32 bytes"))?);
+    
+    let my_nonce_point = CompressedRistretto::from_slice(&my_nonce_point_bytes)
+        .map_err(|_| JsValue::from_str("Invalid my_nonce_point"))?
+        .decompress().ok_or_else(|| JsValue::from_str("Failed to decompress my_nonce_point"))?;
+
+    let counterparty_nonce_point = CompressedRistretto::from_slice(&counterparty_nonce_point_bytes)
+        .map_err(|_| JsValue::from_str("Invalid counterparty_nonce_point"))?
+        .decompress().ok_or_else(|| JsValue::from_str("Failed to decompress counterparty_nonce_point"))?;
+
+    let counterparty_pubkey = CompressedRistretto::from_slice(&counterparty_pubkey_bytes)
+        .map_err(|_| JsValue::from_str("Invalid counterparty_pubkey"))?
+        .decompress().ok_or_else(|| JsValue::from_str("Failed to decompress counterparty_pubkey"))?;
+
+    // --- 2. Call the correct implementation method ---
+    let (settlement_tx, metadata) = channel.close_cooperative(
+        &my_secret,
+        my_party,
+        &my_nonce,
+        &my_nonce_point,
+        &counterparty_nonce_point,
+        &counterparty_pubkey,
+        current_height,
+    ).map_err(|e| JsValue::from_str(&e.to_string()))?;
+    
+    #[derive(serde::Serialize)]
+    struct CloseResult {
+        channel: PaymentChannel,
+        settlement_tx: crate::transaction::Transaction,
+        metadata: crate::payment_channel::MuSigKernelMetadata,
+    }
+    
+    let result = CloseResult {
+        channel,
+        settlement_tx,
+        metadata,
+    };
+    
+    serde_wasm_bindgen::to_value(&result).map_err(|e| e.into())
+}
+
+/// Close a channel unilaterally (if other party disappears)
+///
+/// # Parameters
+/// - channel_json: Serialized PaymentChannel
+/// - party_str: "A" or "B" - which party is closing
+/// - my_kernel_blinding_bytes: 32-byte blinding scalar for *our* commitment tx
+/// - current_height: Current blockchain height
+///
+/// # Returns
+/// Commitment transaction to broadcast
+#[wasm_bindgen]
+pub fn payment_channel_close_unilateral(
+    channel_json: JsValue,
+    party_str: String,
+    my_kernel_blinding_bytes: Vec<u8>,
+    current_height: u64,
+) -> Result<JsValue, JsValue> {
+    // FIX (Error 5): Added missing arguments
+    let mut channel: PaymentChannel = serde_wasm_bindgen::from_value(channel_json)?;
+    
+    let party_enum = match party_str.as_str() {
+        "A" => Party::A,
+        "B" => Party::B,
+        _ => return Err(JsValue::from_str("Party must be 'A' or 'B'")),
+    };
+
+    let my_kernel_blinding = Scalar::from_bytes_mod_order(my_kernel_blinding_bytes.try_into().map_err(|_| JsValue::from_str("my_kernel_blinding must be 32 bytes"))?);
+    
+    let commitment_tx = channel.close_unilateral(
+        party_enum,
+        &my_kernel_blinding,
+        current_height
+    ).map_err(|e| JsValue::from_str(&e.to_string()))?;
+    
+    serde_wasm_bindgen::to_value(&commitment_tx).map_err(|e| e.into())
+}
+
+/// Claim penalty if other party cheated (published old state)
+///
+/// # Parameters
+/// - channel_json: Serialized PaymentChannel
+/// - cheater_commitment_json: The `CommitmentState` they published
+/// - my_secret_bytes: Our 32-byte secret key
+/// - my_party_str: "A" or "B"
+/// - current_height: Current blockchain height
+///
+/// # Returns
+/// Penalty transaction that claims all funds
+#[wasm_bindgen]
+pub fn payment_channel_claim_penalty(
+    channel_json: JsValue,
+    cheater_commitment_json: JsValue,
+    my_secret_bytes: Vec<u8>,
+    my_party_str: String,
+    current_height: u64,
+) -> Result<JsValue, JsValue> {
+    // FIX (Error 6): This binding had completely wrong arguments.
+    
+    let mut channel: PaymentChannel = serde_wasm_bindgen::from_value(channel_json)?;
+    let cheater_commitment: crate::payment_channel::CommitmentState = serde_wasm_bindgen::from_value(cheater_commitment_json)?;
+    
+    let my_secret = Scalar::from_bytes_mod_order(my_secret_bytes.try_into().map_err(|_| JsValue::from_str("my_secret must be 32 bytes"))?);
+    
+    let my_party = match my_party_str.as_str() {
+        "A" => Party::A,
+        "B" => Party::B,
+        _ => return Err(JsValue::from_str("my_party must be 'A' or 'B'")),
+    };
+    
+    let penalty_tx = channel.claim_penalty(
+        &cheater_commitment,
+        &my_secret,
+        my_party,
+        current_height
+    ).map_err(|e| JsValue::from_str(&e.to_string()))?;
+    
+    serde_wasm_bindgen::to_value(&penalty_tx).map_err(|e| e.into())
+}
+
+/// Get channel statistics
+///
+/// # Parameters
+/// - channel_json: Serialized PaymentChannel
+///
+/// # Returns
+/// ChannelStats object with current state info
+#[wasm_bindgen]
+pub fn payment_channel_get_stats(channel_json: JsValue) -> Result<JsValue, JsValue> {
+    let channel: PaymentChannel = serde_wasm_bindgen::from_value(channel_json)?;
+    let stats = channel.stats();
+    serde_wasm_bindgen::to_value(&stats).map_err(|e| e.into())
+}
+
+/// Get the current state of a payment channel
+#[wasm_bindgen]
+pub fn payment_channel_get_state(channel_json: JsValue) -> Result<String, JsValue> {
+    let channel: PaymentChannel = serde_wasm_bindgen::from_value(channel_json)?;
+    let state_str = match channel.state {
+        // FIX: Renamed from Opening
+        ChannelState::Negotiating => "Negotiating", 
+        // FIX: Added missing variant
+        ChannelState::ReadyToFund => "ReadyToFund", 
+        // FIX: Destructure struct variant
+        ChannelState::PendingOpen { .. } => "PendingOpen", 
+        ChannelState::Open => "Open",
+        ChannelState::Closing => "Closing",
+        // FIX: Destructure struct variant
+        ChannelState::Disputed { .. } => "Disputed", 
+        // FIX: Destructure struct variant
+        ChannelState::Closed { .. } => "Closed", 
+    };
+    Ok(state_str.to_string())
+}
+
+/// Get channel balances
+///
+/// # Parameters
+/// - channel_json: Serialized PaymentChannel
+///
+/// # Returns
+/// Object with party_a_balance and party_b_balance
+#[wasm_bindgen]
+pub fn payment_channel_get_balances(channel_json: JsValue) -> Result<JsValue, JsValue> {
+    let channel: PaymentChannel = serde_wasm_bindgen::from_value(channel_json)?;
+    
+    #[derive(serde::Serialize)]
+    struct Balances {
+        party_a_balance: u64,
+        party_b_balance: u64,
+        total_capacity: u64,
+        sequence_number: u64,
+    }
+    
+    let balances = Balances {
+        party_a_balance: channel.party_a_balance,
+        party_b_balance: channel.party_b_balance,
+        total_capacity: channel.total_capacity,
+        sequence_number: channel.sequence_number,
+    };
+    
+    serde_wasm_bindgen::to_value(&balances).map_err(|e| e.into())
+}
+
+
 
 // =========================
 // Wallet session API (wasm)
@@ -800,7 +1449,8 @@ pub fn wallet_create_transaction(
     // 3. Call the internal create_transaction method on the Wallet struct.
     //    This method contains all the complex logic for coin selection and stealth output creation.
     let transaction = wallet.create_transaction(amount, fee, &recipient_scan_pub)
-        .map_err(|e| JsValue::from_str(&e))?;
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+
     // 4. Serialize the wallet's NEW state back to JSON. This is crucial because
     //    spending UTXOs and creating change modifies the wallet's state.
     let updated_wallet_json = serde_json::to_string(&wallet).unwrap();
@@ -902,7 +1552,7 @@ pub struct ReorgPlan {
 
 fn mempool_hygiene_after_block(block: &Block) {
     // [drop mined txs, drop spent-input txs, recompute fee_total]
-    // (Source: your current add_block_to_chain)  // cite:
+    // (Source: your current add_block_to_chain)  //
     // L11-L29 from concatenated_output.txt
     let mut pool = TX_POOL.lock().unwrap();
     let mined_excesses: HashSet<Vec<u8>> = block.transactions.iter()
@@ -921,6 +1571,8 @@ fn have_block(hash: &str) -> bool {
     let side = SIDE_BLOCKS.lock().unwrap();
     side.contains_key(hash)
 }
+
+
 fn store_side_block(hash: String, block: Block) {
     let mut blocks = SIDE_BLOCKS.lock().unwrap();
     let mut lru = SIDE_BLOCKS_LRU.lock().unwrap();
@@ -974,158 +1626,188 @@ fn get_block_any(hash: &str) -> Option<Block> {
 #[wasm_bindgen(js_name = "ingest_block_bytes")]
 pub async fn ingest_block_bytes(block_bytes: Vec<u8>) -> Result<JsValue, JsValue> {
     use prost::Message;
+    // Decode the Protobuf bytes into the p2p::Block struct 
     let p2p_block = p2p::Block::decode(&block_bytes[..])
         .map_err(|e| JsValue::from_str(&format!("bad block proto: {e}")))?;
+    // Convert the p2p::Block struct into the internal Block struct 
     let mut block: Block = Block::from(p2p_block);
-    // CRITICAL: Always recompute hash to ensure consistency across nodes
+    // CRITICAL: Always recompute hash to ensure consistency across nodes 
     block.hash = block.compute_hash();
-    
-    // CRITICAL: Reject any genesis block that doesn't match canonical
-    if block.height == 0 {
-        if block.hash != crate::constants::CANONICAL_GENESIS_HASH {
-            let res = IngestResult::Invalid { 
-                reason: format!("Invalid genesis hash. Expected {}, got {}", 
-                    crate::constants::CANONICAL_GENESIS_HASH, block.hash) 
-            };
-            return serde_wasm_bindgen::to_value(&res).map_err(|e| e.into());
-        }
-    }
-    
-    
-    // --- START: CORRECT DUPLICATE DETECTION LOGIC ---
-    // RATIONALE: This logic performs an async database call to see if we already
-    // have a canonical block at this height. This is the correct way to detect a common ancestor.
-    if let Some(db_block) = load_block_from_db(*block.height).await? {
-        if db_block.hash() == block.hash() {
-            let res = IngestResult::Invalid { reason: "Duplicate block".to_string() };
-            return serde_wasm_bindgen::to_value(&res).map_err(|e| e.into());
-        }
-    }
-    // Also check the side cache for duplicates that are not yet canonical.
-    if SIDE_BLOCKS.lock().unwrap().contains_key(&block.hash()) {
-        let res = IngestResult::Invalid { reason: "Duplicate block".to_string() };
-        return serde_wasm_bindgen::to_value(&res).map_err(|e| e.into());
-    }
-    // --- END: CORRECT DUPLICATE DETECTION LOGIC ---
-    
-    log(&format!("[RUST DEBUG] ingest_block: height={}, hash={}", block.height, block.hash));
+    let block_hash = block.hash(); // Store computed hash
+    let block_height = *block.height;
 
-    
-    // Add timestamp validation
+    // CRITICAL: Reject any genesis block that doesn't match canonical 
+    if block_height == 0 {
+        if block_hash != crate::constants::CANONICAL_GENESIS_HASH { // 
+            let res = IngestResult::Invalid { // 
+                reason: format!("Invalid genesis hash. Expected {}, got {}", // 
+                    crate::constants::CANONICAL_GENESIS_HASH, block_hash) // 
+            };
+            return serde_wasm_bindgen::to_value(&res).map_err(|e| e.into()); // 
+        }
+    }
+
+    // Add timestamp validation 
     {
-        const MAX_FUTURE_DRIFT_MS: u64 = 120_000; // 2 minutes
-        let now_ms = js_sys::Date::now() as u64;
-        
-        if block.timestamp > now_ms + MAX_FUTURE_DRIFT_MS {
-            let res = IngestResult::Invalid { 
-                reason: format!("Block timestamp {} is too far in the future (max drift: {}ms)", 
-                    block.timestamp, MAX_FUTURE_DRIFT_MS) 
+        const MAX_FUTURE_DRIFT_MS: u64 = 120_000; // 2 minutes 
+        let now_ms = js_sys::Date::now() as u64; // 
+
+        if *block.timestamp > now_ms + MAX_FUTURE_DRIFT_MS { // 
+            let res = IngestResult::Invalid { // 
+                reason: format!("Block timestamp {} is too far in the future (max drift: {}ms)", // 
+                    *block.timestamp, MAX_FUTURE_DRIFT_MS) // 
             };
-            return serde_wasm_bindgen::to_value(&res).map_err(|e| e.into());
+            return serde_wasm_bindgen::to_value(&res).map_err(|e| e.into()); // 
         }
     }
- 
+
+    // --- REVISED DUPLICATE/FORK DETECTION ---
+
+    // 1. Check against CANONICAL chain in DB first
+    // RATIONALE: This logic performs an async database call to see if we already
+    // have a canonical block at this height. This is the correct way to detect a common ancestor. 
+    if let Some(db_block_at_height) = load_block_from_db(block_height).await? {
+        if db_block_at_height.hash() == block_hash {
+            // Already canonical - truly a duplicate.
+            log(&format!("[INGEST {}] Block already canonical at height {}", &block_hash[..8], block_height));
+            // Return Invalid result if it's a duplicate of a canonical block 
+            let res = IngestResult::Invalid { reason: "Duplicate canonical block".to_string() }; // MODIFIED: Reason string
+            return serde_wasm_bindgen::to_value(&res).map_err(|e| e.into()); // 
+        } else {
+            // Fork detected against canonical chain. Store on side.
+            log(&format!("[INGEST {}] Fork detected against canonical block {} at height {}", &block_hash[..8], &db_block_at_height.hash()[..8], block_height));
+            store_side_block(block_hash.clone(), block.clone()); // Store before returning 
+            // Ensure hash is set in the block before returning 
+            block.hash = block_hash.clone(); // Ensure hash is correct
+            // Return StoredOnSide if a different block exists at this height 
+            let res = IngestResult::StoredOnSide { tip_hash: block_hash, height: block_height };
+            return serde_wasm_bindgen::to_value(&res).map_err(|e| e.into()); // 
+        }
+    }
+
+    // 2. Check SIDE_BLOCKS cache (only if NOT found canonical in DB)
+    // Also check the side cache for duplicates that are not yet canonical. 
+    if SIDE_BLOCKS.lock().unwrap().contains_key(&block_hash) {
+        // Already known as a side block. Return StoredOnSide, NOT Invalid.
+        log(&format!("[INGEST {}] Block already known as side block at height {}", &block_hash[..8], block_height));
+         // Ensure hash is set in the block before returning 
+        block.hash = block_hash.clone(); // Ensure hash is correct
+        // // MODIFIED: Return StoredOnSide instead of Invalid 
+        let res = IngestResult::StoredOnSide { tip_hash: block_hash, height: block_height }; // MODIFIED: Return StoredOnSide
+        return serde_wasm_bindgen::to_value(&res).map_err(|e| e.into()); // 
+    }
+    // --- END REVISED DUPLICATE/FORK DETECTION ---
+
+    log(&format!("[RUST DEBUG] ingest_block: height={}, hash={}", block_height, block_hash)); // 
 
 
+    // Parent equals canonical tip? Fast-path extend canonical chain. 
+    let (tip_h, tip_ht) = tip_hash_and_height(); // 
 
-    // Parent equals canonical tip? Fast-path extend canonical chain.
-    let (tip_h, tip_ht) = tip_hash_and_height();
 
-    
-    if block.height == tip_ht + 1 && block.prev_hash == tip_h {
-        log("[RUST DEBUG] Block extends canonical tip, processing...");
+    if block_height == tip_ht + 1 && block.prev_hash == tip_h { // 
+        log("[RUST DEBUG] Block extends canonical tip, processing..."); // 
         {
-            let mut chain = BLOCKCHAIN.lock().unwrap();
-            
-        let (expected_vrf_threshold, expected_vdf_iterations) = if block.height > 0 && block.height % DIFFICULTY_ADJUSTMENT_INTERVAL == 0 {
-            let start_height = block.height.saturating_sub(DIFFICULTY_ADJUSTMENT_INTERVAL);  
-            let end_height = block.height - 1;
-            
-            log(&format!("[DIFFICULTY Check] Adjustment for block {}. Using interval start={}, end={}", block.height, start_height, end_height));
-            
-            let start_block = load_block_from_db(start_height).await?
-                .ok_or_else(|| JsValue::from_str(&format!("Missing start block {} for difficulty adjustment", start_height)))?;
-            let end_block = load_block_from_db(end_height).await?
-                .ok_or_else(|| JsValue::from_str(&format!("Missing end block {} for difficulty adjustment", end_height)))?;
-            
-            // Get the parameters effective at the END of the interval (from end_block)
-            let params_at_interval_end = (end_block.vrf_threshold, end_block.vdf_iterations);
+            let mut chain = BLOCKCHAIN.lock().unwrap(); // 
 
-            Blockchain::calculate_next_difficulty(
-                &end_block, 
-                &start_block, 
-                params_at_interval_end.0, 
-                params_at_interval_end.1)
+            // Calculate expected difficulty parameters for this block 
+            let (expected_vrf_threshold, expected_vdf_iterations) = if block_height > 0 && block_height % DIFFICULTY_ADJUSTMENT_INTERVAL == 0 { // 
+                let start_height = block_height.saturating_sub(DIFFICULTY_ADJUSTMENT_INTERVAL); // 
+                let end_height = block_height - 1; // 
 
-            } else {
-                (chain.current_vrf_threshold, chain.current_vdf_iterations)
+                log(&format!("[DIFFICULTY Check] Adjustment for block {}. Using interval start={}, end={}", block_height, start_height, end_height)); // 
+
+                let start_block = load_block_from_db(start_height).await? // 
+                    .ok_or_else(|| JsValue::from_str(&format!("Missing start block {} for difficulty adjustment", start_height)))?; // 
+                let end_block = load_block_from_db(end_height).await? // 
+                    .ok_or_else(|| JsValue::from_str(&format!("Missing end block {} for difficulty adjustment", end_height)))?; // 
+
+                // Get the parameters effective at the END of the interval (from end_block) 
+                let params_at_interval_end = (end_block.vrf_threshold, end_block.vdf_iterations); // 
+
+                Blockchain::calculate_next_difficulty( // 
+                    &end_block,
+                    &start_block,
+                    params_at_interval_end.0,
+                    params_at_interval_end.1)
+
+            } else { // 
+                (chain.current_vrf_threshold, chain.current_vdf_iterations) // 
             };
-            
-            if *block.height > constants::MTP_WINDOW as u64 {
-                let mut timestamps = Vec::new();
-                for i in (*block.height - constants::MTP_WINDOW as u64)..*block.height {
-                    if let Some(b) = load_block_from_db(i).await? {
-                        timestamps.push(b.timestamp);
+
+            // Median Time Past (MTP) check
+            if block_height > constants::MTP_WINDOW as u64 { // 
+                let mut timestamps = Vec::new(); // 
+                for i in (block_height - constants::MTP_WINDOW as u64)..block_height { // 
+                    if let Some(b) = load_block_from_db(i).await? { // 
+                        timestamps.push(b.timestamp); // 
                     }
                 }
-                timestamps.sort_unstable();
-                let mtp = timestamps[timestamps.len() / 2];
-                if block.timestamp < mtp {
-                    let res = IngestResult::Invalid { reason: "Timestamp < MTP".to_string() };
-                    return serde_wasm_bindgen::to_value(&res).map_err(|e| e.into());
+                timestamps.sort_unstable(); // 
+                let mtp = timestamps[timestamps.len() / 2]; // 
+                if *block.timestamp < *mtp { // 
+                    let res = IngestResult::Invalid { reason: "Timestamp < MTP".to_string() }; // 
+                    return serde_wasm_bindgen::to_value(&res).map_err(|e| e.into()); // 
                 }
-            }
+            } // 
 
-            chain.add_block(block.clone(), expected_vrf_threshold, expected_vdf_iterations).await
-                .map_err(|e| JsValue::from_str(&format!("Failed to add block: {e}")))?;
-            log("[RUST DEBUG] Block added to chain successfully");
-            // CRITICAL: Update block's total_work from chain
-            block.total_work = chain.total_work;
+            // Add the block to the in-memory chain state 
+            chain.add_block(block.clone(), expected_vrf_threshold, expected_vdf_iterations).await // 
+                .map_err(|e| JsValue::from_str(&format!("Failed to add block: {e}")))?; // 
+            log("[RUST DEBUG] Block added to chain successfully"); // 
+            // CRITICAL: Update block's total_work from chain 
+            block.total_work = chain.total_work; // 
 
-            chain.current_vrf_threshold = expected_vrf_threshold;
-            chain.current_vdf_iterations = expected_vdf_iterations;
+            // Update chain's current difficulty params 
+            chain.current_vrf_threshold = expected_vrf_threshold; // 
+            chain.current_vdf_iterations = expected_vdf_iterations; // 
         }
-        save_block_to_db(block.clone()).await?; 
+        // Save block to canonical DB 
+        save_block_to_db(block.clone()).await?;
+        // Save updated total work to DB 
         save_total_work_to_db(*BLOCKCHAIN.lock().unwrap().total_work).await?;
+        // Clean up mempool 
         mempool_hygiene_after_block(&block);
+        // Return success result 
         let res = IngestResult::AcceptedAndExtended;
-        log("[RUST DEBUG] Returning AcceptedAndExtended");  
-        return serde_wasm_bindgen::to_value(&res).map_err(|e| e.into());
-    }
-    
-    // Log the state only if the fast-path check fails
-    log(&format!("[RUST DEBUG] Current tip: hash={}, height={}", tip_h, tip_ht));
-    log(&format!("[RUST DEBUG] Block wants: prev_hash={}, height={}", block.prev_hash, block.height));
-    
-    // --- If not a fast-path extension, THEN check for parent ---
-    if load_block_from_db(block.height.saturating_sub(1)).await?.is_none() && *block.height > 0 {
-        // Stash and request parent
-        let parent = block.prev_hash.clone();
-        let h = block.hash();
-        store_side_block(h, block);
-        let res = IngestResult::NeedParent {
-            hash: parent,
-            reason: "Block was stored on a side-chain pending parent download".to_string(),
-        };
-        return serde_wasm_bindgen::to_value(&res).map_err(|e| e.into());
+        log("[RUST DEBUG] Returning AcceptedAndExtended");
+        return serde_wasm_bindgen::to_value(&res).map_err(|e| e.into()); // 
     }
 
-    // Otherwise, store as side block (fork candidate)
-    store_side_block(block.hash(), block.clone());
-    
-    // Save to database immediately
-    {
-        let block_clone = block.clone();
-        wasm_bindgen_futures::spawn_local(async move {
-            if let Err(e) = save_block_with_hash(&block_clone).await {
-                log(&format!("[ERROR] Failed to save ingested block to DB: {:?}", e));
-            }
-        });
+    // Log the state only if the fast-path check fails 
+    log(&format!("[RUST DEBUG] Current tip: hash={}, height={}", tip_h, tip_ht)); // 
+    log(&format!("[RUST DEBUG] Block wants: prev_hash={}, height={}", block.prev_hash, block_height)); // 
+
+    // --- Check if parent exists (either canonical DB or side cache/DB) --- 
+    let parent_exists = if block.prev_hash == tip_h { // Parent is current canonical tip 
+        true
+    } else if SIDE_BLOCKS.lock().unwrap().contains_key(&block.prev_hash) { // Parent in side cache 
+        true
+    } else { // Check DB for parent (could be older canonical or side block saved to DB) 
+        load_block_by_hash(&block.prev_hash).await?.is_some()
+    };
+
+
+    if parent_exists { // 
+        // Parent exists, but block doesn't extend tip -> store as side block 
+        log(&format!("[INGEST {}] Parent {} exists, storing block as side block", &block_hash[..8], &block.prev_hash[..8]));
+        store_side_block(block_hash.clone(), block.clone()); // Store the block itself 
+        // Ensure hash is set in the block before returning 
+        block.hash = block_hash.clone(); // Ensure hash is correct
+        let res = IngestResult::StoredOnSide { tip_hash: block_hash, height: block_height }; // 
+        return serde_wasm_bindgen::to_value(&res).map_err(|e| e.into()); // 
+    } else {
+        // Parent does NOT exist anywhere we know. Request it. 
+        log(&format!("[INGEST {}] Parent {} NOT FOUND. Requesting parent.", &block_hash[..8], &block.prev_hash[..8]));
+        store_side_block(block_hash.clone(), block.clone()); // Store the orphan block anyway 
+        // Ensure hash is set in the block before returning 
+        block.hash = block_hash.clone(); // Ensure hash is correct
+        let res = IngestResult::NeedParent { // 
+            hash: block.prev_hash.clone(), // Request the parent hash 
+            reason: "Parent block not found".to_string(), // 
+        };
+        return serde_wasm_bindgen::to_value(&res).map_err(|e| e.into()); // 
     }
-        
-    let res = IngestResult::StoredOnSide { tip_hash: block.hash(), height: *block.height };
-    log(&format!("[RUST DEBUG] Returning StoredOnSide for block {}", block.hash()));  
-    serde_wasm_bindgen::to_value(&res).map_err(|e| e.into())
 }
 
 
@@ -2494,15 +3176,43 @@ pub fn add_transaction_to_pool(tx_json: JsValue) -> Result<(), JsValue> {
         Err(e) => return Err(JsValue::from_str(&format!("[POOL_ADD {}] Error during signature verification: {}", &tx_hash_for_log[..8], e))),
     }
 
-    // 2) Range proofs
-    for output in &tx.outputs {
-        let commitment = CompressedRistretto::from_slice(&output.commitment)
-            .map_err(|_| JsValue::from_str("Invalid output commitment"))?;
-         let proof = RangeProof::from_bytes(&tx.aggregated_range_proof)
-            .map_err(|_| JsValue::from_str("Invalid range proof format"))?;
-        if !mimblewimble::verify_range_proof(&proof, &commitment) {
-            return Err(JsValue::from_str("Range proof verification failed"));
+    // 2) Verify AGGREGATED range proof (V2)
+    if !tx.outputs.is_empty() { // Only verify if there are outputs
+        log(&format!("[POOL_ADD {}] Verifying aggregated range proof...", &tx_hash_for_log[..8]));
+
+        // Collect all output commitments for this transaction
+        let commitments_result: Result<Vec<_>,_> = tx.outputs.iter()
+            .map(|output| CompressedRistretto::from_slice(&output.commitment))
+            .collect();
+        let commitments = match commitments_result {
+            Ok(c) => c,
+            Err(_) => {
+                 log(&format!("[POOL_ADD {}] Failed to parse one or more output commitments", &tx_hash_for_log[..8]));
+                 // Convert PluribitError to JsValue for the return type
+                 return Err(JsValue::from_str("Invalid output commitment"));
+            }
+        }; // 
+
+        // Parse the single aggregated range proof from the transaction
+        let aggregated_proof = match RangeProof::from_bytes(&tx.aggregated_range_proof) { // 
+            Ok(p) => p,
+            Err(_) => {
+                 log(&format!("[POOL_ADD {}] Failed to parse aggregated range proof bytes", &tx_hash_for_log[..8]));
+                 // Convert PluribitError to JsValue
+                 return Err(JsValue::from_str("Invalid range proof format")); // 
+            }
+        };
+
+        // Verify the single aggregated proof against ALL commitments using the correct function
+        if !mimblewimble::verify_aggregated_range_proof(&aggregated_proof, &commitments) { // 
+            log(&format!("[POOL_ADD {}] Aggregated range proof verification FAILED", &tx_hash_for_log[..8]));
+             // Convert PluribitError to JsValue
+            return Err(JsValue::from_str("Range proof verification failed")); // 
         }
+        log(&format!("[POOL_ADD {}] Aggregated range proof verified successfully for {} outputs", &tx_hash_for_log[..8], commitments.len()));
+
+    } else {
+         log(&format!("[POOL_ADD {}] No outputs, skipping range proof verification", &tx_hash_for_log[..8]));
     }
     log(&format!("[POOL_ADD {}] Range proofs verified", &tx_hash_for_log[..8]));
 
@@ -2924,6 +3634,8 @@ pub fn wallet_unscan_block(wallet_json: &str, block_js: JsValue) -> Result<Strin
         .map_err(|e| JsValue::from_str(&e.to_string()))
 }
 
+
+
 #[cfg(all(test, target_arch = "wasm32"))]
 mod tests {
     use wasm_bindgen_test::*;
@@ -2944,3 +3656,4 @@ mod tests {
         tx_pool.fee_total = 0;
     }
 }
+

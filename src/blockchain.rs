@@ -300,85 +300,115 @@ impl Blockchain {
 
             log(&format!("[BLOCK VALIDATION] Starting validation for block #{}", block.height));
             log(&format!("[BLOCK VALIDATION] Number of transactions: {}", block.transactions.len()));
-
             for (tx_idx, tx) in block.transactions.iter().enumerate() {
                 log(&format!("[BLOCK VALIDATION] Processing transaction #{}", tx_idx));
                 let tx_fee = tx.total_fee();
-                log(&format!("[BLOCK VALIDATION] TX#{}: Inputs: {}, Outputs: {}, Fee(total): {}", 
+                log(&format!("[BLOCK VALIDATION] TX#{}: Inputs: {}, Outputs: {}, Fee(total): {}",
                     tx_idx, tx.inputs.len(), tx.outputs.len(), tx_fee));
-                
                 if !tx.verify_signature()? {
                     log(&format!("[BLOCK VALIDATION] TX#{}: Kernel signature verification FAILED", tx_idx));
-                    return Err(PluribitError::InvalidKernelSignature);
+                    return Err(PluribitError::InvalidKernelSignature); // [cite: 1968]
                 }
-                log(&format!("[BLOCK VALIDATION] TX#{}: All kernel signatures verified", tx_idx));
-                
+                log(&format!("[BLOCK VALIDATION] TX#{}: All kernel signatures verified", tx_idx)); 
+
+                // --- START: MODIFIED RANGE PROOF VERIFICATION ---
+                if !tx.outputs.is_empty() { // Only verify if there are outputs
+                    log(&format!("[BLOCK VALIDATION] TX#{}: Verifying aggregated range proof...", tx_idx));
+                    // 1. Collect all output commitments for this transaction
+                    let commitments_result: Result<Vec<_>,_> = tx.outputs.iter()
+                        .map(|output| CompressedRistretto::from_slice(&output.commitment))
+                        .collect();
+
+                    let commitments = match commitments_result {
+                        Ok(c) => c,
+                        Err(_) => {
+                             log(&format!("[BLOCK VALIDATION] TX#{}: Failed to parse one or more output commitments", tx_idx));
+                             return Err(PluribitError::InvalidOutputCommitment);
+                        }
+                    };
+
+                    // 2. Parse the aggregated range proof from the transaction
+                    let aggregated_proof = match RangeProof::from_bytes(&tx.aggregated_range_proof) { 
+                        Ok(p) => p,
+                        Err(_) => {
+                            log(&format!("[BLOCK VALIDATION] TX#{}: Failed to parse aggregated range proof bytes", tx_idx));
+                            return Err(PluribitError::InvalidRangeProof); 
+                        }
+                    };
+
+                    // 3. Verify the single aggregated proof against all commitments
+                    if !mimblewimble::verify_aggregated_range_proof(&aggregated_proof, &commitments) { 
+                        log(&format!("[BLOCK VALIDATION] TX#{}: Aggregated range proof verification FAILED", tx_idx));
+                        return Err(PluribitError::InvalidRangeProof); 
+                    }
+                    log(&format!("[BLOCK VALIDATION] TX#{}: Aggregated range proof verified successfully for {} outputs", tx_idx, commitments.len()));
+                } else {
+                     log(&format!("[BLOCK VALIDATION] TX#{}: No outputs, skipping range proof verification", tx_idx));
+                }
+                // --- END: MODIFIED RANGE PROOF VERIFICATION ---
+
+
                 // Sum all kernel excess points
-                let mut kernel_excess_pt = RistrettoPoint::identity();
+                let mut kernel_excess_pt = RistrettoPoint::identity(); 
                 for k in &tx.kernels {
                     kernel_excess_pt += mimblewimble::kernel_excess_to_pubkey(&k.excess)?;
                 }
-                
-                let is_coinbase = tx_fee == 0 && tx.inputs.is_empty();
 
+                let is_coinbase = tx_fee == 0 && tx.inputs.is_empty(); 
                 if is_coinbase {
-                    coinbase_kernel += kernel_excess_pt;
-                    debug_assert_eq!(tx_fee, 0);
+                    coinbase_kernel += kernel_excess_pt; 
+                    debug_assert_eq!(tx_fee, 0); 
                 } else {
-                    sum_kernel_non_cb += kernel_excess_pt;
+                    sum_kernel_non_cb += kernel_excess_pt; 
                     total_fees = total_fees
                         .checked_add(tx_fee)
-                        .ok_or(PluribitError::InvalidBlock("fee overflow".into()))?;
+                        .ok_or(PluribitError::InvalidBlock("fee overflow".into()))?; 
                 }
 
-                log(&format!("[BLOCK VALIDATION] TX#{}: {} kernels processed", 
-                    tx_idx, tx.kernels.len()));
-                
+                log(&format!("[BLOCK VALIDATION] TX#{}: {} kernels processed",
+                    tx_idx, tx.kernels.len())); 
                 for (inp_idx, inp) in tx.inputs.iter().enumerate() {
                     if !utxos.contains_key(&inp.commitment) {
-                        log(&format!("[BLOCK VALIDATION] TX#{} Input#{}: NOT FOUND in UTXO set: {}", 
+                        log(&format!("[BLOCK VALIDATION] TX#{} Input#{}: NOT FOUND in UTXO set: {}",
                             tx_idx, inp_idx, hex::encode(&inp.commitment)));
-                        return Err(PluribitError::UnknownInput);
-                    }
-                    
-                    {
-                        let cb = crate::blockchain::COINBASE_INDEX.lock().unwrap();
-                        if let Some(born_at) = cb.get(&inp.commitment) {
-                            let spend_height = *block.height;
-                            let need = *born_at + COINBASE_MATURITY;
-                            if spend_height < need {
-                                return Err(PluribitError::InvalidBlock("Coinbase spend immature".into()));
-                            }
-                        }
-                    }
-                    
-                    let c = CompressedRistretto::from_slice(&inp.commitment)
-                        .map_err(|_| PluribitError::InvalidInputCommitment)?
-                        .decompress()
-                        .ok_or(PluribitError::InvalidInputCommitment)?;
-                    sum_in_pts += c;
-                    log(&format!("[BLOCK VALIDATION] TX#{} Input#{}: {}", 
-                        tx_idx, inp_idx, hex::encode(&inp.commitment)));
-                }
-                
-                for (out_idx, out) in tx.outputs.iter().enumerate() {
-                    let commitment_pt = CompressedRistretto::from_slice(&out.commitment)
-                        .map_err(|_| PluribitError::InvalidOutputCommitment)?;
-                    let proof = RangeProof::from_bytes(&tx.aggregated_range_proof)
-                        .map_err(|_| PluribitError::InvalidRangeProof)?;
-                    if !mimblewimble::verify_range_proof(&proof, &commitment_pt) {
-                        log(&format!("[BLOCK VALIDATION] TX#{} Output#{}: Range proof verification FAILED", 
-                            tx_idx, out_idx));
-                        return Err(PluribitError::InvalidRangeProof);
+                        return Err(PluribitError::UnknownInput); 
                     }
 
-                    let c = commitment_pt.decompress().ok_or(PluribitError::InvalidOutputCommitment)?;
-                    sum_out_pts += c;
-                    log(&format!("[BLOCK VALIDATION] TX#{} Output#{}: {} (verified range proof)", 
-                        tx_idx, out_idx, hex::encode(&out.commitment)));
+                    { // Scope for COINBASE_INDEX lock
+                        let cb = crate::blockchain::COINBASE_INDEX.lock().unwrap(); 
+                        if let Some(born_at) = cb.get(&inp.commitment) { 
+                            let spend_height = *block.height; 
+                            let need = *born_at + COINBASE_MATURITY; 
+                            if spend_height < need {
+                                return Err(PluribitError::InvalidBlock("Coinbase spend immature".into())); 
+                            }
+                        }
+                    } // Lock released
+
+                    let c = CompressedRistretto::from_slice(&inp.commitment) 
+                           .map_err(|_| PluribitError::InvalidInputCommitment)? 
+                           .decompress() // [cite: 1983]
+                           .ok_or(PluribitError::InvalidInputCommitment)?; 
+                    sum_in_pts += c; 
+                    log(&format!("[BLOCK VALIDATION] TX#{} Input#{}: {}",
+                        tx_idx, inp_idx, hex::encode(&inp.commitment))); 
                 }
-                
-                log(&format!("[BLOCK VALIDATION] TX#{}: Processing complete", tx_idx));
+
+
+                // Add output commitments to sum_out_pts (still needed for balance check)
+                 for (out_idx, out) in tx.outputs.iter().enumerate() {
+                     let c = CompressedRistretto::from_slice(&out.commitment)
+                         .map_err(|_| PluribitError::InvalidOutputCommitment)? 
+                         .decompress()
+                         .ok_or(PluribitError::InvalidOutputCommitment)?; 
+                     sum_out_pts += c; 
+                     // Log added for context, proof verification happens above now
+                     log(&format!("[BLOCK VALIDATION] TX#{} Output#{}: {} (aggregated proof verified)",
+                         tx_idx, out_idx, hex::encode(&out.commitment))); 
+                 }
+
+
+                log(&format!("[BLOCK VALIDATION] TX#{}: Processing complete", tx_idx)); 
             }
 
             // Collect changes to apply after releasing lock

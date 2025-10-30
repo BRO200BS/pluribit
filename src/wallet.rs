@@ -15,9 +15,10 @@ use std::collections::HashMap;
 use sha2::{Sha256, Digest};
 use bip39::Mnemonic;
 use crate::log;
-
+use crate::error::PluribitError;
+use crate::error::PluribitResult;
 lazy_static! {
-    static ref PENDING_UTXOS: Mutex<HashSet<Vec<u8>>> = Mutex::new(HashSet::new());
+   pub static ref PENDING_UTXOS: Mutex<HashSet<Vec<u8>>> = Mutex::new(HashSet::new());
 }
 // CRITICAL FIX #7: Custom serialization for Scalar to enforce canonical form
 mod scalar_serde {
@@ -288,24 +289,7 @@ impl Wallet {
                                          log(&format!("[SCAN_BLOCK] Output {}: View tag matched but commitment mismatch!", out_commitment_hex));
                                          continue;
                                      }
-                                     log(&format!("[SCAN_BLOCK] Output {}: Commitment MATCH! Verifying range proof...", out_commitment_hex));
-                                     // Verify range proof
-                                     let proof = match RangeProof::from_bytes(&tx.aggregated_range_proof) {
-                                         Ok(p) => p,
-                                         Err(_) => {
-                                             log(&format!("[WALLET] Invalid range proof format for output {}",
-                                                 hex::encode(&output.commitment[..8])));
-                                             continue;
-                                         }
-                                     };
-
-                                     let rp_verified = mimblewimble::verify_range_proof(&proof, &CompressedRistretto::from_slice(&output.commitment).unwrap());
-                                     log(&format!("[SCAN_BLOCK] Output {}: Range proof verification result: {}", out_commitment_hex, rp_verified));
-
-                                     if !rp_verified {
-                                         log(&format!("[SCAN_BLOCK] Output {}: Range proof verification FAILED!", out_commitment_hex));
-                                         continue;
-                                     }
+                                     log(&format!("[SCAN_BLOCK] Output {}: Commitment MATCH!", out_commitment_hex)); 
 
                                      // ✅ SIMPLIFIED: Just check if we don't already have it
                                      let already_owned = self.owned_utxos.iter().any(|u| u.commitment.to_bytes() == commitment_bytes.as_slice());
@@ -361,35 +345,36 @@ impl Wallet {
          amount: u64,
          fee: u64,
          recipient_scan_pub: &RistrettoPoint,
-     ) -> Result<Transaction, String> {
+     ) -> PluribitResult<Transaction> {
          log("=== CREATE_TRANSACTION DEBUG ===");
-         let total_needed = amount.checked_add(fee).ok_or("Amount plus fee overflowed")?;
+         let total_needed = amount.checked_add(fee).ok_or_else(|| PluribitError::ValidationError("Amount plus fee overflowed".to_string()))?;
          log(&format!("[WALLET] Amount={}, Fee={}", amount, fee));
          log(&format!("[WALLET] Selecting UTXOs to cover {}...", total_needed));
          log(&format!("[WALLET] Available UTXOs before selection: {}", self.owned_utxos.len()));
 
          // --- START: ATOMIC COIN SELECTION WITH LOCK ORDERING ---
 
-         // 1. Acquire necessary snapshots BEFORE locking PENDING_UTXOS
-         let (valid_commitments, coinbase_creation_heights, current_tip_height): (HashSet<Vec<u8>>, HashMap<Vec<u8>, u64>, u64) = {
-             // Lock UTXO_SET first
-             let utxo_set = crate::blockchain::UTXO_SET.lock().expect("Failed to lock UTXO_SET for snapshot"); // 
-             let commitments = utxo_set.keys().cloned().collect();
-             // Lock COINBASE_INDEX next
-             let coinbase_index = COINBASE_INDEX.lock().expect("Failed to lock COINBASE_INDEX for snapshot");// 
-             let heights = coinbase_index.clone(); // Clone the map for the snapshot
-             // Lock BLOCKCHAIN last
-             let chain = crate::BLOCKCHAIN.lock().expect("Failed to lock BLOCKCHAIN for snapshot height");// 
-             let height = *chain.current_height; 
-
-             (commitments, heights, height) // Return tuple, locks are released here
-         }; // Snapshots created, locks released
+        // 1. Acquire necessary snapshots BEFORE locking PENDING_UTXOS
+            // ADD current_tip_height to the snapshot tuple
+            let (valid_commitments, coinbase_creation_heights, current_tip_height): (HashSet<Vec<u8>>, HashMap<Vec<u8>, u64>, u64) = {
+                // Lock UTXO_SET first
+                let utxo_set = crate::blockchain::UTXO_SET.lock().expect("Failed to lock UTXO_SET for snapshot");
+                let commitments = utxo_set.keys().cloned().collect();
+                // Lock COINBASE_INDEX next
+                let coinbase_index = crate::blockchain::COINBASE_INDEX.lock().expect("Failed to lock COINBASE_INDEX for snapshot");
+                let heights = coinbase_index.clone();
+                // Lock BLOCKCHAIN last
+                let chain = crate::BLOCKCHAIN.lock().expect("Failed to lock BLOCKCHAIN for snapshot height");
+                let height = *chain.current_height; // Get height while locked
+                (commitments, heights, height) // <-- RETURN height here
+            }; // Snapshots created, locks released
 
          let mut selected_inputs = Vec::new();
          let mut selected_utxos = Vec::new();
          let mut input_blinding_sum = Scalar::default();
          let mut total_from_selected: u64 = 0;
 
+        {
          // 2. Now acquire the PENDING_UTXOS lock to perform the atomic selection.
          let mut pending = PENDING_UTXOS.lock().expect("Failed to lock PENDING_UTXOS for selection");
 
@@ -414,7 +399,7 @@ impl Wallet {
 
              if let Some(&creation_height) = coinbase_creation_heights.get(&commitment_bytes) {
                  // It's a coinbase UTXO, check maturity
-                 let required_height = creation_height.saturating_add(COINBASE_MATURITY); // [cite: 1490, 1745]
+                 let required_height = creation_height.saturating_add(COINBASE_MATURITY); 
                  // Transaction will be included in the *next* block (tip + 1)
                  let spend_height = current_tip_height.saturating_add(1);
 
@@ -454,7 +439,7 @@ impl Wallet {
 
              return false; // Remove this UTXO from owned_utxos for this transaction.
          }); // PENDING_UTXOS lock released here
-
+        }
          // --- END: ATOMIC COIN SELECTION ---
         
         if total_from_selected < total_needed {
@@ -471,7 +456,7 @@ impl Wallet {
                  pending_revert.remove(&input.commitment); // Un-mark as pending.
              }
              // Lock released automatically when pending_revert goes out of scope
-             return Err("Insufficient funds after excluding invalid/pending UTXOs".to_string());
+                 return Err(PluribitError::InsufficientFunds("Insufficient funds after excluding invalid/pending UTXOs".to_string()));
          }
 
         // 3. Create Outputs
@@ -479,7 +464,8 @@ impl Wallet {
         let mut outputs = Vec::new();
         let mut output_blinding_sum = Scalar::default();
         
-        let (recipient_output, recipient_blinding) = create_stealth_output(amount, recipient_scan_pub)?;
+        let (recipient_output, recipient_blinding) = create_stealth_output(amount, recipient_scan_pub)
+    .map_err(|e| PluribitError::ValidationError(e))?;
         outputs.push(recipient_output);
         output_blinding_sum += recipient_blinding;
 
@@ -497,13 +483,15 @@ impl Wallet {
              for input in &selected_inputs { // Borrow here
                  pending_revert.remove(&input.commitment);
              }
-             return Err("Internal error: Insufficient funds at change calculation stage.".to_string());
+             return Err(PluribitError::InsufficientFunds("Internal error: Insufficient funds at change calculation stage.".to_string()));
+
         }
 
         let change_amount = total_from_selected - total_needed;
         let change_blinding_opt = if change_amount > 0 {
             log(&format!("[WALLET] Change amount: {}", change_amount));
-            let (change_output, change_blinding) = create_stealth_output(change_amount, &self.scan_pub)?;
+            let (change_output, change_blinding) = create_stealth_output(change_amount, &self.scan_pub)
+    .map_err(|e| PluribitError::ValidationError(e))?;
             outputs.push(change_output);
             output_blinding_sum += change_blinding;
             Some(change_blinding)
@@ -512,14 +500,13 @@ impl Wallet {
         };
 
         // 4. Create the Transaction Kernel
-        let current_height = crate::BLOCKCHAIN.lock().expect("Failed to lock BLOCKCHAIN for kernel height").current_height;
         #[cfg(target_arch = "wasm32")]
-        let timestamp = js_sys::Date::now() as u64;
-        #[cfg(not(target_arch = "wasm32"))]
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("Time went backwards")
-            .as_millis() as u64;
+            let timestamp = js_sys::Date::now() as u64;
+            #[cfg(not(target_arch = "wasm32"))]
+            let timestamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("Time went backwards")
+                .as_millis() as u64;
         
         let kernel_blinding = input_blinding_sum - output_blinding_sum;
         
@@ -528,17 +515,17 @@ impl Wallet {
         log(&format!("  blinding_sum_out: {}", hex::encode(output_blinding_sum.to_bytes())));
         log(&format!("  kernel_blinding: {}", hex::encode(kernel_blinding.to_bytes())));
 
-        let kernel = TransactionKernel::new(kernel_blinding, fee, *current_height, timestamp)
-            .map_err(|e| {
-                // If kernel creation fails, we must also revert
-                self.owned_utxos.extend(selected_utxos);
-                // --- Need to re-acquire pending lock to unmark ---
-                  let mut pending_revert = PENDING_UTXOS.lock().expect("Failed to lock PENDING_UTXOS for kernel fail revert"); // Acquire lock again
-                  for input in &selected_inputs { // Use a borrow (&) instead of moving 
-                      pending_revert.remove(&input.commitment); 
-                  }
-                e
-            })?;
+        let kernel = TransactionKernel::new(kernel_blinding, fee, current_tip_height, timestamp)
+                .map_err(|e| {
+                    // If kernel creation fails, we must also revert
+                    self.owned_utxos.extend(selected_utxos);
+                    // --- Need to re-acquire pending lock to unmark ---
+                      let mut pending_revert = PENDING_UTXOS.lock().expect("Failed to lock PENDING_UTXOS for kernel fail revert"); // Acquire lock again
+                      for input in &selected_inputs { // Use a borrow (&) instead of moving 
+                          pending_revert.remove(&input.commitment); 
+                      }
+                    PluribitError::ValidationError(e)
+                })?;
             
         // 5. Assemble the final transaction
         log("[WALLET] Assembling final transaction...");
@@ -553,7 +540,7 @@ impl Wallet {
         let (aggregated_proof, _commitments) = mimblewimble::create_aggregated_range_proof(
             &output_values,
             &output_blindings,
-        ).map_err(|e| e.to_string())?;
+        ).map_err(|e| PluribitError::ValidationError(format!("Failed to create aggregated range proof: {}", e)))?;
 
         Ok(Transaction {
             inputs: selected_inputs,
@@ -578,29 +565,33 @@ impl Wallet {
  }  
 
 /// A public helper function to create a single stealth output.
-/// Returns the transaction output and the blinding factor used.
-pub fn create_stealth_output(
-    value: u64,
-    scan_pub: &RistrettoPoint,
-) -> Result<(TransactionOutput, Scalar), String> {
-    let r = Scalar::random(&mut OsRng);
-    let blinding = Scalar::random(&mut OsRng);
+ /// Returns the transaction output and the blinding factor used.
+ pub fn create_stealth_output(
+     value: u64,
+     scan_pub: &RistrettoPoint,
+ ) -> Result<(TransactionOutput, Scalar), String> {
+     let r = Scalar::random(&mut OsRng);
+     let blinding = Scalar::random(&mut OsRng); // Generate the blinding factor
 
-    let (ephemeral_key, payload, view_tag) = stealth::encrypt_stealth_out(&r, scan_pub, value, &blinding); 
+     // Perform stealth encryption
+     let (ephemeral_key, payload, view_tag) = stealth::encrypt_stealth_out(&r, scan_pub, value, &blinding);
 
-    let (range_proof, commitment) = mimblewimble::create_range_proof(value, &blinding)
-        .map_err(|e| e.to_string())?;
+     // Create the Pedersen commitment directly using the value and blinding factor
+     let commitment_point = mimblewimble::commit(value, &blinding)
+         .map_err(|e| e.to_string())?; // Handle potential error from commit
+     let commitment_bytes = commitment_point.compress().to_bytes().to_vec(); // Get the compressed bytes
 
-    Ok((
-        TransactionOutput {
-            commitment: commitment.to_bytes().to_vec(),
-            ephemeral_key: Some(ephemeral_key.compress().to_bytes().to_vec()),
-            stealth_payload: Some(payload),
-             view_tag: Some(vec![view_tag]),
-        },
-        blinding,
-    ))
-}
+     // Construct the TransactionOutput
+     Ok((
+         TransactionOutput {
+             commitment: commitment_bytes, // Use the directly calculated commitment bytes
+             ephemeral_key: Some(ephemeral_key.compress().to_bytes().to_vec()),
+             stealth_payload: Some(payload),
+             view_tag: Some(vec![view_tag]), // Ensure view_tag is wrapped in vec![u8]
+         },
+         blinding, // Return the blinding factor used for commitment & proof generation
+     ))
+ }
 
 #[cfg(test)]
 mod tests {
@@ -755,8 +746,7 @@ fn test_wallet_create_transaction() {
         // Try to send more than available
         let result = sender.create_transaction(150, 10, &recipient.scan_pub);
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("Insufficient"));
-        
+        assert!(result.unwrap_err().to_string().contains("Insufficient"));
         // Clean up
         crate::blockchain::UTXO_SET.lock().unwrap().clear();
         // Wallet should still have original UTXO

@@ -11,6 +11,8 @@ pub enum PluribitError {
     DeserializationError(String),
     HashError(String),
     VdfError(String),
+    NetworkError(String),
+    NotSupported(String),
     ValidationError(String),
     ResourceExhaustedError(String),
     ThreadError(String),
@@ -20,6 +22,7 @@ pub enum PluribitError {
     ComputationError(String),
     InvalidBlock(String), 
         InvalidOutputCommitment,
+         InsufficientFunds(String),
     InvalidInputCommitment,
     InvalidRangeProof,
     InvalidKernelExcess,
@@ -47,7 +50,7 @@ impl fmt::Display for PluribitError {
             PluribitError::InvalidInput(msg) => write!(f, "Invalid input: {}", msg),
             PluribitError::ComputationError(msg) => write!(f, "Computation error: {}", msg),
             PluribitError::InvalidBlock(msg) => write!(f, "Invalid block: {}", msg),  
-                        PluribitError::InvalidOutputCommitment => write!(f, "Invalid output commitment"),
+            PluribitError::InvalidOutputCommitment => write!(f, "Invalid output commitment"),
             PluribitError::InvalidInputCommitment => write!(f, "Invalid input commitment"),
             PluribitError::InvalidRangeProof => write!(f, "Invalid range proof"),
             PluribitError::InvalidKernelExcess => write!(f, "Invalid kernel excess"),
@@ -57,7 +60,10 @@ impl fmt::Display for PluribitError {
             PluribitError::DoubleVote(msg) => write!(f, "Double vote detected: {}", msg),
             PluribitError::InsufficientStake => write!(f, "Insufficient stake for operation"),
             PluribitError::InvalidVote(msg) => write!(f, "Invalid vote: {}", msg),
-        
+            PluribitError::NetworkError(msg) => write!(f, "Network error: {}", msg),
+            PluribitError::NotSupported(msg) => write!(f, "Not supported: {}", msg),
+            PluribitError::InsufficientFunds(msg) => write!(f, "Insufficient funds: {}", msg),
+
         }
     }
 }
