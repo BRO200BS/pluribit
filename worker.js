@@ -865,7 +865,9 @@ export async function main() {
                 case 'swapRefund':
                     await handleSwapRefund(params);
                     break;
-                
+                case 'swapClaim':
+                    await handleSwapClaim(params);
+                    break;                
                 case 'shutdown':
                   await gracefulShutdown(0); // the worker’s gracefulShutdown closes libp2p & miner, then process.exit(0)
                   break;
@@ -2394,100 +2396,606 @@ await p2p.subscribe(TOPICS.SYNC, async (message, { from }) => {
 
 
 // --- PAYMENT CHANNEL CLI HANDLERS ---
+async function handleChannelCloseNonce(message, { from }) {
+    const channelIdBytes = message.channelId;
+    const theirNoncePoint = message.publicNoncePoint;
+    const channelIdHex = Buffer.from(channelIdBytes).toString('hex');
+    const channelIdShort = channelIdHex.substring(0, 8);
+    const sessionId = `close_${channelIdHex}`;
+    
+    log(`[CHANNEL] Received CLOSE_NONCE for ${channelIdShort} from ${from.toString().slice(-6)}`);
+    
+    try {
+        const session = workerState.musigSessions.get(sessionId);
+        if (!session || session.type !== 'close') {
+            log(`[CHANNEL] No matching closing session for ${channelIdShort}`, 'warn');
+            return;
+        }
 
+        session.theirNoncePoint = theirNoncePoint;
+        session.state = 'NONCE_RECEIVED';
+
+        // 1. Get secrets and pubkeys
+        const secret = await pluribit.wallet_session_get_spend_privkey(session.walletId);
+        const { channelData } = session;
+        const myParty = channelData.role; // 'A' or 'B'
+        const counterpartyPubkey = (myParty === 'A') 
+            ? channelData.channel.party_b_pubkey 
+            : channelData.channel.party_a_pubkey;
+        
+        // 2. Call Wasm to create partial sig for closing tx
+        const { channel, settlement_tx, metadata } = await pluribit.payment_channel_close_cooperative(
+            channelData.channel,
+            secret,
+            myParty,
+            session.myNonce,
+            session.myNoncePoint,
+            session.theirNoncePoint,
+            counterpartyPubkey,
+            await db.getTipHeight()
+        );
+
+        // 3. Store our partial sig
+        session.myPartialSig = metadata.my_partial_signature;
+        session.incompleteTx = settlement_tx;
+        session.metadata = metadata;
+        session.state = 'SIG_SENT';
+        
+        // Update channel state in memory
+        channelData.channel = channel; // Channel state is now 'Closing'
+        workerState.paymentChannels.set(channelIdHex, channelData);
+
+        // 4. Publish our partial signature
+        await workerState.p2p.publish(TOPICS.CHANNEL_CLOSE_SIG, {
+            channelId: channelIdBytes,
+            partialSignature: session.myPartialSig,
+            fundingTx: settlement_tx, // Naming is from proto, but this is the settlement tx
+        });
+        
+        log(`[CHANNEL] ✓ Close step 2/3: Partial signature sent for ${channelIdShort}.`, 'success');
+
+    } catch (e) {
+        const msg = e?.message || String(e);
+        log(`[CHANNEL] ✗ Failed to process CLOSE_NONCE: ${msg}`, 'error');
+        workerState.musigSessions.delete(sessionId);
+    }
+}
 async function handleChannelOpen({ walletId, counterpartyPubkey, myAmount, theirAmount }) {
-    log(`[CHANNEL] Received command to open channel with ${counterpartyPubkey}`);
-    // TODO:
-    // 1. Get wallet secret key: `const secret = await pluribit.wallet_session_get_spend_privkey(walletId);`
-    // 2. Call Wasm: `const result = await pluribit.payment_channel_open(secret, myAmount, ...);`
-    // 3. Deserialize `result`: `const { channel, proposal } = JSON.parse(result);`
-    // 4. Store channel: `workerState.paymentChannels.set(channel.channel_id, channel);`
-    // 5. Publish proposal: `await workerState.p2p.publish(TOPICS.CHANNEL_PROPOSE, proposal);`
-    // 6. Log success to user.
-    log("[CHANNEL] STUB: handleChannelOpen logic not yet implemented.", 'warn');
+    log(`[CHANNEL] Proposing channel with ${counterpartyPubkey.substring(0,10)}... for ${myAmount} (self) and ${theirAmount} (peer)`);
+    try {
+        // 1. Get wallet secret key
+        const secret = await pluribit.wallet_session_get_spend_privkey(walletId);
+
+        // 2. Decode counterparty pubkey
+        const pubkeyBytes = Buffer.from(counterpartyPubkey, 'hex');
+        if (pubkeyBytes.length !== 32) {
+            throw new Error("Counterparty pubkey must be 32 bytes (64 hex chars)");
+        }
+        
+        // 3. Call Wasm
+        // This Rust function returns an object: { channel, proposal } [cite: 883]
+        const result = await pluribit.payment_channel_open(
+            secret,
+            myAmount,
+            pubkeyBytes,
+            theirAmount,
+            BigInt(2880) // Default dispute period, e.g., ~1 day [cite: 1131]
+        );
+
+        const { channel, proposal } = result;
+        const channelIdHex = Buffer.from(channel.channel_id).toString('hex');
+        const channelIdShort = channelIdHex.substring(0, 8);
+
+        // 4. Store our channel state
+        workerState.paymentChannels.set(channelIdHex, { channel, role: 'A', state: 'NEGOTIATING' });
+        log(`[CHANNEL] ✓ Stored local channel state ${channelIdShort}...`, 'info');
+
+        // 5. Publish proposal to the network
+        await workerState.p2p.publish(TOPICS.CHANNEL_PROPOSE, proposal);
+        log(`[CHANNEL] ✓ Published channel proposal ${channelIdShort} to network.`, 'success');
+
+        // 6. Log success to user
+        parentPort.postMessage({ type: 'log', payload: { level: 'success', message: `Channel ${channelIdShort} proposed. Waiting for peer to accept.` }});
+
+    } catch (e) {
+        const msg = e?.message || String(e);
+        log(`[CHANNEL] ✗ Failed to open channel: ${msg}`, 'error');
+        parentPort.postMessage({ type: 'error', error: `Channel open failed: ${msg}` });
+    }
 }
 
 async function handleChannelList() {
-    log("[CHANNEL] STUB: handleChannelList logic not yet implemented.", 'warn');
-    // TODO: List channels from `workerState.paymentChannels`
-    // TODO: List proposals from `workerState.pendingChannelProposals`
+    log('[CHANNEL] --- Pending Proposals ---', 'info');
+    if (workerState.pendingChannelProposals.size === 0) {
+        log('  (None)');
+    } else {
+        for (const [id, proposal] of workerState.pendingChannelProposals.entries()) {
+            const idShort = id.substring(0, 8);
+            log(`  - ID: ${idShort}... (A: ${proposal.party_a_funding}, B: ${proposal.party_b_funding})`);
+        }
+    }
+
+    log('[CHANNEL] --- Active Channels ---', 'info');
+    if (workerState.paymentChannels.size === 0) {
+        log('  (None)');
+    } else {
+        for (const [id, chanData] of workerState.paymentChannels.entries()) {
+            const idShort = id.substring(0, 8);
+            log(`  - ID: ${idShort}... (State: ${chanData.state}, Bal: ${chanData.channel.party_a_balance} / ${chanData.channel.party_b_balance})`);
+        }
+    }
 }
+
+
+
+// --- PAYMENT CHANNEL CLI HANDLERS ---
+
 
 
 
 async function handleChannelFund({ walletId, channelId }) {
-    log(`[CHANNEL] Received command to fund channel ${channelId}`);
-    // TODO: This is the start of the MuSig2 "dance"
-    // 1. Get channel from `workerState.paymentChannels`.
-    // 2. Generate nonces (requires a new Wasm function `generate_musig_nonces()`).
-    // 3. Store nonces in `workerState.musigSessions`.
-    // 4. Publish fund_nonce: `await workerState.p2p.publish(TOPICS.CHANNEL_FUND_NONCE, { channelId, publicNoncePoint, ... });`
-    log("[CHANNEL] STUB: handleChannelFund logic not yet implemented.", 'warn');
+    const channelIdShort = channelId.substring(0, 8);
+    log(`[CHANNEL] Initiating funding for ${channelIdShort}...`);
+    try {
+        // 1. Get channel data
+        const channelData = workerState.paymentChannels.get(channelId);
+        if (!channelData || (channelData.state !== 'ACCEPTED' && channelData.state !== 'READY_TO_FUND')) {
+            throw new Error(`Channel ${channelIdShort} not found or not in ACCEPTED/READY_TO_FUND state.`);
+        }
+        
+        // 2. Generate our nonces for this session
+        const { secret_nonce, public_nonce_point } = await pluribit.generate_musig_nonces();
+        const sessionId = `fund_${channelId}`;
+
+        // 3. Store our session data
+        workerState.musigSessions.set(sessionId, {
+            type: 'fund',
+            channelId,
+            walletId,
+            channelData,
+            myNonce: secret_nonce,
+            myNoncePoint: public_nonce_point,
+            theirNoncePoint: null,
+            state: 'NONCE_SENT',
+        });
+
+        // 4. Publish our public nonce
+        await workerState.p2p.publish(TOPICS.CHANNEL_FUND_NONCE, {
+            channelId: channelData.channel.channel_id,
+            publicNoncePoint: public_nonce_point,
+        });
+        
+        log(`[CHANNEL] ✓ Funding step 1/3: Nonce sent for ${channelIdShort}. Waiting for peer...`, 'success');
+
+    } catch (e) {
+        const msg = e?.message || String(e);
+        log(`[CHANNEL] ✗ Failed to initiate funding: ${msg}`, 'error');
+        parentPort.postMessage({ type: 'error', error: `Channel fund failed: ${msg}` });
+    }
 }
 
 async function handleChannelPay({ walletId, channelId, amount }) {
-    log(`[CHANNEL] Received command to pay ${amount} in channel ${channelId}`);
-    // TODO: This is the start of the payment "dance"
-    // 1. Get channel and wallet keys.
-    // 2. Call Wasm `payment_channel_make_payment` (which is now `initiate_payment`).
-    // 3. This returns a `proposal`.
-    // 4. Publish proposal: `await workerState.p2p.publish(TOPICS.CHANNEL_PAY_PROPOSE, proposal);`
-    log("[CHANNEL] STUB: handleChannelPay logic not yet implemented.", 'warn');
-}
+    log(`[CHANNEL] Attempting to pay ${amount} in channel ${channelId}`);
+    try {
+        // 1. Get channel and wallet keys
+        const channelData = workerState.paymentChannels.get(channelId);
+        if (!channelData) {
+            throw new Error(`Channel ${channelId} not found.`);
+        }
+        if (channelData.state !== 'OPEN') {
+             throw new Error(`Channel is not open. Current state: ${channelData.state}`);
+        }
+        const secret = await pluribit.wallet_session_get_spend_privkey(walletId);
 
+        // 2. Call Wasm to create a payment proposal
+        const paymentProposal = await pluribit.payment_channel_make_payment(
+            secret,
+            channelData.channel,
+            amount
+        );
+
+        // 3. Store the new proposed state
+        channelData.pendingPayment = paymentProposal;
+        workerState.paymentChannels.set(channelId, channelData);
+
+        // 4. Publish proposal
+        await workerState.p2p.publish(TOPICS.CHANNEL_PAY_PROPOSE, paymentProposal);
+
+        log(`[CHANNEL] ✓ Payment proposal for ${amount} sent. Waiting for acceptance.`, 'success');
+
+    } catch (e) {
+        const msg = e?.message || String(e);
+        log(`[CHANNEL] ✗ Failed to send payment: ${msg}`, 'error');
+        parentPort.postMessage({ type: 'error', error: `Payment failed: ${msg}` });
+    }
+}
+async function handleChannelCloseSig(message, { from }) {
+    const channelIdBytes = message.channelId;
+    const theirPartialSig = message.partialSignature;
+    const channelIdHex = Buffer.from(channelIdBytes).toString('hex');
+    const channelIdShort = channelIdHex.substring(0, 8);
+    const sessionId = `close_${channelIdHex}`;
+
+    log(`[CHANNEL] Received CLOSE_SIG for ${channelIdShort} from ${from.toString().slice(-6)}`);
+
+    try {
+        const session = workerState.musigSessions.get(sessionId);
+        if (!session || session.type !== 'close' || !session.myPartialSig) {
+            log(`[CHANNEL] No matching/ready closing session for ${channelIdShort}`, 'warn');
+            return;
+        }
+
+        // 1. Get pubkeys
+        const { channelData } = session;
+        const party_a_pubkey = channelData.channel.party_a_pubkey;
+        const party_b_pubkey = channelData.channel.party_b_pubkey;
+
+        // 2. Call Wasm to finalize the transaction
+        const { updated_channel, final_tx } = await pluribit.finalize_cooperative_close(
+            channelData.channel,
+            session.incompleteTx,
+            session.metadata,
+            theirPartialSig,
+            party_a_pubkey,
+            party_b_pubkey
+        );
+        
+        // 3. Broadcast the final transaction!
+        await workerState.p2p.stemTransaction(final_tx);
+        
+        // 4. Update channel state
+        channelData.channel = updated_channel; // State is now 'Closed'
+        channelData.state = 'CLOSED'; 
+        workerState.paymentChannels.set(channelIdHex, channelData);
+        workerState.musigSessions.delete(sessionId);
+        
+        log(`[CHANNEL] ✓✓✓ Close step 3/3: Channel ${channelIdShort} closed! Transaction broadcasted.`, 'success');
+        parentPort.postMessage({ type: 'log', payload: { level: 'success', message: `Channel ${channelIdShort} closed cooperatively.` }});
+
+    } catch (e) {
+        const msg = e?.message || String(e);
+        log(`[CHANNEL] ✗ Failed to process CLOSE_SIG: ${msg}`, 'error');
+        workerState.musigSessions.delete(sessionId);
+    }
+}
 async function handleChannelClose({ walletId, channelId }) {
-    log(`[CHANNEL] Received command to close channel ${channelId}`);
-    // TODO: This is the start of the *cooperative close* MuSig2 "dance"
-    // (Similar to handleChannelFund)
-    log("[CHANNEL] STUB: handleChannelClose logic not yet implemented.", 'warn');
+    const channelIdShort = channelId.substring(0, 8);
+    log(`[CHANNEL] Initiating cooperative close for ${channelIdShort}...`);
+    try {
+        // 1. Get channel data
+        const channelData = workerState.paymentChannels.get(channelId);
+        if (!channelData || channelData.state !== 'OPEN') {
+            throw new Error(`Channel ${channelIdShort} not found or not in OPEN state.`);
+        }
+        
+        // 2. Generate our nonces for this session
+        const { secret_nonce, public_nonce_point } = await pluribit.generate_musig_nonces();
+        const sessionId = `close_${channelId}`;
+
+        // 3. Store our session data
+        workerState.musigSessions.set(sessionId, {
+            type: 'close',
+            channelId,
+            walletId,
+            channelData,
+            myNonce: secret_nonce,
+            myNoncePoint: public_nonce_point,
+            theirNoncePoint: null,
+            state: 'NONCE_SENT',
+        });
+
+        // 4. Publish our public nonce
+        await workerState.p2p.publish(TOPICS.CHANNEL_CLOSE_NONCE, {
+            channelId: channelData.channel.channel_id,
+            publicNoncePoint: public_nonce_point,
+        });
+        
+        log(`[CHANNEL] ✓ Close step 1/3: Nonce sent for ${channelIdShort}. Waiting for peer...`, 'success');
+
+    } catch (e) {
+        const msg = e?.message || String(e);
+        log(`[CHANNEL] ✗ Failed to initiate close: ${msg}`, 'error');
+        parentPort.postMessage({ type: 'error', error: `Channel close failed: ${msg}` });
+    }
 }
 
 // --- PAYMENT CHANNEL P2P HANDLERS ---
 
-async function handleChannelPropose(proposal, from) {
-    // TODO:
-    // 1. Generate a unique ID for the proposal.
-    // 2. Store it: `workerState.pendingChannelProposals.set(proposalId, proposal);`
-    // 3. Log to user: `log(Received channel proposal [id] from [from]. Type 'channel_accept [id]' to accept.)`
-    log(`[CHANNEL] STUB: Received channel proposal from ${from}. Logic not implemented.`, 'warn');
+async function handleChannelPropose(proposal, { from }) {
+    try {
+        const channelIdBytes = proposal?.channel_id;
+        if (!channelIdBytes || channelIdBytes.length === 0) {
+            throw new Error("Received invalid channel proposal");
+        }
+        
+        const channelIdHex = Buffer.from(channelIdBytes).toString('hex');
+        const channelIdShort = channelIdHex.substring(0, 8);
+        const peerShort = from.toString().slice(-6);
+
+        if (workerState.pendingChannelProposals.has(channelIdHex) || workerState.paymentChannels.has(channelIdHex)) {
+            log(`[CHANNEL] Ignoring duplicate channel proposal ${channelIdShort} from peer ${peerShort}`, 'debug');
+            return;
+        }
+
+        // 1. Store the proposal
+        workerState.pendingChannelProposals.set(channelIdHex, { proposal, fromPeer: from.toString() });
+        log(`[CHANNEL] Received new channel proposal ${channelIdShort} from peer ${peerShort}.`, 'info');
+
+        // 2. Log to user
+        parentPort.postMessage({ 
+            type: 'log', 
+            payload: { 
+                level: 'success', 
+                message: `[CHANNEL] New proposal ${channelIdShort} received. Type 'channel_accept ${channelIdHex}' to accept.` 
+            }
+        });
+
+    } catch (e) {
+        const msg = e?.message || String(e);
+        log(`[CHANNEL] ✗ Failed to handle channel proposal: ${msg}`, 'error');
+    }
 }
 
-async function handleChannelAccept(acceptance, from) {
-    // TODO:
-    // 1. Get our channel: `const channel = workerState.paymentChannels.get(acceptance.channel_id);`
-    // 2. Call Wasm: `const updatedChannel = await pluribit.payment_channel_complete_open(channel, acceptance, ...);`
-    // 3. Store updated channel.
-    // 4. Log to user: `log(Channel ${acceptance.channel_id} is now ready to fund. Run 'channel_fund ...')`
-    log(`[CHANNEL] STUB: Received channel acceptance from ${from}. Logic not implemented.`, 'warn');
+async function handleChannelAccept(acceptance, { from }) {
+    // This is Alice (Party A) receiving Bob's acceptance
+    const channelIdBytes = acceptance?.channel_id;
+    if (!channelIdBytes || channelIdBytes.length === 0) return;
+    
+    const channelIdHex = Buffer.from(channelIdBytes).toString('hex');
+    const channelIdShort = channelIdHex.substring(0, 8);
+    log(`[CHANNEL] Received acceptance for channel ${channelIdShort} from ${from.toString().slice(-6)}`);
+
+    try {
+        // 1. Get our channel
+        const channelData = workerState.paymentChannels.get(channelIdHex);
+        if (!channelData) {
+            throw new Error(`Received acceptance for unknown channel ${channelIdHex}`);
+        }
+        if (channelData.state !== 'PROPOSED') {
+            throw new Error(`Received acceptance for channel in wrong state: ${channelData.state}`);
+        }
+
+        // 2. Get wallet secret
+        const secret = await pluribit.wallet_session_get_spend_privkey(channelData.walletId);
+
+        // 3. Call Wasm to complete the opening process
+        const updatedChannel = await pluribit.payment_channel_complete_open(
+            secret,
+            channelData.channel,
+            acceptance
+        );
+
+        // 4. Store updated channel, now ready to be funded
+        channelData.channel = updatedChannel;
+        channelData.state = 'ACCEPTED'; // Both parties have agreed, next step is funding
+        workerState.paymentChannels.set(channelIdHex, channelData);
+
+        // 5. Log to user
+        log(`[CHANNEL] ✓ Channel ${channelIdShort} is now accepted by both parties.`, 'success');
+        parentPort.postMessage({ 
+            type: 'log', 
+            payload: { 
+                level: 'success', 
+                message: `Channel ${channelIdShort} is now ready to fund. Run 'channel_fund ${channelIdHex}'` 
+            }
+        });
+
+    } catch (e) {
+        const msg = e?.message || String(e);
+        log(`[CHANNEL] ✗ Failed to process channel acceptance: ${msg}`, 'error');
+    }
 }
 
-async function handleChannelFundNonce(message, from) {
-    // TODO: This is the complex part of the "dance"
-    // (See logic described in my previous response)
-    log(`[CHANNEL] STUB: Received FUND_NONCE from ${from}. Logic not implemented.`, 'warn');
+async function handleChannelFundNonce(message, { from }) {
+    const channelIdBytes = message.channelId;
+    const theirNoncePoint = message.publicNoncePoint;
+    const channelIdHex = Buffer.from(channelIdBytes).toString('hex');
+    const channelIdShort = channelIdHex.substring(0, 8);
+    const sessionId = `fund_${channelIdHex}`;
+    
+    log(`[CHANNEL] Received FUND_NONCE for ${channelIdShort} from ${from.toString().slice(-6)}`);
+    
+    try {
+        const session = workerState.musigSessions.get(sessionId);
+        if (!session || session.type !== 'fund') {
+            log(`[CHANNEL] No matching funding session for ${channelIdShort}`, 'warn');
+            return;
+        }
+
+        // Store their nonce
+        session.theirNoncePoint = theirNoncePoint;
+        session.state = 'NONCE_RECEIVED';
+
+        // 1. Get secrets and pubkeys
+        const secret = await pluribit.wallet_session_get_spend_privkey(session.walletId);
+        const { channelData } = session;
+        const myParty = channelData.role; // 'A' or 'B'
+        const counterpartyPubkey = (myParty === 'A') 
+            ? channelData.channel.party_b_pubkey 
+            : channelData.channel.party_a_pubkey;
+
+        // TODO: In a real implementation, you must fetch funding inputs from the wallet
+        const myFundingInputs = []; // Placeholder
+
+        // 2. Call Wasm to create partial sig
+        const { channel, funding_tx, metadata } = await pluribit.payment_channel_fund(
+            channelData.channel,
+            secret,
+            myParty,
+            session.myNonce,
+            session.myNoncePoint,
+            session.theirNoncePoint,
+            counterpartyPubkey,
+            myFundingInputs, // Pass real inputs here
+            await db.getTipHeight() // Current height
+        );
+        
+        // 3. Store our partial sig and the incomplete tx
+        session.myPartialSig = metadata.my_partial_signature;
+        session.incompleteTx = funding_tx;
+        session.metadata = metadata;
+        session.state = 'SIG_SENT';
+        
+        // Update the channel state in worker memory
+        channelData.channel = channel;
+        workerState.paymentChannels.set(channelIdHex, channelData);
+
+        // 4. Publish our partial signature
+        await workerState.p2p.publish(TOPICS.CHANNEL_FUND_SIG, {
+            channelId: channelIdBytes,
+            partialSignature: session.myPartialSig,
+            fundingTx: funding_tx,
+        });
+        
+        log(`[CHANNEL] ✓ Funding step 2/3: Partial signature sent for ${channelIdShort}.`, 'success');
+
+    } catch (e) {
+        const msg = e?.message || String(e);
+        log(`[CHANNEL] ✗ Failed to process FUND_NONCE: ${msg}`, 'error');
+        workerState.musigSessions.delete(sessionId);
+    }
 }
 
-async function handleChannelFundSig(message, from) {
-    // TODO: This is the complex part of the "dance"
-    log(`[CHANNEL] STUB: Received FUND_SIG from ${from}. Logic not implemented.`, 'warn');
+async function handleChannelFundSig(message, { from }) {
+    const channelIdBytes = message.channelId;
+    const theirPartialSig = message.partialSignature;
+    const fundingTx = message.fundingTx; // This is the *counterparty's* view of the tx
+    const channelIdHex = Buffer.from(channelIdBytes).toString('hex');
+    const channelIdShort = channelIdHex.substring(0, 8);
+    const sessionId = `fund_${channelIdHex}`;
+
+    log(`[CHANNEL] Received FUND_SIG for ${channelIdShort} from ${from.toString().slice(-6)}`);
+
+    try {
+        const session = workerState.musigSessions.get(sessionId);
+        if (!session || session.type !== 'fund' || !session.myPartialSig) {
+            log(`[CHANNEL] No matching/ready funding session for ${channelIdShort}`, 'warn');
+            return;
+        }
+
+        // 1. Get pubkeys
+        const { channelData } = session;
+        const party_a_pubkey = channelData.channel.party_a_pubkey;
+        const party_b_pubkey = channelData.channel.party_b_pubkey;
+
+        // 2. Call Wasm to finalize the transaction
+        const { updated_channel, final_tx } = await pluribit.finalize_funding_transaction(
+            channelData.channel,
+            session.incompleteTx, // Our view of the tx
+            session.metadata,
+            theirPartialSig,
+            party_a_pubkey,
+            party_b_pubkey
+        );
+        
+        // 3. Broadcast the final transaction!
+        await workerState.p2p.stemTransaction(final_tx);
+        
+        // 4. Update channel state
+        channelData.channel = updated_channel;
+        channelData.state = 'FUNDING'; // Or whatever 'PendingOpen' is
+        workerState.paymentChannels.set(channelIdHex, channelData);
+        workerState.musigSessions.delete(sessionId); // Clean up session
+        
+        log(`[CHANNEL] ✓✓✓ Funding step 3/3: Channel ${channelIdShort} funded! Transaction broadcasted.`, 'success');
+        parentPort.postMessage({ type: 'log', payload: { level: 'success', message: `Channel ${channelIdShort} funding tx sent!` }});
+
+    } catch (e) {
+        const msg = e?.message || String(e);
+        log(`[CHANNEL] ✗ Failed to process FUND_SIG: ${msg}`, 'error');
+        workerState.musigSessions.delete(sessionId);
+    }
 }
 
-async function handleChannelPayPropose(proposal, from) {
-    // TODO:
-    // 1. Get channel and wallet keys.
-    // 2. Call Wasm `payment_channel_accept_payment`.
-    // 3. This returns an `acceptance`.
-    // 4. Publish acceptance: `await workerState.p2p.publish(TOPICS.CHANNEL_PAY_ACCEPT, acceptance);`
-    log(`[CHANNEL] STUB: Received PAY_PROPOSE from ${from}. Logic not implemented.`, 'warn');
+async function handleChannelPayPropose(proposal, { from }) {
+    // This is the P2P handler for *receiving* a payment
+    log(`[CHANNEL] Received payment proposal for channel ${Buffer.from(proposal.channel_id).toString('hex').substring(0,8)}`);
+    try {
+        const channelIdHex = Buffer.from(proposal.channel_id).toString('hex');
+        const channelData = workerState.paymentChannels.get(channelIdHex);
+        
+        if (!channelData) {
+            throw new Error(`Received payment for unknown channel ${channelIdHex}`);
+        }
+        if (channelData.state !== 'OPEN') {
+            throw new Error(`Channel is not open. Current state: ${channelData.state}`);
+        }
+
+        const secret = await pluribit.wallet_session_get_spend_privkey(channelData.walletId);
+
+        // 1. Call Wasm to validate and accept the payment
+        const paymentAcceptance = await pluribit.payment_channel_accept_payment(
+            secret,
+            channelData.channel,
+            proposal
+        );
+
+        // 2. Update our local channel state with the *new* state from the acceptance
+        channelData.channel = paymentAcceptance.new_commitment; // This is the new, agreed-upon state
+        workerState.paymentChannels.set(channelIdHex, channelData);
+
+        // 3. Publish acceptance
+        await workerState.p2p.publish(TOPICS.CHANNEL_PAY_ACCEPT, paymentAcceptance);
+
+        log(`[CHANNEL] ✓ Payment accepted and signature sent.`, 'success');
+        parentPort.postMessage({ 
+            type: 'log', 
+            payload: { 
+                level: 'success', 
+                message: `[CHANNEL] Payment of ${proposal.amount} received in channel ${channelIdHex.substring(0,8)}.`
+            }
+        });
+
+    } catch (e) {
+        const msg = e?.message || String(e);
+        log(`[CHANNEL] ✗ Failed to accept payment: ${msg}`, 'error');
+    }
 }
 
-async function handleChannelPayAccept(acceptance, from) {
-    // TODO:
-    // 1. Get channel.
-    // 2. Call Wasm `payment_channel_complete_payment`.
-    // 3. Store updated channel.
-    // 4. Log to user: `log(Payment in channel ${acceptance.channel_id} complete.)`
-    log(`[CHANNEL] STUB: Received PAY_ACCEPT from ${from}. Logic not implemented.`, 'warn');
+async function handleChannelPayAccept(acceptance, { from }) {
+    // This is the P2P handler for *completing* a sent payment
+    log(`[CHANNEL] Received payment acceptance for channel ${Buffer.from(acceptance.channel_id).toString('hex').substring(0,8)}`);
+    try {
+        const channelIdHex = Buffer.from(acceptance.channel_id).toString('hex');
+        const channelData = workerState.paymentChannels.get(channelIdHex);
+        
+        if (!channelData) {
+            throw new Error(`Received payment acceptance for unknown channel ${channelIdHex}`);
+        }
+        
+        const secret = await pluribit.wallet_session_get_spend_privkey(channelData.walletId);
+        const pendingProposal = channelData.pendingPayment;
+        if (!pendingProposal) {
+            throw new Error("Received payment acceptance but had no pending proposal.");
+        }
+
+        // 1. Call Wasm to finalize the payment state
+        const updatedChannel = await pluribit.payment_channel_complete_payment(
+            secret,
+            channelData.channel,
+            pendingProposal,
+            acceptance
+        );
+
+        // 2. Store updated channel
+        channelData.channel = updatedChannel;
+        channelData.pendingPayment = null; // Clear the pending proposal
+        workerState.paymentChannels.set(channelIdHex, channelData);
+
+        // 4. Log to user
+        log(`[CHANNEL] ✓ Payment in channel ${channelIdHex.substring(0,8)} complete.`, 'success');
+        parentPort.postMessage({ 
+            type: 'log', 
+            payload: { 
+                level: 'success', 
+                message: `[CHANNEL] Payment sent in channel ${channelIdHex.substring(0,8)}.`
+            }
+        });
+
+    } catch (e) {
+        const msg = e?.message || String(e);
+        log(`[CHANNEL] ✗ Failed to complete payment: ${msg}`, 'error');
+    }
 }
 
 // --- ATOMIC SWAP CLI HANDLERS ---
@@ -2534,9 +3042,25 @@ async function handleSwapInitiate({ walletId, counterpartyPubkey, plbAmount, btc
 }
 
 async function handleSwapList() {
-    log("[SWAP] STUB: handleSwapList logic not yet implemented.", 'warn');
-    // TODO: List swaps from `workerState.atomicSwaps`
-    // TODO: List proposals from `workerState.pendingSwapProposals`
+    log('[SWAP] --- Pending Proposals (Waiting for You) ---', 'info');
+    if (workerState.pendingSwapProposals.size === 0) {
+        log('  (None)');
+    } else {
+        for (const [id, proposal] of workerState.pendingSwapProposals.entries()) {
+            const idShort = id.substring(0, 8);
+            log(`  - ID: ${idShort}... (Offer: ${proposal.alice_amount} PLB for ${proposal.bob_amount} sats)`);
+        }
+    }
+
+    log('[SWAP] --- Active Swaps ---', 'info');
+    if (workerState.atomicSwaps.size === 0) {
+        log('  (None)');
+    } else {
+        for (const [id, swapData] of workerState.atomicSwaps.entries()) {
+            const idShort = id.substring(0, 8);
+            log(`  - ID: ${idShort}... (Role: ${swapData.role}, State: ${swapData.state})`);
+        }
+    }
 }
 
 async function handleSwapRespond({ walletId, swapId, btcAddress, btcTxid, btcVout }) {

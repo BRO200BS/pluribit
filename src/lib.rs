@@ -9,7 +9,7 @@ use serde_json;
 use sha2::{Sha256, Digest};
 use curve25519_dalek::{ristretto::{CompressedRistretto, RistrettoPoint}, scalar::Scalar, traits::Identity};
 use crate::atomic_swap::{AtomicSwap, SwapState};
-use crate::payment_channel::{PaymentChannel, ChannelState, Party};
+use crate::payment_channel::{MuSigKernelMetadata, PaymentChannel, ChannelState, Party};
 use crate::blockchain::Blockchain;
 use crate::vrf::VrfProof;
 use crate::constants::DIFFICULTY_ADJUSTMENT_INTERVAL;
@@ -17,6 +17,8 @@ use crate::wallet::Wallet;
 use bulletproofs::RangeProof;
 use crate::vdf::{VDF, VDFProof};
 use crate::blockchain::get_current_base_reward;
+use curve25519_dalek::constants::RISTRETTO_BASEPOINT_TABLE;
+use rand::thread_rng;
 
 use crate::transaction::{Transaction, TransactionOutput, TransactionKernel};
 use crate::block::Block; 
@@ -2919,7 +2921,6 @@ pub fn get_tx_pool() -> Result<JsValue, JsValue> {
      max_nonce: u64,
  ) -> Result<JsValue, JsValue> {
     use curve25519_dalek::scalar::Scalar;
-    use curve25519_dalek::constants::RISTRETTO_BASEPOINT_TABLE;
     
     // Validate inputs
     if miner_secret_key_bytes.len() != 32 {
@@ -3608,6 +3609,113 @@ pub async fn rewind_block(block_js: JsValue) -> Result<(), JsValue> {
     Ok(())
 }
 
+/// Generates a secret nonce (scalar) and public nonce (point) for MuSig2.
+#[wasm_bindgen]
+pub fn generate_musig_nonces() -> Result<JsValue, JsValue> {
+    let mut rng = thread_rng();
+    let secret_nonce = Scalar::random(&mut rng);
+    // Use B_blinding for the public point to match kernel excess logic
+    let public_nonce_point = &secret_nonce * &crate::mimblewimble::PC_GENS.B_blinding;
+
+    #[derive(Serialize)]
+    struct NonceResult {
+        secret_nonce: Vec<u8>,
+        public_nonce_point: Vec<u8>,
+    }
+
+    let result = NonceResult {
+        secret_nonce: secret_nonce.to_bytes().to_vec(),
+        public_nonce_point: public_nonce_point.compress().to_bytes().to_vec(),
+    };
+
+    serde_wasm_bindgen::to_value(&result).map_err(|e| e.into())
+}
+
+/// Finalizes a 2-of-2 funding transaction after exchanging partial signatures.
+#[wasm_bindgen]
+pub fn finalize_funding_transaction(
+    channel_json: JsValue,
+    incomplete_tx_js: JsValue,
+    metadata_js: JsValue,
+    counterparty_partial_sig_bytes: Vec<u8>,
+    party_a_pubkey_bytes: Vec<u8>,
+    party_b_pubkey_bytes: Vec<u8>,
+) -> Result<JsValue, JsValue> {
+    let mut channel: PaymentChannel = serde_wasm_bindgen::from_value(channel_json)?;
+    let incomplete_tx: Transaction = serde_wasm_bindgen::from_value(incomplete_tx_js)?;
+    let metadata: MuSigKernelMetadata = serde_wasm_bindgen::from_value(metadata_js)?;
+    
+    let counterparty_sig_arr: [u8; 32] = counterparty_partial_sig_bytes.try_into()
+        .map_err(|_| JsValue::from_str("Partial sig must be 32 bytes"))?;
+    
+    let party_a_pubkey = CompressedRistretto::from_slice(&party_a_pubkey_bytes)
+        .map_err(|_| JsValue::from_str("Invalid Party A pubkey"))?
+        .decompress().ok_or_else(|| JsValue::from_str("Failed to decompress Party A pubkey"))?;
+        
+    let party_b_pubkey = CompressedRistretto::from_slice(&party_b_pubkey_bytes)
+        .map_err(|_| JsValue::from_str("Invalid Party B pubkey"))?
+        .decompress().ok_or_else(|| JsValue::from_str("Failed to decompress Party B pubkey"))?;
+
+    let final_tx = channel.finalize_funding_transaction(
+        incomplete_tx,
+        &metadata,
+        &counterparty_sig_arr,
+        &party_a_pubkey,
+        &party_b_pubkey
+    ).map_err(|e| JsValue::from_str(&e.to_string()))?;
+    
+    #[derive(Serialize)]
+    struct FinalizeResult {
+        updated_channel: PaymentChannel,
+        final_tx: Transaction,
+    }
+    
+    let result = FinalizeResult { updated_channel: channel, final_tx };
+    serde_wasm_bindgen::to_value(&result).map_err(|e| e.into())
+}
+
+/// Finalizes a 2-of-2 cooperative close transaction.
+#[wasm_bindgen]
+pub fn finalize_cooperative_close(
+    channel_json: JsValue,
+    incomplete_tx_js: JsValue,
+    metadata_js: JsValue,
+    counterparty_partial_sig_bytes: Vec<u8>,
+    party_a_pubkey_bytes: Vec<u8>,
+    party_b_pubkey_bytes: Vec<u8>,
+) -> Result<JsValue, JsValue> {
+    let mut channel: PaymentChannel = serde_wasm_bindgen::from_value(channel_json)?;
+    let incomplete_tx: Transaction = serde_wasm_bindgen::from_value(incomplete_tx_js)?;
+    let metadata: MuSigKernelMetadata = serde_wasm_bindgen::from_value(metadata_js)?;
+    
+    let counterparty_sig_arr: [u8; 32] = counterparty_partial_sig_bytes.try_into()
+        .map_err(|_| JsValue::from_str("Partial sig must be 32 bytes"))?;
+    
+    let party_a_pubkey = CompressedRistretto::from_slice(&party_a_pubkey_bytes)
+        .map_err(|_| JsValue::from_str("Invalid Party A pubkey"))?
+        .decompress().ok_or_else(|| JsValue::from_str("Failed to decompress Party A pubkey"))?;
+        
+    let party_b_pubkey = CompressedRistretto::from_slice(&party_b_pubkey_bytes)
+        .map_err(|_| JsValue::from_str("Invalid Party B pubkey"))?
+        .decompress().ok_or_else(|| JsValue::from_str("Failed to decompress Party B pubkey"))?;
+
+    let final_tx = channel.finalize_cooperative_close(
+        incomplete_tx,
+        &metadata,
+        &counterparty_sig_arr,
+        &party_a_pubkey,
+        &party_b_pubkey
+    ).map_err(|e| JsValue::from_str(&e.to_string()))?;
+    
+    #[derive(Serialize)]
+    struct FinalizeResult {
+        updated_channel: PaymentChannel,
+        final_tx: Transaction,
+    }
+    
+    let result = FinalizeResult { updated_channel: channel, final_tx };
+    serde_wasm_bindgen::to_value(&result).map_err(|e| e.into())
+}
 
 #[wasm_bindgen]
 pub fn wallet_unscan_block(wallet_json: &str, block_js: JsValue) -> Result<String, JsValue> {
