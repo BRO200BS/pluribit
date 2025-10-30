@@ -137,6 +137,7 @@ message DandelionStem {
   uint64 timestamp = 3; // When stem phase started
 }
 
+// Marker for DB recovery (NOT a P2P message)
 message ReorgMarker {
   uint64 original_tip_height = 1;
   uint64 new_tip_height = 2;
@@ -146,10 +147,121 @@ message ReorgMarker {
   uint64 timestamp = 6;
 }
 
+// --- ATOMIC SWAP MESSAGES ---
+
+// Based on the AdaptorSignature struct in src/adaptor.rs
+message AdaptorSignature {
+    bytes public_nonce = 1;
+    bytes adaptor_point = 2;
+    bytes pre_signature = 3;
+    bytes challenge = 4;
+}
+
+// Based on the AtomicSwap struct in src/atomic_swap.rs
+message AtomicSwap {
+  bytes swap_id = 1;
+  uint64 state_enum = 2; // Using an int for the enum
+  uint64 alice_amount = 3;
+  bytes alice_pubkey = 4;
+  bytes alice_commitment = 5;
+  // alice_blinding is secret, not sent
+  optional AdaptorSignature alice_adaptor_sig = 6;
+  uint64 alice_timeout_height = 7;
+  uint64 bob_amount = 8;
+  bytes bob_pubkey = 9;
+  string bob_btc_address = 10;
+  string bob_btc_txid = 11;
+  uint32 bob_btc_vout = 12;
+  bytes bob_adaptor_sig = 13;
+  uint64 bob_timeout_height = 14;
+  bytes shared_adaptor_point = 15;
+  // adaptor_secret is secret, not sent
+  bytes secret_hash = 16;
+  uint64 created_at = 17;
+  uint64 expires_at = 18;
+  uint64 last_updated = 19;
+}
+
+message SwapAliceAdaptorSig {
+    bytes swap_id = 1;
+    AdaptorSignature adaptor_sig = 2;
+}
+
+// --- PAYMENT CHANNEL MESSAGES ---
+
+message ChannelProposal {
+  bytes channel_id = 1;
+  uint32 version = 2;
+  bytes party_a_pubkey = 3;
+  uint64 party_a_funding = 4;
+  bytes party_b_pubkey = 5;
+  uint64 party_b_funding = 6;
+  uint64 dispute_period = 7;
+  uint64 min_confirmations = 8;
+  uint64 created_at = 9;
+}
+
+message CommitmentState {
+  uint64 sequence_number = 1;
+  uint32 owner_party_enum = 2; // 0=A, 1=B
+  uint64 owner_balance = 3;
+  uint64 counterparty_balance = 4;
+  Transaction commitment_tx = 5;
+  bytes owner_blinding = 6;
+  bytes counterparty_blinding = 7;
+  AdaptorSignature adaptor_signature = 8;
+  bytes revocation_point = 9;
+}
+
+message ChannelAcceptance {
+  bytes channel_id = 1;
+  CommitmentState party_b_commitment = 2;
+  bytes party_b_revocation_point = 3;
+  uint64 accepted_at = 4;
+}
+
+message ChannelNonce {
+    bytes channel_id = 1;
+    bytes public_nonce_point = 2; // R_i
+}
+
+message ChannelPartialSig {
+    bytes channel_id = 1;
+    bytes partial_signature = 2; // s_i
+    // We also need to send the final funding tx
+    // so the counterparty can verify the signature.
+    Transaction funding_tx = 3; 
+}
+
+message RevocationData {
+    uint32 party_enum = 1;
+    uint64 sequence_number = 2;
+    bytes revocation_secret = 3;
+    bytes revocation_point = 4;
+    uint64 revoked_at = 5;
+}
+
+message PaymentProposal {
+    bytes channel_id = 1;
+    uint64 new_sequence = 2;
+    uint64 amount = 3;
+    uint32 sender_party_enum = 4;
+    uint64 new_balance_a = 5;
+    uint64 new_balance_b = 6;
+    CommitmentState new_commitment = 7;
+    optional RevocationData old_revocation = 8;
+    uint64 timestamp = 9;
+}
+
+message PaymentAcceptance {
+    bytes channel_id = 1;
+    uint64 sequence = 2;
+    CommitmentState new_commitment = 3;
+    optional RevocationData old_revocation = 4;
+    uint64 accepted_at = 5;
+}
+
 // Top-level message wrapper.
-// Rationale: Using a 'oneof' ensures that each P2P message has exactly one
-// payload type. This provides a single, type-safe entry point for all network
-// traffic, simplifying the dispatch logic and preventing ambiguity.
 message P2pMessage {
   oneof payload {
     Block block = 1;
@@ -159,6 +271,21 @@ message P2pMessage {
     GetHashesRequest get_hashes_request = 5;
     HashesResponse hashes_response = 6;
     SyncMessage sync_message = 7;
-    DandelionStem dandelion_stem = 8; // NEW
+    DandelionStem dandelion_stem = 8;
+    
+    // Atomic Swaps
+    AtomicSwap swap_propose = 9;
+    AtomicSwap swap_respond = 10;
+    SwapAliceAdaptorSig swap_alice_adaptor_sig = 11;
+    
+    // Payment Channels
+    ChannelProposal channel_propose = 12;
+    ChannelAcceptance channel_accept = 13;
+    ChannelNonce channel_fund_nonce = 14;
+    ChannelPartialSig channel_fund_sig = 15;
+    PaymentProposal channel_pay_propose = 16;
+    PaymentAcceptance channel_pay_accept = 17;
+    ChannelNonce channel_close_nonce = 18;
+    ChannelPartialSig channel_close_sig = 19;
   }
 }

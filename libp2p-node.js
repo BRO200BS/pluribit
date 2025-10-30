@@ -1486,6 +1486,23 @@ export class PluribitP2P {
             case TOPICS.GET_HASHES_REQUEST: return 'getHashesRequest';
             case TOPICS.HASHES_RESPONSE: return 'hashesResponse';
             case TOPICS.SYNC: return 'syncMessage';
+            case TOPICS.DANDELION_STEM: return 'dandelionStem';
+
+            // --- Atomic Swaps ---
+            case TOPICS.SWAP_PROPOSE: return 'swapPropose';
+            case TOPICS.SWAP_RESPOND: return 'swapRespond';
+            case TOPICS.SWAP_ALICE_ADAPTOR_SIG: return 'swapAliceAdaptorSig';
+            
+            // --- Payment Channels ---
+            case TOPICS.CHANNEL_PROPOSE: return 'channelPropose';
+            case TOPICS.CHANNEL_ACCEPT: return 'channelAccept';
+            case TOPICS.CHANNEL_FUND_NONCE: return 'channelFundNonce';
+            case TOPICS.CHANNEL_FUND_SIG: return 'channelFundSig';
+            case TOPICS.CHANNEL_PAY_PROPOSE: return 'channelPayPropose';
+            case TOPICS.CHANNEL_PAY_ACCEPT: return 'channelPayAccept';
+            case TOPICS.CHANNEL_CLOSE_NONCE: return 'channelCloseNonce';
+            case TOPICS.CHANNEL_CLOSE_SIG: return 'channelCloseSig';
+
             default: return null;
         }
     }
