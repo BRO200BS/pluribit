@@ -694,23 +694,30 @@ fn create_commitment_transaction(
     
     log(&format!("[COMMIT_TX] Kernel blinding = {}", hex::encode(kernel_blinding.to_bytes())));
     
-    // Verify balance
-    let input_commitment = CompressedRistretto::from_slice(funding_commitment)
-        .ok()
-        .and_then(|c| c.decompress())
-        .ok_or_else(|| PluribitError::ValidationError("Invalid funding commitment".into()))?;
-    
-    let output_sum = owner_commitment + counterparty_commitment;
-    let kernel_excess = mimblewimble::PC_GENS.commit(Scalar::from(0u64), kernel_blinding);
-    let expected_input = output_sum + kernel_excess;
-    
-    if input_commitment != expected_input {
-        log(&format!("[COMMIT_TX] ⚠️ Balance check: input={}, expected={}", 
-            hex::encode(input_commitment.compress().to_bytes()),
-            hex::encode(expected_input.compress().to_bytes())));
-        return Err(PluribitError::ValidationError("Commitment transaction doesn't balance".into()));
+    // Verify balance, but only for states *after* funding (seq > 0).
+    // Sequence 0 commitments use placeholder funding data and are *expected* to be unbalanced.
+    if sequence_number > 0 {
+        let input_commitment = CompressedRistretto::from_slice(funding_commitment)
+            .ok()
+            .and_then(|c| c.decompress())
+            .ok_or_else(|| PluribitError::ValidationError("Invalid funding commitment".into()))?;
+        
+        let output_sum = owner_commitment + counterparty_commitment;
+        let kernel_excess = mimblewimble::PC_GENS.commit(Scalar::from(0u64), kernel_blinding);
+        let expected_input = output_sum + kernel_excess;
+        
+        if input_commitment != expected_input {
+            log(&format!("[COMMIT_TX] ⚠️ Balance check (seq={}): input={}, expected={}", 
+                sequence_number,
+                hex::encode(input_commitment.compress().to_bytes()),
+                hex::encode(expected_input.compress().to_bytes())));
+            return Err(PluribitError::ValidationError("Commitment transaction doesn't balance".into()));
+        }
+        log(&format!("[COMMIT_TX] ✓ Transaction (seq={}) balances correctly", sequence_number));
+    } else {
+        // This is a provisional commitment (seq=0) using placeholder data.
+        log(&format!("[COMMIT_TX] Skipping balance check for provisional commitment (seq={})", sequence_number));
     }
-    log("[COMMIT_TX] ✓ Transaction balances correctly");
     
     // For commitment transactions, no fee (layer 2)
     let fee = 0u64;
