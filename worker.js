@@ -319,12 +319,31 @@ function startApiServer() {
                 for (let i = 0n; i < count && tipHeight - i >= 0n; i++) {
                     const block = await db.loadBlock(tipHeight - i);
                     if (block) {
+                        let minerDisplay = 'N/A';
+                        // Check if minerPubkey exists and is an array with data
+                        if (block.minerPubkey && block.minerPubkey.type === 'Buffer' && block.minerPubkey.data) {
+                            // Convert the {"0": 1, "1": 2, ...} object into a byte array [1, 2, ...]
+                            const minerBytes = Object.values(block.minerPubkey.data);
+
+                            if (minerBytes.length > 0) {
+                                // Check if it's the genesis block (all zeros)
+                                if (minerBytes.every(b => b === 0)) {
+                                    minerDisplay = 'Genesis Miner';
+                                } else {
+                                    // Convert the array of numbers to a hex string
+                                    const hex = Buffer.from(minerBytes).toString('hex');
+                                    // Use your truncate logic
+                                    minerDisplay = hex.slice(0, 12) + '...' + hex.slice(-8);
+                                }
+                            }
+                        }
+
                         blocks.push({
-                            height: block.height,
+                             height: block.height,
                             hash: block.hash,
                             timestamp: block.timestamp,
                             txCount: block.transactions?.length || 0,
-                            miner: block.minerPubkey ? Buffer.from(block.minerPubkey).toString('hex').slice(0, 16) + '...' : 'N/A'
+                            miner: minerDisplay // Use the new formatted string
                         });
                     }
                 }
@@ -399,8 +418,7 @@ function startApiServer() {
                     annualIssuance += reward;
                 }
                 
-                const stockToFlow = annualIssuance > 0n ? (Number(totalSupply) * 1000) / (Number(annualIssuance) / 1000) : 0;
-
+                const stockToFlow = annualIssuance > 0n ? Number(totalSupply) / Number(annualIssuance) : 0;
                 // Function to safely convert smallest unit (BigInt) to a decimal string
                 const toCoinString = (bigintValue) => {
                     let str = bigintValue.toString();
@@ -1998,11 +2016,30 @@ setTimeout(() => {
                     }
                 }
 
-                const { CONSENSUS_THRESHOLD, MIN_AGREEING_PEERS } = CONFIG.SYNC;
+                const { CONSENSUS_THRESHOLD, MIN_AGREEING_PEERS , PEER_COUNT_FOR_STRICT_CONSENSUS} = CONFIG.SYNC;
                 const agreement = peersForBestTip.length / tipResponses.size;
                 
-                if (agreement < CONSENSUS_THRESHOLD || peersForBestTip.length < MIN_AGREEING_PEERS) {
-                    log(`[SYNC] No consensus on best chain tip. Best candidate (Work=${bestTip.totalWork}) only had ${Math.round(agreement * 100)}% agreement.`, 'warn');
+                // --- ADAPTIVE CONSENSUS LOGIC ---
+                let consensusFailed = false;
+
+
+                if (tipResponses.size >= PEER_COUNT_FOR_STRICT_CONSENSUS) {
+                    // STRICT RULE (Large Network): Require a majority percentage AND min peers.
+                    // This prevents 50/50 splits on a mature network.
+                    if (agreement < CONSENSUS_THRESHOLD || peersForBestTip.length < MIN_AGREEING_PEERS) {
+                        consensusFailed = true;
+                    }
+                } else {
+                    // LENIENT RULE (Small Network): ONLY require the minimum number of agreeing peers.
+                    // This allows a 2-v-2 split (50%) to resolve, but still rejects a 1-v-3 split.
+                    if (peersForBestTip.length < MIN_AGREEING_PEERS) {
+                        consensusFailed = true;
+                    }
+                }
+                // --- END NEW LOGIC ---
+
+                if (consensusFailed) {
+                    log(`[SYNC] No consensus on best chain tip. Best candidate (Work=${bestTip.totalWork}) only had ${Math.round(agreement * 100)}% agreement (Peers: ${peersForBestTip.length}/${tipResponses.size}).`, 'warn');
                     syncState.syncProgress.status = 'IDLE';
                     return; 
                 }

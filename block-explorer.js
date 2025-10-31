@@ -611,6 +611,8 @@ app.get('/', (req, res) => {
             color: var(--text);
         }
 
+
+
         .section-header {
             display: flex;
             justify-content: space-between;
@@ -947,7 +949,6 @@ app.get('/', (req, res) => {
     </header>
 
     <main class="container">
-        <!-- Blockchain View -->
         <div id="blockchainView" class="view active">
             <section class="stats-grid">
                 <div class="stat-card">
@@ -966,6 +967,18 @@ app.get('/', (req, res) => {
                     <div class="stat-label">Block Time</div>
                     <div class="stat-value" id="blockTime">-</div>
                 </div>
+                <div class="stat-card">
+                    <div class="stat-label">Last Reward</div>
+                    <div class="stat-value" id="lastReward">-</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Total Supply</div>
+                    <div class="stat-value" id="totalSupply">-</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Stock-to-Flow</div>
+                    <div class="stat-value" id="stockToFlow">-</div>
+                </div>
             </section>
 
             <section class="block-train-section">
@@ -979,30 +992,9 @@ app.get('/', (req, res) => {
 
             <section class="chart-container">
                 <div class="chart-header">
-                    <h2 class="chart-title">Block Height Over Time</h2>
-                </div>
-                <canvas id="blockChart" height="80"></canvas>
-            </section>
-
-            <section class="chart-container">
-                <div class="chart-header">
                     <h2 class="chart-title">Mining Difficulty (VRF Threshold & VDF Iterations)</h2>
                 </div>
                 <canvas id="difficultyChart" height="80"></canvas>
-            </section>
-
-            <section class="chart-container">
-                <div class="chart-header">
-                    <h2 class="chart-title">Block Rewards</h2>
-                </div>
-                <canvas id="rewardChart" height="80"></canvas>
-            </section>
-
-            <section class="chart-container">
-                <div class="chart-header">
-                    <h2 class="chart-title">Supply & Stock-to-Flow</h2>
-                </div>
-                <canvas id="supplyChart" height="80"></canvas>
             </section>
 
             <section>
@@ -1018,7 +1010,6 @@ app.get('/', (req, res) => {
             </section>
         </div>
 
-        <!-- Mempool View -->
         <div id="mempoolView" class="view">
             <section class="stats-grid">
                 <div class="stat-card">
@@ -1079,9 +1070,22 @@ app.get('/', (req, res) => {
             currentView: 'blockchain'
         };
         
-        function bigIntReviver(key, value) {
-            if (value && typeof value === 'object' && value.__type === 'BigInt') {
-                return BigInt(value.value);
+        function customReviver(key, value) {
+            if (value && typeof value === 'object' && value.__type) {
+                // Handle BigInt
+                if (value.__type === 'BigInt') {
+                    return BigInt(value.value);
+                }
+                // Handle Uint8Array (from Base64)
+                if (value.__type === 'Uint8Array') {
+                    try {
+                        // This is the logic your bridge expects
+                        return Uint8Array.from(atob(value.value), c => c.charCodeAt(0));
+                    } catch (e) {
+                        console.error('Failed to parse Uint8Array from base64', e);
+                        return null;
+                    }
+                }
             }
             return value;
         }
@@ -1099,6 +1103,23 @@ app.get('/', (req, res) => {
                 }
             }
             if (Array.isArray(data)) return new Uint8Array(data);
+
+            // NEW ROBUST FIX: Handle object-like arrays {"0": 1, "1": 2, ...}
+            if (typeof data === 'object' && data !== null && !Array.isArray(data) && data['0'] !== undefined) {
+                try {
+                    // Get all numeric keys, sort them numerically, and map to their values.
+                    const arr = Object.keys(data)
+                        .filter(k => /^\d+$/.test(k)) // Only take numeric keys
+                        .sort((a, b) => parseInt(a, 10) - parseInt(b, 10)) // Sort them
+                        .map(key => data[key]); // Get the values
+
+                    return new Uint8Array(arr);
+                } catch (e) {
+                    console.error('Failed to parse object-like Uint8Array:', e);
+                    return new Uint8Array(0);
+                }
+            }
+
             return new Uint8Array(0);
         }
         
@@ -1125,10 +1146,7 @@ app.get('/', (req, res) => {
             localStorage.setItem('theme', newTheme);
             document.getElementById('themeToggle').textContent = newTheme === 'dark' ? '🌙' : '☀️';
             
-            if (state.charts.block) updateChartTheme(newTheme);
             if (state.charts.difficulty) updateDifficultyChartTheme(newTheme);
-            if (state.charts.reward) updateRewardChartTheme(newTheme);
-            if (state.charts.supply) updateSupplyChartTheme(newTheme);
         }
 
         function initTheme() {
@@ -1145,18 +1163,6 @@ app.get('/', (req, res) => {
             };
         }
 
-        function updateChartTheme(theme) {
-            const colors = getChartColors(theme);
-            
-            state.charts.block.options.scales.y.ticks.color = colors.textColor;
-            state.charts.block.options.scales.y.grid.color = colors.gridColor;
-            state.charts.block.options.scales.x.ticks.color = colors.textColor;
-            state.charts.block.options.scales.x.grid.color = colors.gridColor;
-            state.charts.block.data.datasets[0].borderColor = colors.accentColor;
-            state.charts.block.data.datasets[0].backgroundColor = colors.accentColor + '1a';
-            state.charts.block.update('none');
-        }
-
         function updateDifficultyChartTheme(theme) {
             const colors = getChartColors(theme);
             
@@ -1170,39 +1176,12 @@ app.get('/', (req, res) => {
             state.charts.difficulty.update('none');
         }
 
-        function updateRewardChartTheme(theme) {
-            const colors = getChartColors(theme);
-            
-            state.charts.reward.options.scales.y.ticks.color = colors.textColor;
-            state.charts.reward.options.scales.y.grid.color = colors.gridColor;
-            state.charts.reward.options.scales.y.title.color = colors.textColor;
-            state.charts.reward.options.scales.x.ticks.color = colors.textColor;
-            state.charts.reward.options.scales.x.grid.color = colors.gridColor;
-            state.charts.reward.update('none');
-        }
-
-        function updateSupplyChartTheme(theme) {
-            const colors = getChartColors(theme);
-            
-            state.charts.supply.options.scales.y.ticks.color = colors.textColor;
-            state.charts.supply.options.scales.y.grid.color = colors.gridColor;
-            state.charts.supply.options.scales.y.title.color = colors.textColor;
-            state.charts.supply.options.scales.y1.ticks.color = colors.textColor;
-            state.charts.supply.options.scales.y1.title.color = colors.textColor;
-            state.charts.supply.options.scales.x.ticks.color = colors.textColor;
-            state.charts.supply.options.scales.x.grid.color = colors.gridColor;
-            state.charts.supply.options.plugins.legend.labels.color = colors.textColor;
-            state.charts.supply.update('none');
-        }
-
         async function init() {
             initTheme();
             await loadStats();
             await loadBlocks();
-            initCharts();
             await loadDifficultyMetrics();
-            await loadRewardMetrics();
-            await loadSupplyMetrics();
+            loadSupply();
             startAutoRefresh();
         }
         function JSONStringifyWithBigInt(obj) {
@@ -1212,65 +1191,31 @@ app.get('/', (req, res) => {
                     : value // return everything else unchanged
             , 2); // The '2' adds pretty-printing (indentation)
         }
-        function initCharts() {
-            const ctx = document.getElementById('blockChart');
-            const theme = document.documentElement.getAttribute('data-theme') || 'dark';
-            const colors = getChartColors(theme);
-            
-            state.charts.block = new Chart(ctx, {
-                type: 'line',
-                data: {
-                    labels: [],
-                    datasets: [{
-                        label: 'Block Height',
-                        data: [],
-                        borderColor: colors.accentColor,
-                        backgroundColor: colors.accentColor + '1a',
-                        tension: 0.3,
-                        fill: true,
-                        pointRadius: 0,
-                        borderWidth: 2
-                    }]
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: true,
-                    plugins: {
-                        legend: { display: false }
-                    },
-                    scales: {
-                        y: {
-                            ticks: { color: colors.textColor },
-                            grid: { color: colors.gridColor }
-                        },
-                        x: {
-                            ticks: { color: colors.textColor, maxRotation: 0 },
-                            grid: { color: colors.gridColor }
-                        }
-                    }
-                }
-            });
-            updateChart();
-        }
-
-        function updateChart() {
-            if (!state.charts.block || state.blocks.length === 0) return;
-
-            const blocks = state.blocks.slice(0, 20).reverse();
-            state.charts.block.data.labels = blocks.map(b => '#' + b.height);
-            // Convert BigInt heights to Numbers for the chart data
-            state.charts.block.data.datasets[0].data = blocks.map(b => Number(b.height)); // <-- FIX HERE
-            state.charts.block.update('none');
-        }
 
         async function loadStats() {
             try {
                 const res = await fetch('/api/stats');
-                const stats = JSON.parse(await res.text(), bigIntReviver);
+                const stats = JSON.parse(await res.text(), customReviver);
                 
                 document.getElementById('height').textContent = stats.height.toLocaleString();
                 document.getElementById('work').textContent = formatNumber(stats.totalWork);
                 document.getElementById('utxo').textContent = stats.utxoCount.toLocaleString();
+                
+                // Replicate worker's reward logic
+                const INITIAL_BASE_REWARD = 50000000n; // 0.5 PLB in bits
+                const HALVING_INTERVAL = 525600n;
+                const REWARD_RESET_INTERVAL = 5256000n;
+                
+                const h = stats.height;
+                let reward = 0n;
+                
+                if (h > 0n) {
+                    const height_in_era = h % REWARD_RESET_INTERVAL;
+                    const num_halvings = height_in_era / HALVING_INTERVAL;
+                    reward = num_halvings >= 64n ? 0n : INITIAL_BASE_REWARD >> num_halvings;
+                }
+                
+                document.getElementById('lastReward').textContent = formatBits(reward);
                 
                 state.stats = stats;
             } catch (e) {
@@ -1281,7 +1226,7 @@ app.get('/', (req, res) => {
         async function loadMempool() {
             try {
                 const res = await fetch('/api/mempool');
-                const data = JSON.parse(await res.text(), bigIntReviver);
+                const data = JSON.parse(await res.text(), customReviver);
                 
                 state.mempool = data;
                 
@@ -1338,14 +1283,10 @@ app.get('/', (req, res) => {
                 let hash = 'unknown';
                 if (tx.kernels && tx.kernels[0] && tx.kernels[0].excess) {
                     try {
-                        // Handle both regular arrays and Uint8Array objects
-                        let excessData = tx.kernels[0].excess;
-                        if (excessData.value && excessData.__type === 'Uint8Array') {
-                            // Decode base64 if needed
-                            excessData = Uint8Array.from(atob(excessData.value), c => c.charCodeAt(0));
-                        }
+                        // ✅ USE THE HELPER FUNCTION
+                        const excessData = parseUint8Array(tx.kernels[0].excess.data);
                         const excessBytes = Array.from(excessData).slice(0, 8);
-                        hash = excessBytes.map(function(b) { 
+                        hash = excessBytes.map(function(b) {
                             return b.toString(16).padStart(2, '0'); 
                         }).join('') + '...';
                     } catch (e) {
@@ -1393,7 +1334,7 @@ app.get('/', (req, res) => {
             let hash = 'unknown';
             if (tx.kernels && tx.kernels[0] && tx.kernels[0].excess) {
                 try {
-                    const excessData = parseUint8Array(tx.kernels[0].excess);
+                    const excessData = parseUint8Array(tx.kernels[0].excess.data);
                     const excessBytes = Array.from(excessData);
                     hash = excessBytes.map(function(b) { 
                         return b.toString(16).padStart(2, '0'); 
@@ -1414,13 +1355,10 @@ app.get('/', (req, res) => {
                 for (let i = 0; i < tx.inputs.length; i++) {
                     const input = tx.inputs[i];
                     try {
-                        const commitmentData = parseUint8Array(input.commitment);
-                        const commitmentBytes = Array.from(commitmentData).slice(0, 16);
-                        const commitment = commitmentBytes.map(function(b) { 
-                            return b.toString(16).padStart(2, '0'); 
-                        }).join('') + '...';
+                        const commitmentData = parseUint8Array(input.commitment.data);
+                        const commitmentHex = Array.from(commitmentData).map(b => b.toString(16).padStart(2, '0')).join('');
                         inputsHtml += '<div class="io-item">' +
-                            '<strong>Input ' + (i + 1) + ':</strong> ' + commitment +
+                            '<strong>Input ' + (i + 1) + ':</strong> ' + truncateHash(commitmentHex) +
                             '</div>';
                     } catch (e) {
                         inputsHtml += '<div class="io-item">Input ' + (i + 1) + ': [error parsing]</div>';
@@ -1436,13 +1374,10 @@ app.get('/', (req, res) => {
                 for (let i = 0; i < tx.outputs.length; i++) {
                     const output = tx.outputs[i];
                     try {
-                        const commitmentData = parseUint8Array(output.commitment);
-                        const commitmentBytes = Array.from(commitmentData).slice(0, 16);
-                        const commitment = commitmentBytes.map(function(b) { 
-                            return b.toString(16).padStart(2, '0'); 
-                        }).join('') + '...';
+                        const commitmentData = parseUint8Array(output.commitment.data);
+                        const commitmentHex = Array.from(commitmentData).map(b => b.toString(16).padStart(2, '0')).join('');
                         outputsHtml += '<div class="io-item">' +
-                            '<strong>Output ' + (i + 1) + ':</strong> ' + commitment +
+                            '<strong>Output ' + (i + 1) + ':</strong> ' + truncateHash(commitmentHex) +
                             '</div>';
                     } catch (e) {
                         outputsHtml += '<div class="io-item">Output ' + (i + 1) + ': [error parsing]</div>';
@@ -1456,14 +1391,11 @@ app.get('/', (req, res) => {
                 for (let i = 0; i < tx.kernels.length; i++) {
                     const kernel = tx.kernels[i];
                     try {
-                        const excessData = parseUint8Array(kernel.excess);
-                        const excessBytes = Array.from(excessData).slice(0, 16);
-                        const excess = excessBytes.map(function(b) { 
-                            return b.toString(16).padStart(2, '0'); 
-                        }).join('') + '...';
+                        const excessData = parseUint8Array(kernel.excess.data);
+                        const excessHex = Array.from(excessData).map(b => b.toString(16).padStart(2, '0')).join('');
                         kernelsHtml += '<div class="io-item">' +
                             '<strong>Kernel ' + (i + 1) + ':</strong><br>' +
-                            'Excess: ' + excess + '<br>' +
+                            'Excess: ' + truncateHash(excessHex) + '<br>' +
                             'Fee: ' + formatBits(Number(kernel.fee) || 0) +
                             '</div>';
                     } catch (e) {
@@ -1521,20 +1453,26 @@ app.get('/', (req, res) => {
         async function loadBlocks() {
             try {
                 const res = await fetch('/api/blocks/recent?count=20');
-                const blocks = JSON.parse(await res.text(), bigIntReviver);
-                
+                const blocks = JSON.parse(await res.text(), customReviver);
+
+                const train = document.getElementById('blockTrain'); // Get train element
+
                 if (blocks.length > 0 && blocks[0].height > state.lastBlockHeight) {
                     state.lastBlockHeight = blocks[0].height;
                     if (state.blocks.length > 0) {
-                        updateBlockTrain(blocks[0], true);
+                        updateBlockTrain(blocks[0], true); // Add new block
                     }
                 }
-                
+
                 state.blocks = blocks;
                 renderBlocks(blocks);
-                updateChart();
+                // updateChart(); // This was removed
                 updateBlockTime(blocks);
-                updateBlockTrain(null, false);
+
+                // Only do a full render if the train is empty (initial load)
+                if (train.children.length === 0) {
+                    updateBlockTrain(null, false);
+                }
             } catch (e) {
                 console.error('Failed to load blocks:', e);
                 document.getElementById('blocksContainer').innerHTML = 
@@ -1617,7 +1555,7 @@ app.get('/', (req, res) => {
         async function loadDifficultyMetrics() {
             try {
                 const res = await fetch('/api/metrics/difficulty');
-                const metrics = JSON.parse(await res.text(), bigIntReviver);
+                const metrics = JSON.parse(await res.text(), customReviver);
                 
                 const ctx = document.getElementById('difficultyChart');
                 const theme = document.documentElement.getAttribute('data-theme') || 'dark';
@@ -1728,181 +1666,17 @@ app.get('/', (req, res) => {
             }
         }
 
-        async function loadRewardMetrics() {
-            try {
-                const res = await fetch('/api/metrics/rewards');
-                const rewards = JSON.parse(await res.text(), bigIntReviver);
-                
-                const ctx = document.getElementById('rewardChart');
-                const theme = document.documentElement.getAttribute('data-theme') || 'dark';
-                const colors = getChartColors(theme);
-                
-                state.charts.reward = new Chart(ctx, {
-                    type: 'line',
-                    data: {
-                        labels: rewards.map(r => '#' + r.height),
-                        datasets: [{
-                            label: 'Block Reward (ƀ)',
-                            data: rewards.map(r => Number(r.reward) / 100_000_000),
-                            borderColor: '#8b5cf6',
-                            backgroundColor: 'rgba(139, 92, 246, 0.1)',
-                            tension: 0.1,
-                            fill: true,
-                            pointRadius: 0,
-                            borderWidth: 2,
-                            stepped: true
-                        }]
-                    },
-                    options: {
-                        responsive: true,
-                        maintainAspectRatio: true,
-                        plugins: {
-                            legend: { display: false }
-                        },
-                        scales: {
-                            y: {
-                                ticks: { color: colors.textColor },
-                                grid: { color: colors.gridColor },
-                                title: {
-                                    display: true,
-                                    text: 'Reward (ƀ)',
-                                    color: colors.textColor,
-                                    font: {
-                                        family: 'Inter',
-                                        weight: 600
-                                    }
-                                }
-                            },
-                            x: {
-                                ticks: { 
-                                    color: colors.textColor,
-                                    maxRotation: 45,
-                                    minRotation: 45
-                                },
-                                grid: { color: colors.gridColor }
-                            }
-                        }
-                    }
-                });
-            } catch (e) {
-                console.error('Failed to load reward metrics:', e);
-            }
-        }
-
-        async function loadSupplyMetrics() {
+        async function loadSupply() {
             try {
                 const res = await fetch('/api/metrics/supply');
-                const supply = JSON.parse(await res.text(), bigIntReviver);
-                
-                const ctx = document.getElementById('supplyChart');
-                const theme = document.documentElement.getAttribute('data-theme') || 'dark';
-                const colors = getChartColors(theme);
-                
-                state.charts.supply = new Chart(ctx, {
-                    type: 'line',
-                    data: {
-                        labels: ['Current'],
-                        datasets: [
-                            {
-                                label: 'Total Supply (ƀ)',
-                                data: [Number(supply.supplyInCoins)],
-                                borderColor: '#06b6d4',
-                                backgroundColor: 'rgba(6, 182, 212, 0.1)',
-                                yAxisID: 'y',
-                                fill: true,
-                                pointRadius: 5,
-                                borderWidth: 2
-                            },
-                            {
-                                label: 'Stock-to-Flow Ratio',
-                                data: [Number(supply.stockToFlow)],
-                                borderColor: '#ec4899',
-                                backgroundColor: 'rgba(236, 72, 153, 0.1)',
-                                yAxisID: 'y1',
-                                fill: true,
-                                pointRadius: 5,
-                                borderWidth: 2
-                            }
-                        ]
-                    },
-                    options: {
-                        responsive: true,
-                        maintainAspectRatio: true,
-                        plugins: {
-                            legend: { 
-                                display: true,
-                                labels: {
-                                    color: colors.textColor,
-                                    font: {
-                                        family: 'Inter',
-                                        weight: 600
-                                    }
-                                }
-                            },
-                            tooltip: {
-                                callbacks: {
-                                    label: function(context) {
-                                        let label = context.dataset.label || '';
-                                        if (label) {
-                                            label += ': ';
-                                        }
-                                        if (context.parsed.y !== null) {
-                                            if (context.datasetIndex === 0) {
-                                                label += context.parsed.y.toLocaleString(undefined, {
-                                                    minimumFractionDigits: 2,
-                                                    maximumFractionDigits: 2
-                                                });
-                                            } else {
-                                                label += context.parsed.y.toFixed(2);
-                                            }
-                                        }
-                                        return label;
-                                    }
-                                }
-                            }
-                        },
-                        scales: {
-                            y: {
-                                type: 'linear',
-                                display: true,
-                                position: 'left',
-                                ticks: { color: colors.textColor },
-                                grid: { color: colors.gridColor },
-                                title: {
-                                    display: true,
-                                    text: 'Supply (ƀ)',
-                                    color: colors.textColor,
-                                    font: {
-                                        family: 'Inter',
-                                        weight: 600
-                                    }
-                                }
-                            },
-                            y1: {
-                                type: 'linear',
-                                display: true,
-                                position: 'right',
-                                ticks: { color: colors.textColor },
-                                grid: { drawOnChartArea: false },
-                                title: {
-                                    display: true,
-                                    text: 'Stock-to-Flow',
-                                    color: colors.textColor,
-                                    font: {
-                                        family: 'Inter',
-                                        weight: 600
-                                    }
-                                }
-                            },
-                            x: {
-                                ticks: { color: colors.textColor },
-                                grid: { color: colors.gridColor }
-                            }
-                        }
-                    }
-                });
+                const supply = JSON.parse(await res.text(), customReviver);
+        
+                document.getElementById('totalSupply').textContent = formatBits(supply.totalSupply);
+                document.getElementById('stockToFlow').textContent = Number(supply.stockToFlow).toFixed(2);
             } catch (e) {
-                console.error('Failed to load supply metrics:', e);
+                console.error('Failed to load supply:', e);
+                document.getElementById('totalSupply').textContent = 'Error';
+                document.getElementById('stockToFlow').textContent = 'Error';
             }
         }
 
@@ -1921,7 +1695,7 @@ app.get('/', (req, res) => {
                     minerDisplay = block.miner;
                 } else if (block.minerPubkey) {
                     try {
-                        const minerData = parseUint8Array(block.minerPubkey);
+                        const minerData = parseUint8Array(block.minerPubkey.data);
                         if (minerData.length > 0) {
                             const minerBytes = Array.from(minerData);
                             minerDisplay = minerBytes.map(function(b) { 
@@ -1978,7 +1752,7 @@ app.get('/', (req, res) => {
             try {
                 const res = await fetch('/api/block/' + height);
                 if (!res.ok) throw new Error('Block not found');
-                const block = JSON.parse(await res.text(), bigIntReviver);
+                const block = JSON.parse(await res.text(), customReviver);
                 
                 let txListHtml = '';
                 if (block.transactions && block.transactions.length > 0) {
@@ -2020,7 +1794,7 @@ app.get('/', (req, res) => {
                             for (let idx = 0; idx < tx.inputs.length; idx++) {
                                 const inp = tx.inputs[idx];
                                 try {
-                                    const commitmentData = parseUint8Array(inp.commitment);
+                                    const commitmentData = parseUint8Array(inp.commitment.data);
                                     const commitmentBytes = Array.from(commitmentData);
                                     const commitmentHex = commitmentBytes.map(function(b) { 
                                         return b.toString(16).padStart(2, '0'); 
@@ -2043,16 +1817,15 @@ app.get('/', (req, res) => {
                             for (let idx = 0; idx < tx.outputs.length; idx++) {
                                 const out = tx.outputs[idx];
                                 try {
-                                    const commitmentData = parseUint8Array(out.commitment);
+                                    const commitmentData = parseUint8Array(out.commitment.data);
                                     const commitmentBytes = Array.from(commitmentData);
                                     const commitmentHex = commitmentBytes.map(function(b) { 
                                         return b.toString(16).padStart(2, '0'); 
                                     }).join('');
                                     
-                                    const hasEphemeralKey = out.ephemeralKey && 
-                                        (out.ephemeralKey.value || out.ephemeralKey.length > 0);
-                                    const hasStealthPayload = out.stealthPayload && 
-                                        (out.stealthPayload.value || out.stealthPayload.length > 0);
+                                // ✅ USE THE HELPER FUNCTION
+                                const hasEphemeralKey = parseUint8Array(out.ephemeralKey.data).length > 0;
+                                const hasStealthPayload = parseUint8Array(out.stealthPayload.data).length > 0;
                                     
                                     section += '<div class="io-item">' +
                                         'Output ' + (idx + 1) + ': ' + truncateHash(commitmentHex) +
@@ -2072,7 +1845,7 @@ app.get('/', (req, res) => {
                             for (let idx = 0; idx < tx.kernels.length; idx++) {
                                 const kernel = tx.kernels[idx];
                                 try {
-                                    const excessData = parseUint8Array(kernel.excess);
+                                    const excessData = parseUint8Array(kernel.excess.data);
                                     const excessBytes = Array.from(excessData);
                                     const excessHex = excessBytes.map(function(b) { 
                                         return b.toString(16).padStart(2, '0'); 
@@ -2099,12 +1872,17 @@ app.get('/', (req, res) => {
                 // Parse miner pubkey
                 let minerDisplay = 'N/A';
                 try {
-                    const minerData = parseUint8Array(block.minerPubkey);
+                    const minerData = parseUint8Array(block.minerPubkey.data);
                     if (minerData.length > 0) {
-                        const minerBytes = Array.from(minerData);
-                        minerDisplay = minerBytes.map(function(b) { 
-                            return b.toString(16).padStart(2, '0'); 
-                        }).join('').slice(0, 16) + '...';
+                        // Check if it's all zeros (likely genesis)
+                        if (minerData.every(b => b === 0)) {
+                            minerDisplay = 'Genesis Miner';
+                        } else {
+                            const minerHex = Array.from(minerData).map(function(b) { 
+                                return b.toString(16).padStart(2, '0'); 
+                            }).join('');
+                            minerDisplay = truncateHash(minerHex); // Use existing helper
+                        }
                     }
                 } catch (e) {
                     console.error('Error parsing miner pubkey:', e);
@@ -2113,7 +1891,7 @@ app.get('/', (req, res) => {
                 // Parse VRF threshold
                 let vrfDisplay = 'N/A';
                 try {
-                    const vrfData = parseUint8Array(block.vrfThreshold);
+                    const vrfData = parseUint8Array(block.vrfThreshold.data);
                     if (vrfData.length > 0) {
                         const vrfBytes = Array.from(vrfData).slice(0, 8);
                         vrfDisplay = vrfBytes.map(function(b) { 
@@ -2203,7 +1981,7 @@ app.get('/', (req, res) => {
             try {
                 const res = await fetch('/api/block/hash/' + query);
                 if (res.ok) {
-                    const block = JSON.parse(await res.text(), bigIntReviver);
+                    const block = JSON.parse(await res.text(), customReviver);
                     viewBlock(block.height);
                 } else {
                     alert('Block not found');
@@ -2217,6 +1995,7 @@ app.get('/', (req, res) => {
             setInterval(async () => {
                 await loadStats();
                 await loadBlocks();
+                await loadSupply();
                 if (state.currentView === 'mempool') {
                     await loadMempool();
                 }
