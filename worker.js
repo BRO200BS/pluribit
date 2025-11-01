@@ -3614,7 +3614,7 @@ async function handleCreateTransaction({ from, to, amount, fee }) {
 
     // 5. Notify the UI of success.
     const excessHex = result.transaction.kernels[0].excess.map(b => b.toString(16).padStart(2, '0')).join('');
-    log(`Transaction created and broadcast. Hash: ${excessHex.substring(0,16)}...`, 'success');
+    log(`Transaction created and broadcast. Hash: ${excessHex}...`, 'success');
 
     const newBalance = await pluribit.wallet_session_get_balance(from);
     parentPort.postMessage({ type: 'walletBalance', payload: { wallet_id: from, balance: newBalance }});

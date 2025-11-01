@@ -1283,8 +1283,8 @@ app.get('/', (req, res) => {
                 let hash = 'unknown';
                 if (tx.kernels && tx.kernels[0] && tx.kernels[0].excess) {
                     try {
-                        // ✅ USE THE HELPER FUNCTION
-                        const excessData = parseUint8Array(tx.kernels[0].excess.data);
+                        // ✅ FIX: Removed .data
+                        const excessData = parseUint8Array(tx.kernels[0].excess);
                         const excessBytes = Array.from(excessData).slice(0, 8);
                         hash = excessBytes.map(function(b) {
                             return b.toString(16).padStart(2, '0'); 
@@ -1334,7 +1334,8 @@ app.get('/', (req, res) => {
             let hash = 'unknown';
             if (tx.kernels && tx.kernels[0] && tx.kernels[0].excess) {
                 try {
-                    const excessData = parseUint8Array(tx.kernels[0].excess.data);
+                    // ✅ FIX 1: Removed .data
+                    const excessData = parseUint8Array(tx.kernels[0].excess);
                     const excessBytes = Array.from(excessData);
                     hash = excessBytes.map(function(b) { 
                         return b.toString(16).padStart(2, '0'); 
@@ -1355,7 +1356,8 @@ app.get('/', (req, res) => {
                 for (let i = 0; i < tx.inputs.length; i++) {
                     const input = tx.inputs[i];
                     try {
-                        const commitmentData = parseUint8Array(input.commitment.data);
+                        // ✅ FIX 2: Removed .data
+                        const commitmentData = parseUint8Array(input.commitment);
                         const commitmentHex = Array.from(commitmentData).map(b => b.toString(16).padStart(2, '0')).join('');
                         inputsHtml += '<div class="io-item">' +
                             '<strong>Input ' + (i + 1) + ':</strong> ' + truncateHash(commitmentHex) +
@@ -1374,7 +1376,8 @@ app.get('/', (req, res) => {
                 for (let i = 0; i < tx.outputs.length; i++) {
                     const output = tx.outputs[i];
                     try {
-                        const commitmentData = parseUint8Array(output.commitment.data);
+                        // ✅ FIX 3: Removed .data
+                        const commitmentData = parseUint8Array(output.commitment);
                         const commitmentHex = Array.from(commitmentData).map(b => b.toString(16).padStart(2, '0')).join('');
                         outputsHtml += '<div class="io-item">' +
                             '<strong>Output ' + (i + 1) + ':</strong> ' + truncateHash(commitmentHex) +
@@ -1391,7 +1394,8 @@ app.get('/', (req, res) => {
                 for (let i = 0; i < tx.kernels.length; i++) {
                     const kernel = tx.kernels[i];
                     try {
-                        const excessData = parseUint8Array(kernel.excess.data);
+                        // ✅ FIX 4: Removed .data
+                        const excessData = parseUint8Array(kernel.excess);
                         const excessHex = Array.from(excessData).map(b => b.toString(16).padStart(2, '0')).join('');
                         kernelsHtml += '<div class="io-item">' +
                             '<strong>Kernel ' + (i + 1) + ':</strong><br>' +
