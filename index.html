@@ -53,6 +53,7 @@
     background: radial-gradient(circle, rgba(255,255,255,0.3), transparent);
     animation: pulse 4s infinite ease-in-out;
   }
+  
   @keyframes pulse {
     0% { transform: scale(1); opacity: 0.6; }
     50% { transform: scale(1.3); opacity: 0.4; }
@@ -277,6 +278,33 @@
     text-align: center;
     margin: 20px 0;
   }
+  header {
+  text-align: center;
+  padding: 120px 20px 80px;
+  background: var(--gradient);
+  color: #fff;
+  position: relative;
+  overflow: hidden;
+  box-shadow: 0 10px 20px rgba(0,0,0,0.2);
+  z-index: 10; /* Add this */
+}
+
+.cta {
+  display: inline-block;
+  margin-top: 20px;
+  padding: 16px 32px;
+  border-radius: 50px;
+  background: #fff;
+  color: var(--primary);
+  font-weight: 700;
+  text-decoration: none;
+  font-size: 1.1rem;
+  transition: all 0.4s ease;
+  box-shadow: 0 6px 15px rgba(0,0,0,0.2);
+  animation: bounceIn 1.5s ease-out;
+  position: relative; /* Add this */
+  z-index: 20; /* Add this */
+}
 </style>
 </head>
 <body>
