@@ -56,9 +56,15 @@ jobs:
         if: matrix.os == 'macos-latest'
         run: |
           brew install llvm
+          brew install protobuf
           echo "/opt/homebrew/opt/llvm/bin" >> $GITHUB_PATH
           export CC="/opt/homebrew/opt/llvm/bin/clang"
           export AR="/opt/homebrew/opt/llvm/bin/llvm-ar"
+
+
+      - name: Install Windows build dependencies
+        if: matrix.os == 'windows-latest'
+        run: choco install protoc
 
       # 6. Install all dependencies and build the entire project
       - name: Build project (npm install & build)
