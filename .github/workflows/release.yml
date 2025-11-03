@@ -82,7 +82,7 @@ jobs:
       - name: Copy project files (Linux/macOS)
         if: matrix.os != 'windows-latest'
         run: |
-          cp -r native/index.node pluribit-release/
+          cp -r native pluribit-release/
           cp -r pkg-node pluribit-release/
           cp -r src pluribit-release/
           cp *.js pluribit-release/
@@ -93,7 +93,7 @@ jobs:
       - name: Copy project files (Windows)
         if: matrix.os == 'windows-latest'
         run: |
-          xcopy /E /I native\\index.node pluribit-release\\native
+          xcopy /E /I native pluribit-release\\native
           xcopy /E /I pkg-node pluribit-release\\pkg-node
           xcopy /E /I src pluribit-release\\src
           copy *.js pluribit-release
