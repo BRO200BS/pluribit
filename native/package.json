@@ -3,7 +3,8 @@
   "version": "1.0.0",
   "main": "index.node",
   "scripts": {
-    "build": "cargo build --release && cp ../target/release/libpluribit_native.so ./index.node"
+    "linuxbuild": "cargo build --release && cp ../target/release/libpluribit_native.so ./index.node",
+    "build": "cargo build --release && npx cpr ../target/release/libpluribit_native.so ./index.node --overwrite || npx cpr ../target/release/libpluribit_native.dylib ./index.node --overwrite || npx cpr ../target/release/pluribit_native.dll ./index.node --overwrite"
   },
   "devDependencies": {
     "cargo-cp-artifact": "^0.1"

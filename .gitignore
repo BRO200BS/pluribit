@@ -1,5 +1,5 @@
 /target
-/node_modules
+node_modules/
 /pluribit_data
 webpack
 server-https.py
@@ -8,8 +8,8 @@ branding.odt
 Cargo.lock
 key.pem
 cert.pem
-package-lock.json
 ccfiles.sh
 concatenated_output.txt
 cleanup.sh
 /pluribit-data
+native/build/
