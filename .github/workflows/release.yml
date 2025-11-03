@@ -54,7 +54,11 @@ jobs:
 
       - name: Install macOS build dependencies
         if: matrix.os == 'macos-latest'
-        run: brew install llvm
+        run: |
+          brew install llvm
+          echo "/opt/homebrew/opt/llvm/bin" >> $GITHUB_PATH
+          export CC="/opt/homebrew/opt/llvm/bin/clang"
+          export AR="/opt/homebrew/opt/llvm/bin/llvm-ar"
 
       # 6. Install all dependencies and build the entire project
       - name: Build project (npm install & build)
