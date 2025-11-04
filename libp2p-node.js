@@ -719,20 +719,14 @@ export class PluribitP2P {
         }
         // --- END MODIFICATION ---
 
-        const peerId = await this.loadOrCreatePeerId();
-    // ADD THESE DEBUG LINES:
+    const peerId = await this.loadOrCreatePeerId();
+    
     this.log(`[P2P DEBUG] loadOrCreatePeerId returned: ${peerId.toString()}`, 'debug');
-    this.log(`[P2P DEBUG] Has privateKey: ${!!peerId.privateKey}`, 'debug');
-    this.log(`[P2P DEBUG] Has publicKey: ${!!peerId.publicKey}`, 'debug');
-    this.log(`[P2P DEBUG] Type: ${peerId.type}`, 'debug');
+    this.log(`[P2P DEBUG] privateKey length: ${peerId.privateKey?.length}`, 'debug');
     
-    // Try explicitly extracting the private key
-    const { unmarshalPrivateKey } = await import('@libp2p/crypto/keys');
-    const privateKey = await unmarshalPrivateKey(peerId.privateKey);
-    
-    // Create libp2p node - try passing privateKey instead of peerId
+    // Create libp2p node - pass the raw private key bytes
     this.node = await createLibp2p({
-        privateKey: privateKey,  // Changed from peerId to privateKey
+        privateKey: peerId.privateKey,  // Just pass the Uint8Array directly
         addresses: {
             listen: [
                 `/ip4/0.0.0.0/tcp/${this.config.listen.tcp}`,
