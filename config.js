@@ -9,7 +9,8 @@ export const CONFIG = {
     TCP_PORT: 26658,
     WS_PORT: 26659,
     MAX_CONNECTIONS: 150,
-    MIN_CONNECTIONS: 5
+    MIN_CONNECTIONS: 5,
+    RENDEZVOUS_DISCOVERY_INTERVAL_MS: 60000 // 1 minute
   },
   
   // Sync (IBD) settings

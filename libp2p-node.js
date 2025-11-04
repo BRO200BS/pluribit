@@ -1029,7 +1029,7 @@ if (this.node.peerId.toString() !== peerId.toString()) {
                 const isAbort = err?.name === 'AbortError' || /aborted/i.test(err?.message || '');
                 this.log(`[P2P] Rendezvous ${isAbort ? 'aborted (timeout/cancel)' : 'failed'}: ${err?.message || err}`, isAbort ? 'debug' : 'warn');
             });
-        }, 10 * 60 * 1000); //every 10 mins
+        }, CONFIG.P2P.RENDEZVOUS_DISCOVERY_INTERVAL_MS); // <-- USE THE CONFIG VALUE
         
         return this.node;
     }
