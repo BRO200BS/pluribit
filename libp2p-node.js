@@ -1040,27 +1040,39 @@ async loadOrCreatePeerId() {
     }
     
     // --- MINER: Load or create local key from file ---
-    try {
-        await fs.mkdir('./pluribit-data', { recursive: true });
-        const data = await fs.readFile(peerIdPath, 'utf-8');
-        const stored = JSON.parse(data);
+try {
+    await fs.mkdir('./pluribit-data', { recursive: true });
+    this.log('[P2P] Attempting to load peer-id.json...', 'debug');
+    
+    const data = await fs.readFile(peerIdPath, 'utf-8');
+    this.log('[P2P] File read successfully', 'debug');
+    
+    const stored = JSON.parse(data);
+    this.log(`[P2P] JSON parsed, ID: ${stored.id}`, 'debug');
 
-        // Load using the private key bytes
-        const privKeyBytes = uint8ArrayFromString(stored.privKey, 'base64');
-        const peerId = await createEd25519PeerId({ privateKey: privKeyBytes });
-        
-        // Verify it matches
-        if (peerId.toString() !== stored.id) {
-            this.log(`[P2P] WARNING: Loaded peer ID ${peerId.toString()} doesn't match stored ID ${stored.id}. Regenerating...`, 'warn');
-            throw new Error('ID mismatch - will regenerate');
-        }
-        
-        this.log(`[P2P] Loaded existing peer ID: ${peerId.toString()}`, 'info');
-        return peerId;
-        
-    } catch (e) {
-        // Create new peer ID
-        this.log('[P2P] Creating new peer ID...', 'info');
+    // Load using the private key bytes
+    const privKeyBytes = uint8ArrayFromString(stored.privKey, 'base64');
+    this.log(`[P2P] Private key decoded, ${privKeyBytes.length} bytes`, 'debug');
+    
+    const peerId = await createEd25519PeerId({ privateKey: privKeyBytes });
+    this.log(`[P2P] PeerId created: ${peerId.toString()}`, 'debug');
+    
+    // Verify it matches
+    if (peerId.toString() !== stored.id) {
+        this.log(`[P2P] WARNING: Loaded peer ID ${peerId.toString()} doesn't match stored ID ${stored.id}. Regenerating...`, 'warn');
+        throw new Error('ID mismatch - will regenerate');
+    }
+    
+    this.log(`[P2P] Loaded existing peer ID: ${peerId.toString()}`, 'info');
+    return peerId;
+    
+} catch (e) {
+    // Log the actual error to see what's failing
+    this.log(`[P2P] Failed to load peer ID: ${e.message}`, 'debug');
+    this.log(`[P2P] Error details: ${e.stack}`, 'debug');
+    
+    // Create new peer ID
+    this.log('[P2P] Creating new peer ID...', 'info');
         const peerId = await createEd25519PeerId();
         
         // Get the marshalled private key (this is the full 64-byte key)
