@@ -719,14 +719,32 @@ export class PluribitP2P {
         }
         // --- END MODIFICATION ---
 
+
     const peerId = await this.loadOrCreatePeerId();
     
     this.log(`[P2P DEBUG] loadOrCreatePeerId returned: ${peerId.toString()}`, 'debug');
     this.log(`[P2P DEBUG] privateKey length: ${peerId.privateKey?.length}`, 'debug');
     
-    // Create libp2p node - pass the raw private key bytes
+    // Import the keys module to unmarshal the private key
+    const keys = await import('@libp2p/crypto/keys');
+    
+    // Unmarshal the private key bytes to get a proper PrivateKey object
+    let privateKeyObj;
+    try {
+        // Try the protobuf unmarshalling
+        privateKeyObj = keys.privateKeyFromProtobuf(peerId.privateKey);
+    } catch (e) {
+        // If that fails, try the supportedKeys approach
+        this.log(`[P2P DEBUG] protobuf unmarshal failed, trying supportedKeys: ${e.message}`, 'debug');
+        const { supportedKeys } = keys;
+        privateKeyObj = await supportedKeys.ed25519.unmarshalEd25519PrivateKey(peerId.privateKey);
+    }
+    
+    this.log(`[P2P DEBUG] Unmarshalled key type: ${privateKeyObj.type}`, 'debug');
+    
+    // Create libp2p node
     this.node = await createLibp2p({
-        privateKey: peerId.privateKey,  // Just pass the Uint8Array directly
+        privateKey: privateKeyObj,  // Pass the proper key object
         addresses: {
             listen: [
                 `/ip4/0.0.0.0/tcp/${this.config.listen.tcp}`,
