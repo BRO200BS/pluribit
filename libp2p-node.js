@@ -726,9 +726,13 @@ export class PluribitP2P {
     this.log(`[P2P DEBUG] Has publicKey: ${!!peerId.publicKey}`, 'debug');
     this.log(`[P2P DEBUG] Type: ${peerId.type}`, 'debug');
     
-    // Create libp2p node
+    // Try explicitly extracting the private key
+    const { unmarshalPrivateKey } = await import('@libp2p/crypto/keys');
+    const privateKey = await unmarshalPrivateKey(peerId.privateKey);
+    
+    // Create libp2p node - try passing privateKey instead of peerId
     this.node = await createLibp2p({
-        peerId,
+        privateKey: privateKey,  // Changed from peerId to privateKey
         addresses: {
             listen: [
                 `/ip4/0.0.0.0/tcp/${this.config.listen.tcp}`,
