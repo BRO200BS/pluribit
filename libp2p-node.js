@@ -1044,18 +1044,21 @@ async loadOrCreatePeerId() {
             const data = await fs.readFile(peerIdPath, 'utf-8');
             const stored = JSON.parse(data);
             
-            // Import the marshalled key using libp2p's crypto utilities
-            const { unmarshalPrivateKey } = await import('@libp2p/crypto/keys');
+            // Import the keys module to unmarshal the private key
+            const keys = await import('@libp2p/crypto/keys');
             const keyBytes = uint8ArrayFromString(stored.privKey, 'base64');
-            const privateKey = await unmarshalPrivateKey(keyBytes);
             
-            // Create peer ID from the unmarshalled private key
-            const peerId = await createFromPrivKey(privateKey);
+            // Unmarshal the private key bytes to get a proper PrivateKey object
+            const privateKeyObj = keys.privateKeyFromProtobuf(keyBytes);
+            
+            // Create peer ID from the key object
+            const peerId = await createFromPrivKey(privateKeyObj);
             
             this.log(`[P2P] Successfully loaded permanent bootstrap ID: ${peerId.toString()}`, 'success');
             return peerId;
 
         } catch (e) {
+            this.log(`[P2P] Bootstrap load failed: ${e.message}`, 'error');
             this.log('[P2P] FATAL: Could not load "peer-id.json".', 'error');
             this.log('[P2P] A bootstrap node MUST have a "peer-id.json" file.', 'error');
             this.log('[P2P] Run this node without PLURIBIT_IS_BOOTSTRAP="true" once to generate one.', 'error');
