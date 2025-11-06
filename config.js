@@ -22,8 +22,8 @@ export const CONFIG = {
 
     // --- Dynamic PoW Difficulty ---
     DYNAMIC_POW: {
-      MIN_DIFFICULTY: '00000',        // Peacetime (5 zeros)
-      MAX_DIFFICULTY: '00000000',    // Max attack (8 zeros)
+      MIN_DIFFICULTY: '0000',        // Peacetime (4 zeros)
+      MAX_DIFFICULTY: '000000',    // Max attack (6 zeros)
       SURGE_THRESHOLD: 100,         // 100 connection attempts / minute to trigger increase
       ADJUSTMENT_INTERVAL_MS: 60000, // Check load every 1 minute
     },
