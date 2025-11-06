@@ -10,17 +10,17 @@ export const CONFIG = {
     WS_PORT: 26659,
     MAX_CONNECTIONS: 25,
     MIN_CONNECTIONS: 3,
-    RENDEZVOUS_DISCOVERY_INTERVAL_MS: 600000 // 10 minute
-  },
+    RENDEZVOUS_DISCOVERY_INTERVAL_MS: 600000, // 10 minute
+
   
-  // --- NEW: IP Rate Limiting with Exponential Backoff ---
+  // --- IP Rate Limiting with Exponential Backoff ---
     IP_BACKOFF: {
       BASE_BACKOFF_MS: 10000,   // 10 seconds for first failure
       MAX_BACKOFF_MS: 15 * 60 * 1000, // 15 minutes max
       MAX_FAILURES: 10,           // After 10 failures, they hit the max backoff time
     },
 
-    // --- NEW: Dynamic PoW Difficulty ---
+    // --- Dynamic PoW Difficulty ---
     DYNAMIC_POW: {
       MIN_DIFFICULTY: '00000',        // Peacetime (5 zeros)
       MAX_DIFFICULTY: '00000000',    // Max attack (8 zeros)
@@ -40,6 +40,7 @@ export const CONFIG = {
       // P4: Penalty for being the first to send a duplicate
       duplicateMessagePenalty: -10,
     },
+  }, 
   
   // Sync (IBD) settings
   SYNC: {
