@@ -938,8 +938,13 @@ if (this.node.peerId.toString() !== peerId.toString()) {
                 const data = p2p.Challenge.decode(buffer);
                 
                 // @ts-ignore - protobuf message property access
-                const { challenge, from } = data;
-                const difficulty = this._challengeDifficulty;
+                const { challenge, from, difficulty} = data;
+
+                if (!difficulty || !challenge) {
+                    this.log(`[P2P] ✗ Peer ${from} sent an invalid challenge. Hanging up.`, 'warn');
+                    try { await stream.close(); } catch {}
+                    return;
+                }
                 let nonce = 0;
                 let solution = '';
                 
@@ -1129,7 +1134,7 @@ if (this.node.peerId.toString() !== peerId.toString()) {
             const minLen = MIN_DIFFICULTY.length;
             const maxLen = MAX_DIFFICULTY.length;
             let currentLen = this._currentChallengeDifficulty.length;
-
+            this.log(`[SECURITY] Current PoW difficulty for P2P: ${this._currentChallengeDifficulty}`,'info');
             if (rate > SURGE_THRESHOLD) {
                 // Load increasing: increase difficulty
                 currentLen = Math.min(currentLen + 1, maxLen);
