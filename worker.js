@@ -1189,6 +1189,7 @@ async function syncForward(targetHeight, targetHash, trustedPeers) {
     const startTime = Date.now();
     try {
         let currentHeight = await db.getTipHeight();
+        const syncStartHeight = currentHeight;
         let previousBlock = await db.loadBlock(currentHeight);
         syncState.syncProgress.currentHeight = currentHeight;
         syncState.syncProgress.targetHeight = targetHeight;
@@ -1362,19 +1363,8 @@ async function syncForward(targetHeight, targetHash, trustedPeers) {
                     const chainState = await pluribit.get_blockchain_state();
                     await db.saveTotalWork(chainState.total_work);
                     log(`[SYNC] Checkpoint saved at height ${blockHeightBigInt}`, 'info');
-                }
-                                
-                // Update wallets periodically
-                if (blockHeightBigInt % 100n === 0n) {
-                    const release = await globalMutex.acquire();
-                    try {
-                        for (const walletId of workerState.wallets.keys()) {
-                            await pluribit.wallet_session_scan_block(walletId, block);
-                        }
-                    } finally {
-                        release();
-                    }
-                }
+                }                              
+
                 
                 // Update previousBlock for the next iteration.
                 previousBlock = block;
@@ -1385,6 +1375,26 @@ async function syncForward(targetHeight, targetHash, trustedPeers) {
         
         log(`[SYNC] Completed sync to height ${targetHeight}`, 'success');        
         
+    
+          // --- ADDED: Efficient, one-time wallet scan ---
+        // This runs *after* the sync is complete, instead of every 100 blocks.
+        if (workerState.wallets.size > 0) {
+            log(`[SYNC] Sync complete. Rescanning ${workerState.wallets.size} active wallet(s) from height ${syncStartHeight + 1n} to ${targetHeight}...`);
+            const release = await globalMutex.acquire();
+            try {
+                for (const walletId of workerState.wallets.keys()) {
+                    // Use the efficient range-scan function from Rust 
+                    await pluribit.wallet_session_scan_range(
+                        walletId, 
+                        syncStartHeight + 1n, // Start from the block *after* our old tip
+                        targetHeight
+                    );
+                }
+            } finally {
+                release();
+            }
+            log('[SYNC] Wallet rescan complete.');
+        }
     
         // RATIONALE (Circuit Breaker): Reset failure count on a successful sync.
         syncState.consecutiveFailures = 0;
