@@ -1637,6 +1637,27 @@ enum IngestResult {
     Invalid { reason: String },
 }
 
+struct DifficultyParams {
+    vrf_threshold: [u8; 32],
+    vdf_iterations: u64,
+}
+
+enum ValidationDecision {
+    ExtendCanonical { 
+        expected_params: DifficultyParams,
+    },
+    StoreSideBlock { 
+        tip_hash: String,
+        height: u64,
+    },
+    RequestParent { 
+        hash: String,
+    },
+    Reject { 
+        reason: String,
+    },
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct ReorgPlan {
     pub detach: Vec<String>,       // hashes to roll back (old canonical)
@@ -1716,193 +1737,236 @@ fn get_block_any(hash: &str) -> Option<Block> {
     (chain.tip_hash.clone(), *chain.current_height)
  }
 
+
+
+/// Pure validation logic - no side effects, no async, no mutations
+fn validate_block_for_ingestion(
+    block: &Block,
+    current_tip_hash: &str,
+    current_tip_height: u64,
+) -> Result<ValidationDecision, String> {
+    let block_hash = block.hash();
+    let block_height = *block.height;
+
+    // 1. Genesis validation
+    if block_height == 0 {
+        if block_hash != crate::constants::CANONICAL_GENESIS_HASH {
+            return Ok(ValidationDecision::Reject {
+                reason: format!("Invalid genesis hash. Expected {}, got {}",
+                    crate::constants::CANONICAL_GENESIS_HASH, block_hash)
+            });
+        }
+    }
+
+    // 2. Timestamp validation
+    let now_ms = js_sys::Date::now() as u64;
+    if *block.timestamp > now_ms + crate::constants::MAX_FUTURE_DRIFT_MS {
+        return Ok(ValidationDecision::Reject {
+            reason: format!("Block timestamp {} is too far in the future", *block.timestamp)
+        });
+    }
+
+    // 3. Check if block extends canonical tip (fast path)
+    if block_height == current_tip_height + 1 && block.prev_hash == current_tip_hash {
+        // Calculate expected difficulty parameters
+        let (expected_vrf_threshold, expected_vdf_iterations) = {
+            let chain = BLOCKCHAIN.lock().unwrap();
+            
+            if block_height > 0 && block_height % DIFFICULTY_ADJUSTMENT_INTERVAL == 0 {
+                // Need adjustment - will be calculated async in apply phase
+                (chain.current_vrf_threshold, chain.current_vdf_iterations)
+            } else {
+                (chain.current_vrf_threshold, chain.current_vdf_iterations)
+            }
+        };
+        
+        return Ok(ValidationDecision::ExtendCanonical {
+            expected_params: DifficultyParams {
+                vrf_threshold: expected_vrf_threshold,
+                vdf_iterations: *expected_vdf_iterations,
+            }
+        });
+    }
+
+    // 4. Not extending tip - it's either a side block or orphan
+    // We need async DB checks for this, so return a decision that requires lookup
+    Ok(ValidationDecision::StoreSideBlock {
+        tip_hash: block_hash,
+        height: block_height,
+    })
+}
+
+/// Async validation for side blocks/orphans (requires DB lookups)
+async fn validate_side_or_orphan(
+    block: &Block,
+) -> Result<ValidationDecision, JsValue> {
+    let block_hash = block.hash();
+    let block_height = *block.height;
+
+    // Check if already canonical
+    if let Some(db_block_at_height) = load_block_from_db(block_height).await? {
+        if db_block_at_height.hash() == block_hash {
+            return Ok(ValidationDecision::Reject {
+                reason: "Duplicate canonical block".to_string()
+            });
+        } else {
+            return Ok(ValidationDecision::StoreSideBlock {
+                tip_hash: block_hash,
+                height: block_height,
+            });
+        }
+    }
+
+    // Check if already in side cache
+    if SIDE_BLOCKS.lock().unwrap().contains_key(&block_hash) {
+        return Ok(ValidationDecision::StoreSideBlock {
+            tip_hash: block_hash,
+            height: block_height,
+        });
+    }
+
+    // Check if parent exists
+    let (tip_h, _) = tip_hash_and_height();
+    let parent_exists = if block.prev_hash == tip_h {
+        true
+    } else if SIDE_BLOCKS.lock().unwrap().contains_key(&block.prev_hash) {
+        true
+    } else {
+        load_block_by_hash(&block.prev_hash).await?.is_some()
+    };
+
+    if parent_exists {
+        Ok(ValidationDecision::StoreSideBlock {
+            tip_hash: block_hash,
+            height: block_height,
+        })
+    } else {
+        Ok(ValidationDecision::RequestParent {
+            hash: block.prev_hash.clone(),
+        })
+    }
+}
+
+/// Main entry point - now a thin coordinator
 /// Unified entrypoint for all incoming blocks from the network.
 /// - If parent missing -> store on side + ask JS to fetch the parent.
 /// - Else -> valid side block; JS may ask for reorg via plan_reorg_for_tip.
 #[wasm_bindgen(js_name = "ingest_block_bytes")]
 pub async fn ingest_block_bytes(block_bytes: Vec<u8>) -> Result<JsValue, JsValue> {
     use prost::Message;
-    // Decode the Protobuf bytes into the p2p::Block struct 
+    
+    // 1. Decode and compute hash
     let p2p_block = p2p::Block::decode(&block_bytes[..])
         .map_err(|e| JsValue::from_str(&format!("bad block proto: {e}")))?;
-    // Convert the p2p::Block struct into the internal Block struct 
     let mut block: Block = Block::from(p2p_block);
-    // CRITICAL: Always recompute hash to ensure consistency across nodes 
     block.hash = block.compute_hash();
-    let block_hash = block.hash(); // Store computed hash
-    let block_height = *block.height;
 
-    // CRITICAL: Reject any genesis block that doesn't match canonical 
-    if block_height == 0 {
-        if block_hash != crate::constants::CANONICAL_GENESIS_HASH { // 
-            let res = IngestResult::Invalid { // 
-                reason: format!("Invalid genesis hash. Expected {}, got {}", // 
-                    crate::constants::CANONICAL_GENESIS_HASH, block_hash) // 
-            };
-            return serde_wasm_bindgen::to_value(&res).map_err(|e| e.into()); // 
-        }
-    }
+    // 2. Fast validation (synchronous, no DB)
+    let (tip_hash, tip_height) = tip_hash_and_height();
+    let decision = validate_block_for_ingestion(&block, &tip_hash, tip_height)
+        .map_err(|e| JsValue::from_str(&e))?;
 
-    // Add timestamp validation 
-    {
-        const MAX_FUTURE_DRIFT_MS: u64 = 120_000; // 2 minutes 
-        let now_ms = js_sys::Date::now() as u64; // 
+    // 3. Handle decision
+    match decision {
+        ValidationDecision::ExtendCanonical { expected_params } => {
+            // Apply block to chain
+            {
+                let mut chain = BLOCKCHAIN.lock().unwrap();
 
-        if *block.timestamp > now_ms + MAX_FUTURE_DRIFT_MS { // 
-            let res = IngestResult::Invalid { // 
-                reason: format!("Block timestamp {} is too far in the future (max drift: {}ms)", // 
-                    *block.timestamp, MAX_FUTURE_DRIFT_MS) // 
-            };
-            return serde_wasm_bindgen::to_value(&res).map_err(|e| e.into()); // 
-        }
-    }
+                // Re-calculate difficulty if needed
+                let (vrf_threshold, vdf_iterations) = if *block.height > 0 
+                    && *block.height % DIFFICULTY_ADJUSTMENT_INTERVAL == 0 
+                {
+                    let start_height = block.height.saturating_sub(DIFFICULTY_ADJUSTMENT_INTERVAL);
+                    let end_height = *block.height - 1;
 
-    // --- REVISED DUPLICATE/FORK DETECTION ---
+                    let start_block = load_block_from_db(start_height).await?
+                        .ok_or_else(|| JsValue::from_str(&format!("Missing start block {}", start_height)))?;
+                    let end_block = load_block_from_db(end_height).await?
+                        .ok_or_else(|| JsValue::from_str(&format!("Missing end block {}", end_height)))?;
 
-    // 1. Check against CANONICAL chain in DB first
-    // RATIONALE: This logic performs an async database call to see if we already
-    // have a canonical block at this height. This is the correct way to detect a common ancestor. 
-    if let Some(db_block_at_height) = load_block_from_db(block_height).await? {
-        if db_block_at_height.hash() == block_hash {
-            // Already canonical - truly a duplicate.
-            log(&format!("[INGEST {}] Block already canonical at height {}", &block_hash[..8], block_height));
-            // Return Invalid result if it's a duplicate of a canonical block 
-            let res = IngestResult::Invalid { reason: "Duplicate canonical block".to_string() }; // MODIFIED: Reason string
-            return serde_wasm_bindgen::to_value(&res).map_err(|e| e.into()); // 
-        } else {
-            // Fork detected against canonical chain. Store on side.
-            log(&format!("[INGEST {}] Fork detected against canonical block {} at height {}", &block_hash[..8], &db_block_at_height.hash()[..8], block_height));
-            store_side_block(block_hash.clone(), block.clone()); // Store before returning 
-            // Ensure hash is set in the block before returning 
-            block.hash = block_hash.clone(); // Ensure hash is correct
-            // Return StoredOnSide if a different block exists at this height 
-            let res = IngestResult::StoredOnSide { tip_hash: block_hash, height: block_height };
-            return serde_wasm_bindgen::to_value(&res).map_err(|e| e.into()); // 
-        }
-    }
+                    let params_at_interval_end = (end_block.vrf_threshold, end_block.vdf_iterations);
+                    Blockchain::calculate_next_difficulty(
+                        &end_block,
+                        &start_block,
+                        params_at_interval_end.0,
+                        params_at_interval_end.1
+                    )
+                } else {
+                    (expected_params.vrf_threshold, WasmU64::from(expected_params.vdf_iterations))
+                };
 
-    // 2. Check SIDE_BLOCKS cache (only if NOT found canonical in DB)
-    // Also check the side cache for duplicates that are not yet canonical. 
-    if SIDE_BLOCKS.lock().unwrap().contains_key(&block_hash) {
-        // Already known as a side block. Return StoredOnSide, NOT Invalid.
-        log(&format!("[INGEST {}] Block already known as side block at height {}", &block_hash[..8], block_height));
-         // Ensure hash is set in the block before returning 
-        block.hash = block_hash.clone(); // Ensure hash is correct
-        // // MODIFIED: Return StoredOnSide instead of Invalid 
-        let res = IngestResult::StoredOnSide { tip_hash: block_hash, height: block_height }; // MODIFIED: Return StoredOnSide
-        return serde_wasm_bindgen::to_value(&res).map_err(|e| e.into()); // 
-    }
-    // --- END REVISED DUPLICATE/FORK DETECTION ---
-
-    log(&format!("[RUST DEBUG] ingest_block: height={}, hash={}", block_height, block_hash)); // 
-
-
-    // Parent equals canonical tip? Fast-path extend canonical chain. 
-    let (tip_h, tip_ht) = tip_hash_and_height(); // 
-
-
-    if block_height == tip_ht + 1 && block.prev_hash == tip_h { // 
-        log("[RUST DEBUG] Block extends canonical tip, processing..."); // 
-        {
-            let mut chain = BLOCKCHAIN.lock().unwrap(); // 
-
-            // Calculate expected difficulty parameters for this block 
-            let (expected_vrf_threshold, expected_vdf_iterations) = if block_height > 0 && block_height % DIFFICULTY_ADJUSTMENT_INTERVAL == 0 { // 
-                let start_height = block_height.saturating_sub(DIFFICULTY_ADJUSTMENT_INTERVAL); // 
-                let end_height = block_height - 1; // 
-
-                log(&format!("[DIFFICULTY Check] Adjustment for block {}. Using interval start={}, end={}", block_height, start_height, end_height)); // 
-
-                let start_block = load_block_from_db(start_height).await? // 
-                    .ok_or_else(|| JsValue::from_str(&format!("Missing start block {} for difficulty adjustment", start_height)))?; // 
-                let end_block = load_block_from_db(end_height).await? // 
-                    .ok_or_else(|| JsValue::from_str(&format!("Missing end block {} for difficulty adjustment", end_height)))?; // 
-
-                // Get the parameters effective at the END of the interval (from end_block) 
-                let params_at_interval_end = (end_block.vrf_threshold, end_block.vdf_iterations); // 
-
-                Blockchain::calculate_next_difficulty( // 
-                    &end_block,
-                    &start_block,
-                    params_at_interval_end.0,
-                    params_at_interval_end.1)
-
-            } else { // 
-                (chain.current_vrf_threshold, chain.current_vdf_iterations) // 
-            };
-
-            // Median Time Past (MTP) check
-            if block_height > constants::MTP_WINDOW as u64 { // 
-                let mut timestamps = Vec::new(); // 
-                for i in (block_height - constants::MTP_WINDOW as u64)..block_height { // 
-                    if let Some(b) = load_block_from_db(i).await? { // 
-                        timestamps.push(b.timestamp); // 
+                // MTP check
+                if *block.height > constants::MTP_WINDOW as u64 {
+                    let mut timestamps = Vec::new();
+                    for i in (*block.height - constants::MTP_WINDOW as u64)..*block.height {
+                        if let Some(b) = load_block_from_db(i).await? {
+                            timestamps.push(b.timestamp);
+                        }
+                    }
+                    timestamps.sort_unstable();
+                    let mtp = timestamps[timestamps.len() / 2];
+                    if *block.timestamp < *mtp {
+                        let res = IngestResult::Invalid { reason: "Timestamp < MTP".to_string() };
+                        return serde_wasm_bindgen::to_value(&res).map_err(|e| e.into());
                     }
                 }
-                timestamps.sort_unstable(); // 
-                let mtp = timestamps[timestamps.len() / 2]; // 
-                if *block.timestamp < *mtp { // 
-                    let res = IngestResult::Invalid { reason: "Timestamp < MTP".to_string() }; // 
-                    return serde_wasm_bindgen::to_value(&res).map_err(|e| e.into()); // 
-                }
-            } // 
 
-            // Add the block to the in-memory chain state 
-            chain.add_block(block.clone(), expected_vrf_threshold, expected_vdf_iterations).await // 
-                .map_err(|e| JsValue::from_str(&format!("Failed to add block: {e}")))?; // 
-            log("[RUST DEBUG] Block added to chain successfully"); // 
-            // CRITICAL: Update block's total_work from chain 
-            block.total_work = chain.total_work; // 
+                chain.add_block(block.clone(), vrf_threshold, vdf_iterations).await
+                    .map_err(|e| JsValue::from_str(&format!("Failed to add block: {e}")))?;
+                
+                block.total_work = chain.total_work;
+                chain.current_vrf_threshold = vrf_threshold;
+                chain.current_vdf_iterations = vdf_iterations;
+            }
 
-            // Update chain's current difficulty params 
-            chain.current_vrf_threshold = expected_vrf_threshold; // 
-            chain.current_vdf_iterations = expected_vdf_iterations; // 
+            save_block_to_db(block.clone()).await?;
+            save_total_work_to_db(*BLOCKCHAIN.lock().unwrap().total_work).await?;
+            mempool_hygiene_after_block(&block);
+
+            let res = IngestResult::AcceptedAndExtended;
+            serde_wasm_bindgen::to_value(&res).map_err(|e| e.into())
         }
-        // Save block to canonical DB 
-        save_block_to_db(block.clone()).await?;
-        // Save updated total work to DB 
-        save_total_work_to_db(*BLOCKCHAIN.lock().unwrap().total_work).await?;
-        // Clean up mempool 
-        mempool_hygiene_after_block(&block);
-        // Return success result 
-        let res = IngestResult::AcceptedAndExtended;
-        log("[RUST DEBUG] Returning AcceptedAndExtended");
-        return serde_wasm_bindgen::to_value(&res).map_err(|e| e.into()); // 
-    }
-
-    // Log the state only if the fast-path check fails 
-    log(&format!("[RUST DEBUG] Current tip: hash={}, height={}", tip_h, tip_ht)); // 
-    log(&format!("[RUST DEBUG] Block wants: prev_hash={}, height={}", block.prev_hash, block_height)); // 
-
-    // --- Check if parent exists (either canonical DB or side cache/DB) --- 
-    let parent_exists = if block.prev_hash == tip_h { // Parent is current canonical tip 
-        true
-    } else if SIDE_BLOCKS.lock().unwrap().contains_key(&block.prev_hash) { // Parent in side cache 
-        true
-    } else { // Check DB for parent (could be older canonical or side block saved to DB) 
-        load_block_by_hash(&block.prev_hash).await?.is_some()
-    };
-
-
-    if parent_exists { // 
-        // Parent exists, but block doesn't extend tip -> store as side block 
-        log(&format!("[INGEST {}] Parent {} exists, storing block as side block", &block_hash[..8], &block.prev_hash[..8]));
-        store_side_block(block_hash.clone(), block.clone()); // Store the block itself 
-        // Ensure hash is set in the block before returning 
-        block.hash = block_hash.clone(); // Ensure hash is correct
-        let res = IngestResult::StoredOnSide { tip_hash: block_hash, height: block_height }; // 
-        return serde_wasm_bindgen::to_value(&res).map_err(|e| e.into()); // 
-    } else {
-        // Parent does NOT exist anywhere we know. Request it. 
-        log(&format!("[INGEST {}] Parent {} NOT FOUND. Requesting parent.", &block_hash[..8], &block.prev_hash[..8]));
-        store_side_block(block_hash.clone(), block.clone()); // Store the orphan block anyway 
-        // Ensure hash is set in the block before returning 
-        block.hash = block_hash.clone(); // Ensure hash is correct
-        let res = IngestResult::NeedParent { // 
-            hash: block.prev_hash.clone(), // Request the parent hash 
-            reason: "Parent block not found".to_string(), // 
-        };
-        return serde_wasm_bindgen::to_value(&res).map_err(|e| e.into()); // 
+        
+        ValidationDecision::StoreSideBlock { tip_hash, height } => {
+            // Need async validation
+            let async_decision = validate_side_or_orphan(&block).await?;
+            
+            match async_decision {
+                ValidationDecision::StoreSideBlock { tip_hash, height } => {
+                    store_side_block(block.hash(), block.clone());
+                    let res = IngestResult::StoredOnSide { tip_hash, height };
+                    serde_wasm_bindgen::to_value(&res).map_err(|e| e.into())
+                }
+                ValidationDecision::RequestParent { hash } => {
+                    store_side_block(block.hash(), block.clone());
+                    let res = IngestResult::NeedParent {
+                        hash,
+                        reason: "Parent block not found".to_string(),
+                    };
+                    serde_wasm_bindgen::to_value(&res).map_err(|e| e.into())
+                }
+                ValidationDecision::Reject { reason } => {
+                    let res = IngestResult::Invalid { reason };
+                    serde_wasm_bindgen::to_value(&res).map_err(|e| e.into())
+                }
+                _ => unreachable!(),
+            }
+        }
+        
+        ValidationDecision::RequestParent { hash } => {
+            store_side_block(block.hash(), block.clone());
+            let res = IngestResult::NeedParent {
+                hash,
+                reason: "Parent block not found".to_string(),
+            };
+            serde_wasm_bindgen::to_value(&res).map_err(|e| e.into())
+        }
+        
+        ValidationDecision::Reject { reason } => {
+            let res = IngestResult::Invalid { reason };
+            serde_wasm_bindgen::to_value(&res).map_err(|e| e.into())
+        }
     }
 }
 
