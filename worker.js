@@ -1573,13 +1573,13 @@ async function startPoSTMining() {
         // Call the new Rust function to get parameters for the *next* block
         try {
             const nextParams = await pluribit.calculate_next_difficulty_params(currentHeight); // Pass current height
-            vrfThresholdToUse = Array.from(nextParams.vrf_threshold); // Convert Vec<u8> from Rust
+            vrfThresholdToUse = nextParams.vrf_threshold; // Convert Vec<u8> from Rust
             vdfIterationsToUse = BigInt(nextParams.vdf_iterations); // Convert u64 from Rust
             log(`[MINING] Using difficulty params for block #${nextHeight}: VRF=${Buffer.from(vrfThresholdToUse).toString('hex').substring(0,8)}..., VDF=${vdfIterationsToUse}`);
         } catch (e) {
              log(`[MINING] Error calculating next difficulty params: ${e?.message || e}. Falling back to current params.`, 'error');
              // Fallback to current params if calculation fails
-             vrfThresholdToUse = Array.from(chain.current_vrf_threshold); 
+             vrfThresholdToUse = chain.current_vrf_threshold;
              vdfIterationsToUse = BigInt(chain.current_vdf_iterations); 
         }        
         
