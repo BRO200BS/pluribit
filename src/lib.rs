@@ -1279,15 +1279,18 @@ pub async fn calculate_next_difficulty_params(current_height_js: JsValue) -> Res
         if let Some(tip_block) = load_block_from_db(current_height).await? {
             (tip_block.vrf_threshold, tip_block.vdf_iterations)
         } else if current_height == 0 {
-             // Special case for genesis
-             let genesis = Block::genesis();
-             (genesis.vrf_threshold, genesis.vdf_iterations)
-        }
-         else {
+            // Special case for genesis
+            let genesis = Block::genesis();
+            (genesis.vrf_threshold, genesis.vdf_iterations)
+        } else {
             // Fallback if tip block is missing (should ideally not happen)
-             log(&format!("[WARN] Could not load tip block {} to get current difficulty params", current_height));
-             (crate::constants::DEFAULT_VRF_THRESHOLD, WasmU64::from(crate::constants::INITIAL_VDF_ITERATIONS))
-         }
+            log(&format!("[WARN] Could not load tip block {} to get current difficulty params", current_height));
+            // FIX: Actually return an error instead of using potentially wrong defaults
+            return Err(JsValue::from_str(&format!(
+                "Cannot calculate difficulty: tip block at height {} not found", 
+                current_height
+            )));
+        }
     };
 
     let (next_vrf_threshold, next_vdf_iterations) = if next_height > 0 && next_height % DIFFICULTY_ADJUSTMENT_INTERVAL == 0 {

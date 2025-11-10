@@ -38,10 +38,12 @@ const BATCH_SIZE = 1000n; // Process 1000 nonces in native code per batch
 async function findMiningCandidate(params) {
   const { jobId, height, minerPubkey, minerSecretKey, prevHash, vrfThreshold, vdfIterations } = params;
   let nonce = 0n;
-    
-    parentPort.postMessage({ 
-        type: 'STATUS', 
-        message: `Starting mining job #${jobId} for block #${height}` 
+  let consecutiveErrors = 0; // ← ADD: Circuit breaker
+  const MAX_CONSECUTIVE_ERRORS = 5; // ← ADD: Halt after 5 bad batches
+   
+    parentPort.postMessage({
+        type: 'STATUS',
+        message: `Starting mining job #${jobId} for block #${height}`
     });
 
   // This loop is async, allowing 'STOP' messages to be processed between batches.
@@ -61,6 +63,7 @@ async function findMiningCandidate(params) {
             );
 
             if (result) {
+                consecutiveErrors = 0; // ← ADD: Reset on success
                 // We found a candidate!
                 parentPort.postMessage({
                     type: 'CANDIDATE_FOUND',
@@ -78,17 +81,17 @@ async function findMiningCandidate(params) {
                         vdfIterations
                     }
                 });
-                
-                parentPort.postMessage({ 
-                    type: 'STATUS', 
-                    message: `Won lottery at nonce ${result.nonce}! VRF: ${Buffer.from(result.vrf_proof.output).toString('hex').substring(0,12)}...` 
+               
+                parentPort.postMessage({
+                    type: 'STATUS',
+                    message: `Won lottery at nonce ${result.nonce}! VRF: ${Buffer.from(result.vrf_proof.output).toString('hex').substring(0,12)}...`
                 });
                 return; // Stop mining this block
             }
-            
+           
             // No candidate found in this batch, prepare for the next
             nonce += BATCH_SIZE;
-            
+           
             // Periodic status update (e.g., every 10 batches)
             if (nonce % (BATCH_SIZE * 10n) === 0n) {
                 parentPort.postMessage({
@@ -96,23 +99,32 @@ async function findMiningCandidate(params) {
                     message: `Mining block #${height}: Tried ${nonce} nonces...`
                 });
             }
-            
+           
             // *** CRITICAL ***
             // Yield to the event loop to allow `parentPort.on('message')`
             // to process a potential 'STOP' message.
             await new Promise(resolve => setImmediate(resolve));
-            
+           
         } catch (e) {
-            parentPort.postMessage({ 
+            consecutiveErrors++; // ← ADD: Increment counter
+            parentPort.postMessage({
                 type: 'STATUS',
                 message: `Error at nonce ${nonce}: ${e?.message || e}`
             });
+            if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) { // ← ADD: Self-stop if too many
+                parentPort.postMessage({ 
+                    type: 'STATUS', 
+                    message: `Too many consecutive errors (${consecutiveErrors}). Stopping job ${jobId}.` 
+                });
+                currentJobId = null;  // Self-stop
+                return;
+            }
             nonce += BATCH_SIZE; // Skip batch on error
             // Also yield on error
             await new Promise(resolve => setImmediate(resolve));
         }
     }
-    
+   
   // Loop was stopped by a 'STOP' message
   if (currentJobId !== jobId) {
     parentPort.postMessage({

@@ -117,6 +117,15 @@ let blockRequestCleanupTimer = null;
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+function ensureUint8Array(arr) {
+  if (arr instanceof Uint8Array) return arr;
+  if (Array.isArray(arr) && arr.every(v => typeof v === 'number' && v >= 0 && v <= 255)) {
+    return new Uint8Array(arr);
+  }
+  throw new Error(`Invalid byte array: ${arr}`);
+}
+
+
 // --- CHANGED: Manually expose DB functions from NATIVE module ---
 // RATIONALE: Wrap all native DB functions in async wrappers.
 // The WASM module (wasm-bindgen-futures) expects these functions to return Promises.
@@ -1520,32 +1529,31 @@ async function syncForward(targetHeight, targetHash, trustedPeers) {
 
 
 async function startPoSTMining() {
-    const release = await globalMutex.acquire(); 
+    const release = await globalMutex.acquire();
     try {
         if (!workerState.minerActive) return;
-
         // === NEW: Validate state consistency before mining ===
         const dbTipHeight = BigInt(native_db.getTipHeight());
-        let chain = await pluribit.get_blockchain_state();  // Use 'let' so we can reassign
+        let chain = await pluribit.get_blockchain_state(); // Use 'let' so we can reassign
         const rustTipHeight = BigInt(chain.current_height);
-        
+       
         if (dbTipHeight !== rustTipHeight) {
             log(`[MINING] ✗ State inconsistency detected!`, 'error');
-            log(`[MINING]    Database tip height: ${dbTipHeight}`, 'error');
-            log(`[MINING]    Rust memory tip height: ${rustTipHeight}`, 'error');
-            
-            const dbTipBlock =  native_db.loadBlock(dbTipHeight);
+            log(`[MINING] Database tip height: ${dbTipHeight}`, 'error');
+            log(`[MINING] Rust memory tip height: ${rustTipHeight}`, 'error');
+           
+            const dbTipBlock = native_db.loadBlock(dbTipHeight);
             if (dbTipBlock) {
-                log(`[MINING]    Database tip hash: ${dbTipBlock.hash.substring(0,12)}...`, 'error');
+                log(`[MINING] Database tip hash: ${dbTipBlock.hash.substring(0,12)}...`, 'error');
             }
-            log(`[MINING]    Rust tip hash: ${chain.tip_hash.substring(0,12)}...`, 'error');
-            
+            log(`[MINING] Rust tip hash: ${chain.tip_hash.substring(0,12)}...`, 'error');
+           
             log(`[MINING] Attempting to resync state...`, 'warn');
-            
+           
             try {
                 await pluribit.force_reset_to_height(dbTipHeight, dbTipBlock.hash);
                 log('[MINING] ✓ State resynced from database', 'success');
-                
+               
                 // ONLY reload after resync
                 chain = await pluribit.get_blockchain_state();
             } catch (resyncError) {
@@ -1555,21 +1563,18 @@ async function startPoSTMining() {
             }
         }
         // === END NEW CODE ===
-
         // Ensure mining worker exists
         if (!workerState.miningWorker) {
             workerState.miningWorker = new ThreadWorker(new URL('./mining-worker.js', import.meta.url));
             attachMiningWorkerHandlers(workerState.miningWorker);
         }
-        
+       
         // Reuse the chain variable - no need to reload!
         const currentHeight = BigInt(chain.current_height);
         const nextHeight = currentHeight + 1n;
-
         // --- START: MODIFIED DIFFICULTY PARAMETER LOGIC ---
         let vrfThresholdToUse;
         let vdfIterationsToUse;
-
         // Call the new Rust function to get parameters for the *next* block
         try {
             const nextParams = await pluribit.calculate_next_difficulty_params(currentHeight); // Pass current height
@@ -1579,13 +1584,12 @@ async function startPoSTMining() {
         } catch (e) {
              log(`[MINING] Error calculating next difficulty params: ${e?.message || e}. Falling back to current params.`, 'error');
              // Fallback to current params if calculation fails
-             vrfThresholdToUse = chain.current_vrf_threshold;
-             vdfIterationsToUse = BigInt(chain.current_vdf_iterations); 
-        }        
-        
+            vrfThresholdToUse = new Uint8Array(chain.current_vrf_threshold);
+             vdfIterationsToUse = BigInt(chain.current_vdf_iterations);
+        }
+       
         // Get the miner's secret key
         const minerSecretKey = await pluribit.wallet_session_get_spend_privkey(workerState.minerId);
-
         // Abort any in-flight job, then send a fresh mining job
         await abortCurrentMiningJob();
         // Send mining job to worker
@@ -1594,15 +1598,15 @@ async function startPoSTMining() {
             type: 'MINE_BLOCK',
             jobId: workerState.currentJobId,
             height: BigInt(chain.current_height) + 1n,
-            minerPubkey: await pluribit.wallet_session_get_spend_pubkey(workerState.minerId),
-            minerSecretKey: minerSecretKey,
+            minerPubkey: ensureUint8Array(await pluribit.wallet_session_get_spend_pubkey(workerState.minerId)), // ← FIXED: Wrap in Uint8Array
+            minerSecretKey: ensureUint8Array(minerSecretKey), // ← FIXED: Wrap in Uint8Array
             prevHash: await pluribit.get_latest_block_hash(),
-            vrfThreshold: vrfThresholdToUse,
+            vrfThreshold: ensureUint8Array(vrfThresholdToUse), // ← FIXED: Ensure (already is, but safe)
             vdfIterations: vdfIterationsToUse
         });
     } finally {
         // Always release the lock when the function is done
-        release(); 
+        release();
     }
 }
 
