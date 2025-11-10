@@ -86,7 +86,6 @@ jobs:
           cp -r pkg-node pluribit-release/
           cp -r src pluribit-release/
           cp *.js pluribit-release/
-          cp *.cjs pluribit-release/
           cp *.json pluribit-release/
           cp README.md pluribit-release/
       
@@ -97,7 +96,6 @@ jobs:
           xcopy /E /I pkg-node pluribit-release\\pkg-node
           xcopy /E /I src pluribit-release\\src
           copy *.js pluribit-release
-          copy *.cjs pluribit-release
           copy *.json pluribit-release
           copy README.md pluribit-release
 
