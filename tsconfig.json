@@ -11,5 +11,5 @@
     "esModuleInterop": true,
     "resolveJsonModule": true        // ✅ Added this
   },
-  "include": ["worker.js", "libp2p-node.js", "js_bridge.cjs", "main.js"]
+  "include": ["worker.js", "libp2p-node.js", "main.js"]
 }

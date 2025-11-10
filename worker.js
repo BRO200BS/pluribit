@@ -333,11 +333,13 @@ function startApiServer() {
 
 
             if (url.pathname === '/api/stats') {
-                const tipHeight =  native_db.getTipHeight();
-                const totalWork =  native_db.loadTotalWork();
+                const tipHeightObj = native_db.getTipHeight();
+                const tipHeight = convertLongsToBigInts(tipHeightObj);
+                const totalWorkObj = native_db.loadTotalWork();
+                const totalWork = convertLongsToBigInts(totalWorkObj);
                 const utxoSetSize = pluribit.get_utxo_set_size();
-
-                const tipBlock = tipHeight > 0n ?  native_db.loadBlock(tipHeight) : null;
+                const tipBlockObj = tipHeight > 0n ? native_db.loadBlock(tipHeight) : null;
+                const tipBlock = tipBlockObj ? convertLongsToBigInts(tipBlockObj) : null;
                 
                 res.writeHead(200);
                 res.end(JSONStringifyWithBigInt({
@@ -345,8 +347,8 @@ function startApiServer() {
                     totalWork,
                     utxoCount: utxoSetSize,
                     tipHash: tipBlock?.hash || 'N/A',
-                    timestamp: tipBlock?.timestamp || 0,
-                    vdfIterations: tipBlock?.vdfIterations || 0
+                    timestamp: tipBlock?.timestamp ? Number(tipBlock.timestamp) : 0,
+                    vdfIterations: tipBlock?.vdfIterations ? Number(tipBlock.vdfIterations) : 0
                 }));
             }
             
@@ -370,19 +372,21 @@ function startApiServer() {
             }
             
             else if (hashMatch) { // <<< Check for HASH match first
-                const hash = hashMatch[1]; // Get captured hash from regex group 1
-                log(`[API /api/block/hash/] Matched hash: ${hash.substring(0,12)}...`);
-                const tipHeight =  native_db.getTipHeight();
-                 
-                let foundBlock = null; // Initialize foundBlock
-                // Search backwards (consider adding a depth limit if needed)
-                for (let h = tipHeight; h >= 0n; h--) {
-                    const block =  native_db.loadBlock(h);
-                    if (block && block.hash === hash) {
-                        foundBlock = block; // Assign the found block
-                        break; // Exit loop once found
-                    }
-                }
+                const hash = hashMatch[1]; // Get captured hash from regex group 1
+                log(`[API /api/block/hash/] Matched hash: ${hash.substring(0,12)}...`);
+                const tipHeightObj = native_db.getTipHeight();
+                const tipHeight = convertLongsToBigInts(tipHeightObj);
+
+                let foundBlock = null; // Initialize foundBlock
+                // Search backwards (consider adding a depth limit if needed)
+                for (let h = tipHeight; h >= 0n; h--) {
+                    const blockObj = native_db.loadBlock(h);
+                    const block = convertLongsToBigInts(blockObj);
+                    if (block && block.hash === hash) {
+                        foundBlock = block; // Assign the found block
+                        break; // Exit loop once found
+                    }
+                }
                 
                 if (foundBlock) { // Check if foundBlock has a value
                     res.writeHead(200);
@@ -394,18 +398,19 @@ function startApiServer() {
             }
             else if (heightMatch) { // <<< Check for HEIGHT match second
                 try {
-                    const heightStr = heightMatch[1]; // Get captured height string
-                    const height = BigInt(heightStr);
-                    log(`[API /api/block/:height] Matched height: ${height}`);
-                
-                const block =  native_db.loadBlock(height);
-                if (!block) {
-                    res.writeHead(404);
-                    res.end(JSONStringifyWithBigInt({ error: 'Block not found' }));
-                    return;
-                }
-                        res.writeHead(200);
-                        res.end(JSONStringifyWithBigInt(block));
+                    const heightStr = heightMatch[1]; // Get captured height string
+                    const height = BigInt(heightStr);
+                    log(`[API /api/block/:height] Matched height: ${height}`);
+
+                    const blockObj = native_db.loadBlock(height);
+                    const block = convertLongsToBigInts(blockObj);
+                    if (!block) {
+                        res.writeHead(404);
+                        res.end(JSONStringifyWithBigInt({ error: 'Block not found' }));
+                        return;
+                    }
+                        res.writeHead(200);
+                        res.end(JSONStringifyWithBigInt(block));
                 } catch (e) {
                     log(`[API /api/block/:height] Invalid height format or DB error: ${e.message}`, 'warn');
                     res.writeHead(400); // Bad Request for invalid BigInt conversion
@@ -414,21 +419,25 @@ function startApiServer() {
             }
             else if (url.pathname.startsWith('/api/blocks/recent')) {
                 const count = BigInt(Math.min(parseInt(url.searchParams.get('count') || '10'), 100));
-                const tipHeight =  native_db.getTipHeight();
+                const tipHeightObj = native_db.getTipHeight();
+                const tipHeight = convertLongsToBigInts(tipHeightObj);
                 const blocks = [];
-                
+
                 for (let i = 0n; i < count && tipHeight - i >= 0n; i++) {
-                    const block =  native_db.loadBlock(tipHeight - i);
+                    const blockObj = native_db.loadBlock(tipHeight - i);
+                    const block = convertLongsToBigInts(blockObj);
                     if (block) {
-                        
+                       
                         let minerDisplay = 'N/A';
                         let minerBytes = null; // Variable to hold the final byte array/buffer
-
                         // Check if minerPubkey exists and is a Buffer
-                        if (block.minerPubkey && Buffer.isBuffer(block.minerPubkey)) {
-                            minerBytes = block.minerPubkey;
+                        if (block.minerPubkey) {
+                            try {
+                                minerBytes = ensureUint8Array(block.minerPubkey);
+                            } catch (e) {
+                                // Silently handle invalid bytes (no log change)
+                            }
                         }
-
                         // Now, if we successfully got bytes, process them
                         if (minerBytes && minerBytes.length > 0) {
                             // Check if it's the genesis block (all zeros)
@@ -436,7 +445,7 @@ function startApiServer() {
                                 minerDisplay = 'Genesis Miner';
                             } else {
                                 // Convert the array of numbers to a hex string
-                                const hex = minerBytes.toString('hex');
+                                const hex = Buffer.from(minerBytes).toString('hex');
                                 // Use your truncate logic
                                 minerDisplay = hex.slice(0, 12) + '...' + hex.slice(-8);
                             }
@@ -444,11 +453,10 @@ function startApiServer() {
                         } else if (i === 0n) {
                             console.log(`[DEBUG] minerBytes was null or empty. Final minerDisplay: ${minerDisplay}`);
                         }
-
                         blocks.push({
                              height: block.height,
                             hash: block.hash,
-                            timestamp: block.timestamp,
+                            timestamp: Number(block.timestamp),
                             txCount: block.transactions?.length || 0,
                             miner: minerDisplay // Use the new formatted string
                         });
@@ -459,19 +467,21 @@ function startApiServer() {
                 res.end(JSONStringifyWithBigInt(blocks));
             }
             else if (url.pathname === '/api/metrics/difficulty') {
-                const tipHeight =  native_db.getTipHeight();
+                const tipHeightObj = native_db.getTipHeight();
+                const tipHeight = convertLongsToBigInts(tipHeightObj);
                 const samples = BigInt(Math.min(100, Number(tipHeight)));
                 const metrics = [];
-                
+
                 const startHeight = tipHeight - samples > 0n ? tipHeight - samples : 0n;
                 for (let i = startHeight; i <= tipHeight; i++) {
-                    const block =  native_db.loadBlock(i);
+                    const blockObj = native_db.loadBlock(i);
+                    const block = convertLongsToBigInts(blockObj);
                     if (block) {
                         metrics.push({
                             height: block.height,
-                            vrfThreshold: Array.from(block.vrfThreshold).slice(0, 4),
-                            vdfIterations: block.vdfIterations,
-                            timestamp: block.timestamp
+                            vrfThreshold: ensureUint8Array(block.vrfThreshold).slice(0, 4),
+                            vdfIterations: Number(block.vdfIterations),
+                            timestamp: Number(block.timestamp)
                         });
                     }
                 }
@@ -480,7 +490,8 @@ function startApiServer() {
                 res.end(JSONStringifyWithBigInt(metrics));
             }
             else if (url.pathname === '/api/metrics/rewards') {
-                const tipHeight =  native_db.getTipHeight();
+                const tipHeightObj = native_db.getTipHeight();
+                const tipHeight = convertLongsToBigInts(tipHeightObj);
                 const samples = BigInt(Math.min(100, Number(tipHeight)));
                 const rewards = [];
                 
@@ -501,7 +512,8 @@ function startApiServer() {
                 res.end(JSONStringifyWithBigInt(rewards));
             }
             else if (url.pathname === '/api/metrics/supply') {
-                const tipHeight =  native_db.getTipHeight();
+                const tipHeightObj = native_db.getTipHeight();
+                const tipHeight = convertLongsToBigInts(tipHeightObj);
                 
                 const INITIAL_BASE_REWARD = 50_000_000n;
                 const HALVING_INTERVAL = 525_600n;
@@ -546,42 +558,41 @@ function startApiServer() {
                 }));
             }
             else if (pathname.startsWith('/api/tx/')) { // <<< ADD TRANSACTION SEARCH ENDPOINT
-                const txHash = pathname.split('/')[3]; // Get hash from path
-
-                // Validate hash format (64 hex characters)
-                if (!/^[a-f0-9]{64}$/i.test(txHash)) {
-                    res.writeHead(400); // Bad Request
-                    res.end(JSONStringifyWithBigInt({ error: 'Invalid transaction hash format' }));
-                    return;
-                }
-
-                log(`[API /api/tx/] Searching for transaction hash: ${txHash.substring(0, 12)}...`);
-                let foundBlock = null;
-                const tipHeight =  native_db.getTipHeight();
-                // Search backwards from the tip (limit depth for performance)
-                const searchDepth = Math.min(Number(tipHeight), 1000); // Example: Search last 1000 blocks
-
-                for (let h = tipHeight; h > tipHeight - BigInt(searchDepth) && h >= 0n; h--) {
-                    const block =  native_db.loadBlock(h); // Load from LevelDB
-                    if (block && block.transactions) {
-                        for (const tx of block.transactions) {
-                            // Check kernel excess (assuming it's the TX hash)
-                            if (tx.kernels && tx.kernels[0] && tx.kernels[0].excess) {
-                                try {
-                                    // Ensure excess is treated as bytes and convert to hex
-                                    const currentTxHash = Buffer.from(tx.kernels[0].excess || []).toString('hex');
-                                    if (currentTxHash === txHash) {
-                                        foundBlock = block; // Store the block containing the tx
-                                        break; // Found in this tx
-                                    }
-                                } catch (e) {
-                                    log(`[API /api/tx/] Error calculating hash for tx in block ${h}: ${e.message}`, 'warn');
-                                }
-                            }
-                        }
-                    }
-                    if (foundBlock) break; // Found in this block, stop searching earlier blocks
-                }
+                const txHash = pathname.split('/')[3]; // Get hash from path
+                // Validate hash format (64 hex characters)
+                if (!/^[a-f0-9]{64}$/i.test(txHash)) {
+                    res.writeHead(400); // Bad Request
+                    res.end(JSONStringifyWithBigInt({ error: 'Invalid transaction hash format' }));
+                    return;
+                }
+                log(`[API /api/tx/] Searching for transaction hash: ${txHash.substring(0, 12)}...`);
+                let foundBlock = null;
+                const tipHeightObj = native_db.getTipHeight();
+                const tipHeight = convertLongsToBigInts(tipHeightObj);
+                // Search backwards from the tip (limit depth for performance)
+                const searchDepth = Math.min(Number(tipHeight), 1000); // Example: Search last 1000 blocks
+                for (let h = tipHeight; h > tipHeight - BigInt(searchDepth) && h >= 0n; h--) {
+                    const blockObj = native_db.loadBlock(h); // Load from LevelDB
+                    const block = convertLongsToBigInts(blockObj);
+                    if (block && block.transactions) {
+                        for (const tx of block.transactions) {
+                            // Check kernel excess (assuming it's the TX hash)
+                            if (tx.kernels && tx.kernels[0] && tx.kernels[0].excess) {
+                                try {
+                                    // Ensure excess is treated as bytes and convert to hex
+                                    const currentTxHash = Buffer.from(ensureUint8Array(tx.kernels[0].excess || [])).toString('hex');
+                                    if (currentTxHash === txHash) {
+                                        foundBlock = block; // Store the block containing the tx
+                                        break; // Found in this tx
+                                    }
+                                } catch (e) {
+                                    log(`[API /api/tx/] Error calculating hash for tx in block ${h}: ${e.message}`, 'warn');
+                                }
+                            }
+                        }
+                    }
+                    if (foundBlock) break; // Found in this block, stop searching earlier blocks
+                }
 
                 if (foundBlock) {
                     log(`[API /api/tx/] Found transaction ${txHash.substring(0,12)} in block #${foundBlock.height}`);
@@ -1902,7 +1913,8 @@ setInterval(safe(debugReorgState), 60000); // Every 60 seconds
     // REMOVED: The old logic that loaded all blocks into an array.
 
     // Ensure genesis block exists in DB for new chains.
-    const tipHeight =  native_db.getTipHeight();
+    const tipHeightObj = native_db.getTipHeight();
+    const tipHeight = convertLongsToBigInts(tipHeightObj);
     if (tipHeight === 0n && !( native_db.loadBlock(0))) { 
         log('Creating and saving new genesis block to DB.', 'info');
         // We get the genesis block from Rust and save it to the DB at height 0.
@@ -2430,7 +2442,8 @@ await p2p.subscribe(TOPICS.SWAP_PROPOSE, async (proposal, { from }) => {
             syncState.peerHashRequestTimes.set(peerIdStr, now);
             
             // RATIONALE (Fix #10): Validate the requested start height to prevent abuse.
-            const tipHeight =  native_db.getTipHeight();
+            const tipHeightObj = native_db.getTipHeight();
+            const tipHeight = convertLongsToBigInts(tipHeightObj);
             // FIX: Convert the config value to a BigInt before performing arithmetic.
             if (start_height < tipHeight - BigInt(CONFIG.SYNC.MAX_HASH_REQUEST_RANGE)) {
                 log(`[SYNC] Ignoring hash request for start height ${start_height} (too far behind tip ${tipHeight})`, 'warn');
@@ -3643,7 +3656,8 @@ async function handleLoadWallet({ walletId }) {
         const walletHeight = await pluribit.wallet_session_get_synced_height(walletId);
 
         // 2. Get the blockchain's current tip height
-        const chainTipHeight =  native_db.getTipHeight();
+        const chainTipHeightObj =  native_db.getTipHeight();
+        const chainTipHeight = convertLongsToBigInts(chainTipHeightObj);
 
         // 3. Scan *only* the missing blocks (O(k) scan)
         if (walletHeight < chainTipHeight) {
