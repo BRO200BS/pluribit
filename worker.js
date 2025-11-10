@@ -84,8 +84,13 @@ function convertLongsToBigInts(obj) {
   }
   // Check if it's a Long.js object
   if (typeof obj.low === 'number' && typeof obj.high === 'number' && typeof obj.unsigned === 'boolean') {
-    // Correctly convert unsigned 64-bit Long to BigInt
-    return (BigInt(obj.high) << 32n) + BigInt(obj.low >>> 0);
+    const lowUnsigned = BigInt(obj.low >>> 0);
+    if (obj.unsigned) {
+      const highUnsigned = BigInt(obj.high >>> 0);
+      return (highUnsigned << 32n) + lowUnsigned;
+    } else {
+      return (BigInt(obj.high) << 32n) + lowUnsigned;
+    }
   }
   if (Array.isArray(obj)) {
     return obj.map(convertLongsToBigInts);
@@ -128,26 +133,62 @@ function ensureUint8Array(arr) {
 
 // --- CHANGED: Manually expose DB functions from NATIVE module ---
 // RATIONALE: Wrap all native DB functions in async wrappers.
-// The WASM module (wasm-bindgen-futures) expects these functions to return Promises.
-// The native addon functions are synchronous, so this bridge makes them async.
-global.load_block_from_db = async (...args) => native_db.load_block_from_db(...args);
-global.get_tip_height_from_db = async (...args) => native_db.get_tip_height_from_db(...args);
+// *** FIX: Convert Node.js Buffers (from Neon) into standard Uint8Arrays ***
+// *** (which serde-wasm-bindgen expects) before returning to WASM. ***
+
+global.load_block_from_db = async (...args) => {
+    const buffer = native_db.load_block_from_db(...args);
+    // If buffer is null/undefined, return null. Otherwise, convert to Uint8Array.
+    return buffer ? new Uint8Array(buffer) : null;
+};
+global.get_tip_height_from_db = async (...args) => native_db.get_tip_height_from_db(...args); // Returns string, OK
 global.save_total_work_to_db = async (...args) => native_db.save_total_work_to_db(...args);
-global.get_total_work_from_db = async (...args) => native_db.get_total_work_from_db(...args);
-global.loadBlocks = async (...args) => native_db.loadBlocks(...args);
-global.saveBlock = async (...args) => native_db.saveBlock(...args);
+global.get_total_work_from_db = async (...args) => native_db.get_total_work_from_db(...args); // Returns string, OK
+
+global.loadBlocks = async (...args) => {
+    const arrayOfBuffers = native_db.loadBlocks(...args);
+    if (!arrayOfBuffers) return [];
+    // Convert each Buffer in the array to a Uint8Array
+    return arrayOfBuffers.map(buffer => buffer ? new Uint8Array(buffer) : null).filter(b => b);
+};
+
+global.saveBlock = async (...args) => {
+    // WASM side sends a Uint8Array, which Neon's JsTypedArray<u8> accepts.
+    // We just need to convert it to a Buffer for RocksDB.
+    return native_db.saveBlock(Buffer.from(args[0]), args[1]);
+};
+
 global.save_utxo = async (...args) => native_db.save_utxo(...args);
-global.load_utxo = async (...args) => native_db.load_utxo(...args);
+global.load_utxo = async (...args) => native_db.load_utxo(...args); // Returns JS object, OK
 global.delete_utxo = async (...args) => native_db.delete_utxo(...args);
 global.clear_all_utxos = async (...args) => native_db.clear_all_utxos(...args);
-global.loadAllUtxos = async (...args) => native_db.loadAllUtxos(...args);
-global.saveBlockWithHash = async (...args) => native_db.saveBlockWithHash(...args);
-global.loadBlockByHash = async (...args) => native_db.loadBlockByHash(...args);
+global.loadAllUtxos = async (...args) => native_db.loadAllUtxos(...args); // Returns JS object, OK
+
+global.saveBlockWithHash = async (...args) => {
+    // WASM sends Uint8Array, Neon expects bytes
+    return native_db.saveBlockWithHash(Buffer.from(args[0]));
+};
+
+global.loadBlockByHash = async (...args) => {
+    const buffer = native_db.loadBlockByHash(...args);
+    // If buffer is null/undefined, return null. Otherwise, convert to Uint8Array.
+    return buffer ? new Uint8Array(buffer) : null;
+};
+
 global.save_reorg_marker = async (...args) => native_db.save_reorg_marker(...args);
 global.clear_reorg_marker = async (...args) => native_db.clear_reorg_marker(...args);
-global.check_incomplete_reorg = async (...args) => native_db.check_incomplete_reorg(...args);
-global.save_block_to_staging = async (...args) => native_db.save_block_to_staging(...args);
-global.commit_staged_reorg = async (...args) => native_db.commit_staged_reorg(...args);
+global.check_incomplete_reorg = async (...args) => native_db.check_incomplete_reorg(...args); // Returns string, OK
+
+global.save_block_to_staging = async (...args) => {
+    // WASM sends Uint8Array, Neon expects bytes
+    return native_db.save_block_to_staging(Buffer.from(args[0]));
+};
+
+global.commit_staged_reorg = async (...args) => {
+    // WASM sends an array of Uint8Arrays. Convert each to a Buffer.
+    const blocksAsBuffers = args[0].map(u8a => Buffer.from(u8a));
+    return native_db.commit_staged_reorg(blocksAsBuffers, args[1], args[2], args[3]);
+};
 
 
 // ==================== CORRECTED ADDITIONS START HERE ====================
@@ -157,7 +198,7 @@ global.commit_staged_reorg = async (...args) => native_db.commit_staged_reorg(..
 
 global.save_coinbase_index = async (...args) => native_db.save_coinbase_index(...args);
 global.delete_coinbase_index = async (...args) => native_db.delete_coinbase_index(...args);
-global.loadAllCoinbaseIndexes = async (...args) => native_db.loadAllCoinbaseIndexes(...args);
+global.loadAllCoinbaseIndexes = async (...args) => native_db.loadAllCoinbaseIndexes(...args); // Returns JS object, OK
 // --- END: Changed global assignments ---
 
 // ===================== CORRECTED ADDITIONS END HERE =====================
@@ -1062,7 +1103,7 @@ async function fetchBlockDirectly(peerId, hash) {
             const timeout = setTimeout(() => resolve(null), 7000); // 7-second timeout for the fallback.
 
             const temporaryHandler = (message) => {
-                if (message.payload && message.payload.hash === hash) {
+                if (message && message.hash === hash) { // <-- FIX: Was message.payload && message.payload.hash
                     clearTimeout(timeout);
                     // IMPORTANT: We must remove this temporary listener once the block is found.
                     const handlers = workerState.p2p.handlers.get(TOPICS.BLOCKS) || [];
@@ -1070,7 +1111,7 @@ async function fetchBlockDirectly(peerId, hash) {
                     if (index > -1) {
                         handlers.splice(index, 1);
                     }
-                    resolve(message.payload);
+                    resolve(message);
                 }
             };
             
@@ -1745,15 +1786,15 @@ async function handleRemoteBlockDownloaded({ block }) {
               }
 
               log(`[DEBUG] Active wallets in workerState: ${Array.from(workerState.wallets.keys()).join(', ')}`);
-              const blockForWasm = convertLongsToBigInts(block);
+         
 
-              try {
+            try {
                 for (const walletId of workerState.wallets.keys()) {
                   try {
-                    // Use the converted block object here
-                    await pluribit.wallet_session_scan_block(walletId, blockForWasm); 
+                    // Use the raw block bytes now
+                    await pluribit.wallet_session_scan_block(walletId, blockBytes); // <-- CHANGED: from blockForWasm
                     const updatedJson = await pluribit.wallet_session_export(walletId);
-                     native_db.saveWallet(walletId, updatedJson);
+                    native_db.saveWallet(walletId, updatedJson);
                     const newBalance = await pluribit.wallet_session_get_balance(walletId);
                     parentPort.postMessage({ type: 'walletBalance', payload: { wallet_id: walletId, balance: newBalance }});
                     log(`Balance updated for ${walletId} after new block.`, 'debug');

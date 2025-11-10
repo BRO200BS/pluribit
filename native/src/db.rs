@@ -243,25 +243,23 @@ pub fn initialize_database(mut cx: FunctionContext) -> JsResult<JsUndefined> {
     Ok(cx.undefined())
 }
 
-/// (JS: saveBlock(block, isCanonical = true))
-/// Saves a block. If canonical, updates height mappings and tip.
-/// Args: 0: block (JsValue object), 1: isCanonical (JsBoolean, optional)
+/// (JS: saveBlock(blockBytes, isCanonical = true))
+/// Saves a block from raw Protobuf bytes.
+/// Args: 0: blockBytes (JsTypedArray<u8>), 1: isCanonical (JsBoolean, optional)
 pub fn save_block(mut cx: FunctionContext) -> JsResult<JsUndefined> {
-    let block_js = cx.argument::<JsValue>(0)?;
+    let block_bytes = cx.argument::<JsTypedArray<u8>>(0)?.as_slice(&cx).to_vec(); // <-- Get raw bytes
     let is_canonical = cx.argument_opt(1)
         .and_then(|val| val.downcast::<JsBoolean, _>(&mut cx).ok())
         .map(|val| val.value(&mut cx))
         .unwrap_or(true); // Default to true
 
-    // Deserialize JS object to Rust struct
-    let block: Block = from_value(&mut cx, block_js)
-        .or_else(|e| cx.throw_error(format!("Failed to deserialize block: {}", e)))?;
+    // Decode bytes to P2P struct *just* to get hash/height
+    let p2p_block = P2pBlock::decode(block_bytes.as_slice())
+        .or_else(|e| cx.throw_error(format!("Failed to decode block: {}", e)))?;
     
-    // Convert Rust struct to P2P Protobuf struct
-    let p2p_block = P2pBlock::from(block.clone());
-    
-    // Encode P2P struct to bytes
-    let data = p2p_block.encode_to_vec();
+    // Convert to internal Block to use .hash()
+    let mut block = Block::from(p2p_block);
+    block.hash = block.compute_hash();
     
     let hash = block.hash();
     let height = *block.height;
@@ -271,7 +269,7 @@ pub fn save_block(mut cx: FunctionContext) -> JsResult<JsUndefined> {
         
         // Store block by hash (primary storage)
         let hash_key = format!("block:{}", hash);
-        batch.put(hash_key.as_bytes(), &data);
+        batch.put(hash_key.as_bytes(), &block_bytes); // <-- Save raw bytes
 
         if is_canonical {
             // Store height -> hash mapping (for canonical chain)
@@ -298,22 +296,22 @@ pub fn save_block(mut cx: FunctionContext) -> JsResult<JsUndefined> {
     Ok(cx.undefined())
 }
 
-/// (JS: saveBlockWithHash(block))
-/// Saves a block by its hash only (for side blocks/forks). Does not update canonical chain.
-/// Args: 0: block (JsValue object)
+/// (JS: saveBlockWithHash(blockBytes))
+/// Saves a block by its hash only (for side blocks/forks).
+/// Args: 0: blockBytes (JsTypedArray<u8>)
 pub fn save_block_with_hash(mut cx: FunctionContext) -> JsResult<JsUndefined> {
-    let block_js = cx.argument::<JsValue>(0)?;
+    let block_bytes = cx.argument::<JsTypedArray<u8>>(0)?.as_slice(&cx).to_vec(); // <-- Get raw bytes
 
-    let block: Block = from_value(&mut cx, block_js)
-        .or_else(|e| cx.throw_error(format!("Failed to deserialize block: {}", e)))?;
+    let p2p_block = P2pBlock::decode(block_bytes.as_slice())
+        .or_else(|e| cx.throw_error(format!("Failed to decode block: {}", e)))?;
     
-    let p2p_block = P2pBlock::from(block.clone());
-    let data = p2p_block.encode_to_vec();
+    let mut block = Block::from(p2p_block);
+    block.hash = block.compute_hash();
     let hash = block.hash();
 
     with_db(|db| {
         let hash_key = format!("block:{}", hash);
-        db.put(hash_key.as_bytes(), &data)
+        db.put(hash_key.as_bytes(), &block_bytes) // <-- Save raw bytes
             .map_err(|e| format!("Write failed: {}", e))?;
         Ok(())
     }).or_else(|e| cx.throw_error(e))?;
@@ -330,39 +328,29 @@ pub fn load_block(mut cx: FunctionContext) -> JsResult<JsValue> {
     let height = js_value_to_u64(&mut cx, height_js)?;
 
     let result = with_db(|db| {
-        // Get hash from height mapping
         let height_key = format!("height:{}", height);
         let hash_bytes = db.get(height_key.as_bytes())
             .map_err(|e| format!("Failed to get height mapping: {}", e))?
             .ok_or_else(|| "Block not found".to_string())?;
-        
+
         let hash_str = String::from_utf8(hash_bytes)
             .map_err(|e| format!("Invalid hash encoding: {}", e))?;
-        
-        // Get block data by hash
+
         let hash_key = format!("block:{}", hash_str);
         let data = db.get(hash_key.as_bytes())
             .map_err(|e| format!("Failed to get block: {}", e))?
             .ok_or_else(|| "Block data not found".to_string())?;
-        
-        Ok(data)
+
+        Ok(data) // <-- Return raw Vec<u8>
     });
 
     match result {
         Ok(data) => {
-            // Decode bytes to P2P struct
-            let p2p_block = P2pBlock::decode(data.as_slice())
-                .or_else(|e| cx.throw_error(format!("Failed to decode block: {}", e)))?;
-            
-            // Convert P2P struct to internal Rust struct
-            let mut block = Block::from(p2p_block);
-            block.hash = block.compute_hash(); // Re-compute hash for consistency
-
-            // Serialize Rust struct to JsValue (object)
-            let js_value = to_value(&mut cx, &block)
-                .or_else(|e| cx.throw_error(format!("Failed to serialize block: {}", e)))?;
-            
-            Ok(js_value)
+            // 
+            // Convert Vec<u8> to JsBuffer (which becomes Uint8Array in JS)
+            let mut buffer = JsBuffer::new(&mut cx, data.len())?;
+            buffer.as_mut_slice(&mut cx).copy_from_slice(&data);
+            Ok(buffer.upcast()) // <-- Return buffer
         }
         Err(_) => Ok(cx.null().upcast())
     }
@@ -384,13 +372,10 @@ pub fn load_block_by_hash(mut cx: FunctionContext) -> JsResult<JsValue> {
 
     match result {
         Ok(data) => {
-            let p2p_block = P2pBlock::decode(data.as_slice())
-                .or_else(|e| cx.throw_error(format!("Failed to decode block: {}", e)))?;
-            let mut block = Block::from(p2p_block);
-            block.hash = block.compute_hash(); // Re-compute hash
-            let js_value = to_value(&mut cx, &block)
-                .or_else(|e| cx.throw_error(format!("Failed to serialize block: {}", e)))?;
-            Ok(js_value)
+            // Convert Vec<u8> to JsBuffer
+            let mut buffer = JsBuffer::new(&mut cx, data.len())?;
+            buffer.as_mut_slice(&mut cx).copy_from_slice(&data);
+            Ok(buffer.upcast()) // <-- Return buffer
         }
         Err(_) => Ok(cx.null().upcast())
     }
@@ -406,36 +391,30 @@ pub fn load_blocks(mut cx: FunctionContext) -> JsResult<JsArray> {
     let start_height = js_value_to_u64(&mut cx, start_height_js)?;
     let end_height = js_value_to_u64(&mut cx, end_height_js)?;
 
-    let blocks = with_db(|db| {
-        let mut blocks = Vec::new();
+    let block_data_vec = with_db(|db| {
+        let mut blocks_data = Vec::new(); // <-- Will be Vec<Vec<u8>>
         for height in start_height..=end_height {
-            // Get hash from height mapping
             let height_key = format!("height:{}", height);
             if let Some(hash_bytes) = db.get(height_key.as_bytes()).ok().flatten() {
                 if let Ok(hash_str) = String::from_utf8(hash_bytes) {
-                    // Get block data by hash
                     let hash_key = format!("block:{}", hash_str);
                     if let Some(data) = db.get(hash_key.as_bytes()).ok().flatten() {
-                        if let Ok(p2p_block) = P2pBlock::decode(data.as_slice()) {
-                            let mut block = Block::from(p2p_block);
-                            block.hash = block.compute_hash(); // Re-compute hash
-                            blocks.push(block);
-                        }
+                        blocks_data.push(data); // <-- Push raw Vec<u8>
                     }
                 }
             }
         }
-        Ok(blocks)
+        Ok(blocks_data)
     }).or_else(|e: String| cx.throw_error(e))?;
-    
-    // Convert Vec<Block> to JsArray
+
+    // Convert Vec<Vec<u8>> to JsArray of JsBuffers
     let js_array = cx.empty_array();
-    for (i, block) in blocks.iter().enumerate() {
-        let js_block = to_value(&mut cx, block)
-            .or_else(|e| cx.throw_error(format!("Failed to serialize block: {}", e)))?;
-        js_array.set(&mut cx, i as u32, js_block)?;
+    for (i, block_data) in block_data_vec.iter().enumerate() {
+        let mut buffer = JsBuffer::new(&mut cx, block_data.len())?;
+        buffer.as_mut_slice(&mut cx).copy_from_slice(block_data);
+        js_array.set(&mut cx, i as u32, buffer.upcast::<JsValue>())?; // <-- Set buffer in array
     }
-    
+
     Ok(js_array)
 }
 
@@ -1013,21 +992,21 @@ pub fn check_incomplete_reorg(mut cx: FunctionContext) -> JsResult<JsValue> {
     }
 }
 
-/// (JS: save_block_to_staging(block))
+/// (JS: save_block_to_staging(blockBytes))
 /// Saves a block to the staging area for an atomic reorg.
-/// Args: 0: block (JsValue object)
+/// Args: 0: blockBytes (JsTypedArray<u8>)
 pub fn save_block_to_staging(mut cx: FunctionContext) -> JsResult<JsUndefined> {
-    let block_js = cx.argument::<JsValue>(0)?;
+    let block_bytes = cx.argument::<JsTypedArray<u8>>(0)?.as_slice(&cx).to_vec(); // <-- Get raw bytes
 
-    let block: Block = from_value(&mut cx, block_js)
-        .or_else(|e| cx.throw_error(format!("Failed to deserialize block: {}", e)))?;
+    let p2p_block = P2pBlock::decode(block_bytes.as_slice())
+        .or_else(|e| cx.throw_error(format!("Failed to decode block: {}", e)))?;
     
-    let p2p_block = P2pBlock::from(block.clone());
-    let data = p2p_block.encode_to_vec();
+    let mut block = Block::from(p2p_block);
+    block.hash = block.compute_hash();
     let key = format!("staging:{}", block.hash());
 
     with_db(|db| {
-        db.put(key.as_bytes(), &data)
+        db.put(key.as_bytes(), &block_bytes) // <-- Save raw bytes
             .map_err(|e| format!("Write failed: {}", e))?;
         Ok(())
     }).or_else(|e| cx.throw_error(e))?;
@@ -1035,14 +1014,14 @@ pub fn save_block_to_staging(mut cx: FunctionContext) -> JsResult<JsUndefined> {
     Ok(cx.undefined())
 }
 
-/// (JS: commit_staged_reorg(blocks, oldHeights, newTipHeight, newTipHash))
+/// (JS: commit_staged_reorg(blocksBytesArray, oldHeights, newTipHeight, newTipHash))
 /// Atomically commits a reorg from staged blocks.
-/// Args: 0: blocksToAdd (JsArray of Block objects)
-///       1: heightsToDelete (JsArray of JsValue: BigInt, Number, or String)
-///       2: newTipHeight (JsValue: BigInt, Number, or String)
+/// Args: 0: blocksBytesArray (JsArray of JsTypedArray<u8>)
+///       1: heightsToDelete (JsArray of JsValue)
+///       2: newTipHeight (JsValue)
 ///       3: newTipHash (JsString)
 pub fn commit_staged_reorg(mut cx: FunctionContext) -> JsResult<JsUndefined> {
-    let blocks_array = cx.argument::<JsArray>(0)?;
+    let blocks_array = cx.argument::<JsArray>(0)?; // <-- Array of byte arrays
     let old_heights_array = cx.argument::<JsArray>(1)?;
     let new_tip_height_js = cx.argument::<JsValue>(2)?;
     let new_tip_height = js_value_to_u64(&mut cx, new_tip_height_js)?;
@@ -1051,7 +1030,7 @@ pub fn commit_staged_reorg(mut cx: FunctionContext) -> JsResult<JsUndefined> {
     with_db(|db| {
         let mut batch = WriteBatch::default();
 
-        // 1. Get old block hashes to delete (needed for orphan cleanup)
+        // 1. Get old block hashes to delete
         let mut old_block_hashes = Vec::new();
         let old_heights_len = old_heights_array.len(&mut cx);
         for i in 0..old_heights_len {
@@ -1070,16 +1049,22 @@ pub fn commit_staged_reorg(mut cx: FunctionContext) -> JsResult<JsUndefined> {
         // 2. Add new blocks from staging
         let blocks_len = blocks_array.len(&mut cx);
         for i in 0..blocks_len {
-            let block_js = blocks_array.get::<JsValue, _, _>(&mut cx, i)
+            // Get the JsTypedArray<u8> from the JsArray
+            let block_bytes_handle = blocks_array.get::<JsTypedArray<u8>, _, _>(&mut cx, i)
                 .map_err(|e| e.to_string())?;
-            let block: Block = from_value(&mut cx, block_js)
-                .map_err(|e| format!("Failed to deserialize block for reorg: {}", e))?;
+            let block_bytes = block_bytes_handle.as_slice(&cx).to_vec();
+            
+            // Decode just to get hash/height
+            let p2p_block = P2pBlock::decode(block_bytes.as_slice())
+                .map_err(|e| format!("Failed to decode block for reorg: {}", e))?;
+            let mut block = Block::from(p2p_block);
+            block.hash = block.compute_hash();
             
             let hash = block.hash();
             let height_str = (*block.height).to_string();
             let staging_key = format!("staging:{}", hash);
 
-            // Get data from staging
+            // Get data from staging (which should be identical to block_bytes)
             let data = db.get(&staging_key)
                 .map_err(|e| e.to_string())?
                 .ok_or(format!("Staging block {} not found", hash))?;

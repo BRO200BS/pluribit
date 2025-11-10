@@ -266,18 +266,29 @@ async fn load_all_coinbase_indexes_from_db() -> Result<HashMap<Vec<u8>, u64>, Js
 
 // helper
 async fn save_block_with_hash(block: &Block) -> Result<(), JsValue> {
-    let block_js = serde_wasm_bindgen::to_value(block)?;
-    wasm_bindgen_futures::JsFuture::from(save_block_with_hash_raw(block_js)).await?;
+    use prost::Message;
+    let p2p_block = p2p::Block::from(block.clone());
+    let block_bytes = p2p_block.encode_to_vec();
+    let block_bytes_js = serde_wasm_bindgen::to_value(&block_bytes)?; // <-- Pass bytes
+    wasm_bindgen_futures::JsFuture::from(save_block_with_hash_raw(block_bytes_js)).await?;
     Ok(())
 }
 
 async fn load_block_by_hash(hash: &str) -> Result<Option<Block>, JsValue> {
+    use prost::Message; // <-- Add prost
     let promise = load_block_by_hash_raw(hash);
     let result_js = wasm_bindgen_futures::JsFuture::from(promise).await?;
     if result_js.is_null() || result_js.is_undefined() {
         Ok(None)
     } else {
-        let mut block: Block = serde_wasm_bindgen::from_value(result_js)?;
+        // result_js is now a Uint8Array (JsValue)
+        let block_bytes: Vec<u8> = serde_wasm_bindgen::from_value(result_js)?;
+
+        // Decode bytes into p2p::Block (prost struct)
+        let p2p_block = p2p::Block::decode(&block_bytes[..])
+            .map_err(|e| JsValue::from_str(&format!("bad block proto: {e}")))?;
+
+        let mut block: Block = Block::from(p2p_block);
         block.hash = block.compute_hash();
         Ok(Some(block))
     }
@@ -295,15 +306,25 @@ async fn clear_reorg_marker() -> Result<(), JsValue> {
 }
 
 async fn save_block_to_staging(block: &Block) -> Result<(), JsValue> {
-    let block_js = serde_wasm_bindgen::to_value(block)?;
-    wasm_bindgen_futures::JsFuture::from(save_block_to_staging_raw(block_js)).await?;
+    use prost::Message;
+    let p2p_block = p2p::Block::from(block.clone());
+    let block_bytes = p2p_block.encode_to_vec();
+    let block_bytes_js = serde_wasm_bindgen::to_value(&block_bytes)?; // <-- Pass bytes
+    wasm_bindgen_futures::JsFuture::from(save_block_to_staging_raw(block_bytes_js)).await?;
     Ok(())
 }
 
 async fn commit_staged_reorg(blocks: &Vec<Block>, old_heights: &Vec<u64>, new_tip_height: u64, new_tip_hash: &str) -> Result<(), JsValue> {
-    let blocks_js = serde_wasm_bindgen::to_value(blocks)?;
+    use prost::Message;
+    // Convert Vec<Block> to Vec<Vec<u8>>
+    let blocks_bytes_vec: Vec<Vec<u8>> = blocks.iter().map(|b| {
+        let p2p_block = p2p::Block::from(b.clone());
+        p2p_block.encode_to_vec()
+    }).collect();
+    
+    let blocks_bytes_js = serde_wasm_bindgen::to_value(&blocks_bytes_vec)?; // <-- Pass Vec<Vec<u8>>
     let old_heights_js = serde_wasm_bindgen::to_value(old_heights)?;
-    let promise = commit_staged_reorg_raw(blocks_js, old_heights_js, new_tip_height, new_tip_hash);
+    let promise = commit_staged_reorg_raw(blocks_bytes_js, old_heights_js, new_tip_height, new_tip_hash);
     wasm_bindgen_futures::JsFuture::from(promise).await?;
     Ok(())
 }
@@ -311,8 +332,15 @@ async fn commit_staged_reorg(blocks: &Vec<Block>, old_heights: &Vec<u64>, new_ti
 
 // Helper function to convert the raw JS Promise for saving a block
 async fn save_block_to_db(block: Block) -> Result<(), JsValue> {
-    let block_js = serde_wasm_bindgen::to_value(&block)?;
-    let promise = save_block_to_db_raw(block_js);
+    use prost::Message;
+    // Convert to P2P struct
+    let p2p_block = p2p::Block::from(block);
+    // Encode to bytes
+    let block_bytes = p2p_block.encode_to_vec();
+    // Serialize the bytes to a JsValue (will become Uint8Array)
+    let block_bytes_js = serde_wasm_bindgen::to_value(&block_bytes)?;
+    
+    let promise = save_block_to_db_raw(block_bytes_js); // <-- Pass bytes
     wasm_bindgen_futures::JsFuture::from(promise).await?;
     Ok(())
 }
@@ -496,24 +524,44 @@ pub async fn delete_utxo_from_db(commitment: &[u8]) -> Result<(), JsValue> {
 // Helper functions to convert the raw JS Promise into a Rust Future
 // that yields a result we can use.
 async fn load_block_from_db(height: u64) -> Result<Option<Block>, JsValue> {
+    use prost::Message; // <-- Add prost
     let promise = load_block_from_db_raw(height);
     let result_js = wasm_bindgen_futures::JsFuture::from(promise).await?;
     if result_js.is_null() || result_js.is_undefined() {
         Ok(None)
     } else {
-        let mut block: Block = serde_wasm_bindgen::from_value(result_js)?;
+        // result_js is now a Uint8Array (JsValue)
+        let block_bytes: Vec<u8> = serde_wasm_bindgen::from_value(result_js)?; // <-- Deserializes Uint8Array to Vec<u8>
+
+        // Decode bytes into p2p::Block (prost struct)
+        let p2p_block = p2p::Block::decode(&block_bytes[..])
+            .map_err(|e| JsValue::from_str(&format!("bad block proto: {e}")))?;
+
+        // Convert p2p::Block to internal Block
+        let mut block: Block = Block::from(p2p_block);
         block.hash = block.compute_hash();
         Ok(Some(block))
     }
 }
 
 async fn load_blocks_from_db(start: u64, end: u64) -> Result<Vec<Block>, JsValue> {
+    use prost::Message; // <-- Add prost
     let promise = load_blocks_from_db_raw(start, end);
     let result_js = wasm_bindgen_futures::JsFuture::from(promise).await?;
     if result_js.is_null() || result_js.is_undefined() {
         Ok(Vec::new())
     } else {
-        let blocks: Vec<Block> = serde_wasm_bindgen::from_value(result_js)?;
+        // result_js is now a JS Array of Uint8Arrays
+        let block_bytes_vec: Vec<Vec<u8>> = serde_wasm_bindgen::from_value(result_js)?;
+
+        let mut blocks = Vec::new();
+        for block_bytes in block_bytes_vec {
+            let p2p_block = p2p::Block::decode(&block_bytes[..])
+                .map_err(|e| JsValue::from_str(&format!("bad block proto: {e}")))?;
+            let mut block = Block::from(p2p_block);
+            block.hash = block.compute_hash();
+            blocks.push(block);
+        }
         Ok(blocks)
     }
 }
@@ -3662,13 +3710,23 @@ pub fn wallet_clear_pending_utxos(commitments_js: JsValue) -> Result<(), JsValue
 
 /// Scan a single block (used during live sync).
 #[wasm_bindgen]
-pub fn wallet_session_scan_block(wallet_id: &str, block_js: JsValue) -> Result<(), JsValue> {
-    let block: Block = serde_wasm_bindgen::from_value(block_js)?;
+pub fn wallet_session_scan_block(wallet_id: &str, block_bytes: Vec<u8>) -> Result<(), JsValue> { // <-- CHANGED: from block_js: JsValue
+    use prost::Message; // <-- Add prost
+
+    // 1. Decode bytes into p2p::Block
+    let p2p_block = p2p::Block::decode(&block_bytes[..])
+        .map_err(|e| JsValue::from_str(&format!("bad block proto: {e}")))?;
+
+    // 2. Convert p2p::Block into internal Block struct
+    let mut block: Block = Block::from(p2p_block);
+    block.hash = block.compute_hash(); // Ensure hash is set
+
+    // 3. Proceed with original logic
     let mut map = WALLET_SESSIONS.lock().map_err(|e| JsValue::from_str(&e.to_string()))?;
     let w = map.get_mut(wallet_id).ok_or_else(|| JsValue::from_str("Wallet not loaded"))?;
     w.scan_block(&block);
     Ok(())
- }
+}
 
 #[wasm_bindgen]
 pub async fn get_canonical_hashes_after(start_height: u64) -> Result<JsValue, JsValue> {

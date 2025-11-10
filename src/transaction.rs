@@ -376,7 +376,7 @@ impl From<TransactionInput> for p2p::TransactionInput {
 impl From<p2p::TransactionInput> for TransactionInput {
     fn from(proto: p2p::TransactionInput) -> Self {
         TransactionInput {
-            commitment: proto.commitment,
+            commitment: proto.commitment.to_vec(), // <-- FIX
             merkle_proof: None,
             source_height: WasmU64::from(proto.source_height),  // Convert u64 to WasmU64
         }
@@ -399,11 +399,10 @@ impl From<TransactionOutput> for p2p::TransactionOutput {
 impl From<p2p::TransactionOutput> for TransactionOutput {
     fn from(proto: p2p::TransactionOutput) -> Self {
         TransactionOutput {
-            commitment: proto.commitment,            
-            ephemeral_key: proto.ephemeral_key,
-            stealth_payload: proto.stealth_payload,
-            // Convert Option<Vec<u8>> (expecting one byte) back to Option<u8>
-            view_tag: proto.view_tag,
+            commitment: proto.commitment.to_vec(), // <-- FIX
+            ephemeral_key: proto.ephemeral_key.map(|b| b.to_vec()), // <-- FIX
+            stealth_payload: proto.stealth_payload.map(|b| b.to_vec()), // <-- FIX
+            view_tag: proto.view_tag.map(|b| b.to_vec()), // <-- FIX
         }
     }
 }
@@ -425,8 +424,8 @@ impl From<TransactionKernel> for p2p::TransactionKernel {
 impl From<p2p::TransactionKernel> for TransactionKernel {
     fn from(proto: p2p::TransactionKernel) -> Self {
         TransactionKernel {
-            excess: proto.excess,
-            signature: proto.signature,
+            excess: proto.excess.to_vec(), // <-- FIX
+            signature: proto.signature.to_vec(), // <-- FIX
             fee: WasmU64::from(proto.fee),
             min_height: WasmU64::from(proto.min_height),
             timestamp: WasmU64::from(proto.timestamp),
@@ -455,7 +454,7 @@ impl From<p2p::Transaction> for Transaction {
             outputs: proto.outputs.into_iter().map(TransactionOutput::from).collect(),
             kernels: proto.kernels.into_iter().map(TransactionKernel::from).collect(),
             timestamp: WasmU64::from(proto.timestamp),
-            aggregated_range_proof: proto.aggregated_range_proof,
+            aggregated_range_proof: proto.aggregated_range_proof.to_vec(), // <-- FIX
         }
     }
 }
