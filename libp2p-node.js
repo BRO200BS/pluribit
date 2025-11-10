@@ -21,7 +21,6 @@ import { ping } from '@libp2p/ping';
 import { createEd25519PeerId, createFromPubKey, createFromPrivKey } from '@libp2p/peer-id-factory';
 import { fromString as uint8ArrayFromString } from 'uint8arrays/from-string';
 import { toString as uint8ArrayToString } from 'uint8arrays/to-string';
-import bridge from './js_bridge.cjs';
 import crypto from 'crypto';
 import nacl from 'tweetnacl';
 import fs from 'fs/promises';
