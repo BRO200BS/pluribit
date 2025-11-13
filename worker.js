@@ -2006,8 +2006,6 @@ setInterval(safe(debugReorgState), 60000); // Every 60 seconds
 
 
     // --- DATABASE AND RUST STATE INITIALIZATION ---
-    // REMOVED: The old logic that loaded all blocks into an array.
-
     // Ensure genesis block exists in DB for new chains.
     const tipHeightObj = native_db.getTipHeight();
     const tipHeight = BigInt(tipHeightObj);
@@ -2015,8 +2013,13 @@ setInterval(safe(debugReorgState), 60000); // Every 60 seconds
         log('Creating and saving new genesis block to DB.', 'info');
         // We get the genesis block from Rust and save it to the DB at height 0.
         const genesisBlock = await pluribit.create_genesis_block();
-        log(`[JS PRE-SAVE GENESIS] Coinbase output 0 viewTag: ${genesisBlock?.transactions?.[0]?.outputs?.[0]?.viewTag ?? 'N/A'}`, 'debug'); // <-- ADD THIS LINE
-         native_db.saveBlock(genesisBlock);
+        log(`[JS PRE-SAVE GENESIS] Coinbase output 0 viewTag: ${genesisBlock?.transactions?.[0]?.outputs?.[0]?.viewTag ?? 'N/A'}`, 'debug'); 
+        // ---Convert the JS block object to Protobuf bytes ---
+        // RATIONALE: pluribit.create_genesis_block() returns a JS object,
+        // but the native saveBlock() function expects raw Protobuf bytes (a Uint8Array).
+        // We must encode the object to bytes before saving.
+        const genesisBlockBytes = p2p.Block.encode(genesisBlock).finish();
+         native_db.saveBlock(genesisBlockBytes);
     }
 
     // NEW: Call the async Rust function to initialize its state from our DB.
