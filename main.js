@@ -186,6 +186,7 @@ async function handleCommand(command, args) {
             console.log('  supply                        - Audit the total circulating supply');
             console.log('  peers                         - List connected P2P peers');
             console.log('  connect <multiaddr>           - Manually connect to a peer');
+            console.log('  retry_sync                    - Manually force a sync');
             console.log('  exit                          - Shutdown the node');
 
             console.log(chalk.bold('\n--- Atomic Swaps (L2) ---'));
@@ -239,6 +240,13 @@ async function handleCommand(command, args) {
                 worker.postMessage({ action: 'restoreWalletFromMnemonic', walletId: walletName, phrase: phrase });
             }
             break;
+
+        case 'retry_sync':
+                    console.log(chalk.yellow('Forcing manual sync retry...'));
+                    // Send the specific retry action we added to the worker
+                    worker.postMessage({ action: 'retrySync' }); 
+                    break;
+
 
         case 'load':
             if (args[0]) {

@@ -1011,6 +1011,18 @@ export async function main() {
                     }
                     break;
 
+
+                case 'retrySync':
+                    log('Manual sync retry initiated by user.', 'warn');
+                    // 1. Force reset sync state variables
+                    syncState.consecutiveFailures = 0;
+                    syncState.syncProgress.status = 'IDLE';
+                    workerState.isSyncing = false;
+                    
+                    // 2. Trigger the sync
+                    bootstrapSync();
+                    break;
+
                 case 'verifySupply':
                     try {
                         const tip =  native_db.getTipHeight();
@@ -1393,15 +1405,49 @@ async function syncForward(targetHeight, targetHash, trustedPeers) {
             log('[SYNC] No verified Pluribit peers available for sync. Waiting for connections...', 'warn');
             return;
         }
-        
+
+        // Sort peers: Bootstrap nodes go to the FRONT of the array
+        trustedPeers.sort((a, b) => {
+            const aIsBoss = workerState.bootstrapPeerIds.has(a);
+            const bIsBoss = workerState.bootstrapPeerIds.has(b);
+            if (aIsBoss && !bIsBoss) return -1; // a comes first
+            if (!aIsBoss && bIsBoss) return 1;  // b comes first
+            return 0;
+        });
+
+        // Log if we are using the boss
+        if (workerState.bootstrapPeerIds.has(trustedPeers[0])) {
+            log(`[SYNC] Prioritizing Bootstrap Peer ${trustedPeers[0].slice(-6)} for hash retrieval.`, 'info');
+        }
+
         // --- RATIONALE: Cross-validate hashes with multiple peers ---
         // Previously, we trusted the first peer for the entire hash list. Now, we fetch
         // the list from up to 3 peers and ensure they agree. This prevents a single
         // malicious peer from feeding us a bogus chain structure.
         const peersToQuery = trustedPeers.slice(0, 3);
-        const hashLists = await Promise.all(
+        const results = await Promise.allSettled(
             peersToQuery.map(peer => requestAllHashes(peer, currentHeight))
         );
+
+        // Filter out the failed requests and log them
+        const successfulHashLists = [];
+        results.forEach((result, index) => {
+            if (result.status === 'fulfilled') {
+                successfulHashLists.push(result.value);
+            } else {
+                const badPeer = peersToQuery[index];
+                log(`[SYNC] ⚠️ Peer ${badPeer.slice(-6)} failed hash request: ${result.reason.message}`, 'warn');
+                // Optional: Penalize this specific peer immediately
+                // workerState.peerScores.set(badPeer, ...);
+            }
+        });
+
+        if (successfulHashLists.length === 0) {
+            throw new Error('All peers failed to provide hash lists.');
+        }
+
+        // Use the successful lists for validation logic...
+        const hashLists = successfulHashLists;
 
         if (hashLists.some(list => list.length > MAX_HASHES_PER_SYNC)) {
             throw new Error(`Peer provided hash list larger than limit of ${MAX_HASHES_PER_SYNC}`);
@@ -1606,6 +1652,21 @@ async function syncForward(targetHeight, targetHash, trustedPeers) {
         log(`[SYNC] Sync failed: ${e.message}`, 'error');
         // RATIONALE (Circuit Breaker): Increment failure count.
         syncState.consecutiveFailures++;
+        
+        // --- "HAIL MARY" RETRY LOGIC ---
+        const bootstrapId = [...workerState.bootstrapPeerIds][0]; // Get first known bootstrap ID
+        // If we are about to fail, but we are connected to the Boss, try one last specific fetch
+        if (syncState.consecutiveFailures >= CONFIG.SYNC.MAX_CONSECUTIVE_SYNC_FAILURES) {
+             if (bootstrapId && workerState.p2p.node.getConnections(bootstrapId).length > 0) {
+                 log('[SYNC] ⚠️ Standard sync failed. Attempting one last direct sync with BOOTSTRAP peer.', 'warn');
+                 syncState.consecutiveFailures = 0; // Reset counter to allow this specific attempt
+                 // Force a retry targeting ONLY the bootstrap
+                 setTimeout(() => syncForward(targetHeight, targetHash, [bootstrapId]), 1000);
+                 return;
+             }
+        }
+        // ----------------------------------------
+        
         // Check if we've hit the max number of retries
         if (syncState.consecutiveFailures >= CONFIG.SYNC.MAX_CONSECUTIVE_SYNC_FAILURES) {
             log(`[SYNC] Halting sync after ${CONFIG.SYNC.MAX_CONSECUTIVE_SYNC_FAILURES} consecutive failures. Will not retry automatically.`, 'error');
@@ -2122,12 +2183,21 @@ blockRequestCleanupTimer = setInterval(() => {
     // to the core network peers defined in your config.
     const BOOTSTRAP_WATCHDOG_INTERVAL_MS = 30000; // Check every 30 second
     let bootstrapAddresses = []; // Store the multiaddrs
-
+    // Initialize a Set to store Boss IDs ---
+    workerState.bootstrapPeerIds = new Set();
     try {
         // Get the list of bootstrap multiaddrs from the p2p config
         // This list is loaded from bootstrap-config.json in libp2p-node.js 
         const bootstrapAddrStrings = workerState.p2p.config.bootstrap || []; 
         bootstrapAddresses = bootstrapAddrStrings.map(addrStr => multiaddr(addrStr)); 
+        //  Extract Peer IDs from the addresses ---
+        for (const addr of bootstrapAddresses) {
+            const peerId = addr.getPeerId();
+            if (peerId) {
+                workerState.bootstrapPeerIds.add(peerId);
+                log(`[INIT] Registered Bootstrap "Boss" ID: ${peerId}`, 'debug');
+            }
+        }
     } catch (e) {
         log(`[WATCHDOG] Failed to parse bootstrap addresses: ${e.message}`, 'error');
     }
@@ -2376,47 +2446,57 @@ setTimeout(() => {
 
 
 async function requestAllHashes(peerId, startHeight) {
-    // RATIONALE: This function has been refactored to prevent a deadlock.
-    // The mutex is now acquired only to write to the shared state map, and
-    // then released *before* awaiting the network response.
-
     const requestId = crypto.randomUUID();
     const { promise, resolve, reject } = Promise.withResolvers();
+    const startTime = Date.now(); // Track start time
 
-    // 1. Acquire mutex ONLY to safely add the request to the shared map.
+    // 1. Acquire mutex
     const release = await syncState.hashRequestMutex.acquire();
     try {
-        syncState.hashRequestState.set(requestId, { hashes: [], resolve, reject, peerId });
+        syncState.hashRequestState.set(requestId, { 
+            hashes: [], 
+            resolve, 
+            reject, 
+            peerId,
+            lastChunkTime: Date.now() // Track when we last heard from them
+        });
     } finally {
         release();
     }
 
-    // 2. Set a timeout to prevent waiting forever. The cleanup is wrapped in a
-    //    mutex operation to prevent race conditions.
+    const TIMEOUT_MS = 90000; // 90 seconds
+
     const timeout = setTimeout(() => {
         syncState.hashRequestMutex.run(async () => {
-            if (syncState.hashRequestState.has(requestId)) {
-                reject(new Error(`Hash request to peer ${peerId} timed out`));
+            const reqData = syncState.hashRequestState.get(requestId);
+            if (reqData) {
+                const duration = Date.now() - startTime;
+                const partialCount = reqData.hashes.length;
+                
+                // DIAGNOSTIC ERROR MESSAGE
+                const reason = partialCount > 0 
+                    ? `Stalled after ${partialCount} hashes (${duration}ms)` 
+                    : `No response received at all (${duration}ms)`;
+                
+                reject(new Error(`Hash request to ${peerId.slice(-6)} timed out: ${reason}`));
                 syncState.hashRequestState.delete(requestId);
             }
-        }).catch(err => log(`[SYNC] Error during timeout cleanup: ${err.message}`, 'error'));
-    }, 30000);
+        }).catch(err => log(`[SYNC] Cleanup error: ${err.message}`, 'error'));
+    }, TIMEOUT_MS);
 
     try {
-        // 3. Publish the request *after* releasing the lock.
+        log(`[SYNC] requesting hashes from ${peerId.slice(-6)} starting at ${startHeight}...`, 'debug');
+        
         await workerState.p2p.publish(TOPICS.GET_HASHES_REQUEST, {
              startHeight: startHeight.toString(),
             requestId: requestId
         });
 
-        // 4. Await the promise. The response handler can now acquire the lock to resolve it.
         const fullHashes = await promise;
         clearTimeout(timeout);
         return fullHashes;
     } catch (error) {
-        // 5. If any part of the process fails, ensure the timeout is cleared.
         clearTimeout(timeout);
-        // Rethrow the error to be handled by the caller (syncForward).
         throw error;
     }
 }
