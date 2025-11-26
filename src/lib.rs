@@ -101,20 +101,6 @@ pub struct MiningMetrics {
     pub avg_vdf_time_ms: u64,
 }
 
-struct PeerState {
-    pub connected_peers: HashSet<String>,
-    pub peer_scores: HashMap<String, i32>,
-}
-
-impl Default for PeerState {
-    fn default() -> Self {
-        Self {
-            connected_peers: HashSet::new(),
-            peer_scores: HashMap::new(),
-        }
-    }
-}
-
 // RATIONALE: Prevent memory exhaustion attacks by bounding cache sizes
 // LRU eviction ensures we keep most relevant data.
 const MAX_SIDE_BLOCKS: usize = 10000;
@@ -146,41 +132,7 @@ lazy_static! {
     // in-process wallet sessions (Rust owns keys/state)
     static ref WALLET_SESSIONS: Mutex<HashMap<String, wallet::Wallet>> =
         Mutex::new(HashMap::new());
-
-    static ref NODE_STATE: Mutex<NodeState> = Mutex::new(NodeState {
-        is_mining: false,
-        miner_wallet_id: None,
-        sync_status: SyncStatus::Idle,
-        sync_target_height: 0,
-        mining_job_id: 0,
-    });
-    
-
-    // ---  L2 State ---
-    static ref ATOMIC_SWAPS: Mutex<HashMap<Vec<u8>, AtomicSwap>> = Mutex::new(HashMap::new());
-    static ref PAYMENT_CHANNELS: Mutex<HashMap<Vec<u8>, PaymentChannel>> = Mutex::new(HashMap::new());
-    
-    // ---  Peer & Network State ---
-    static ref PEER_STATE: Mutex<PeerState> = Mutex::new(PeerState::default());
 }
-
-#[derive(Debug, Clone, PartialEq)]
-enum SyncStatus {
-    Idle,
-    Consensus,
-    Downloading,
-    Cooldown,
-}
-
-struct NodeState {
-    pub is_mining: bool,
-    pub miner_wallet_id: Option<String>,
-    pub sync_status: SyncStatus,
-    pub sync_target_height: u64,
-    pub mining_job_id: u64,
-}
-
-
 
 
 #[cfg(target_arch = "wasm32")]
@@ -663,147 +615,39 @@ fn handle_get_balance_internal(response: &mut p2p::RustToJsCommandBatch, req: p2
 }
 
 async fn handle_create_transaction_internal(req: p2p::CreateTransactionRequest) {
-    let mut response = p2p::RustToJsCommandBatch::default();
-    
-    // 1. Perform the transaction creation and signing (modifies wallet state in memory)
-    match wallet_session_send_to_stealth(&req.from_wallet_id, req.amount, req.fee, &req.to_address) {
-        Ok(js_val) => {
-            // Deserialize the result (Transaction + Updated Wallet JSON)
-            #[derive(Deserialize)]
-            struct TxResult { transaction: Transaction, updated_wallet_json: String }
-            let res: TxResult = match serde_wasm_bindgen::from_value(js_val) {
-                Ok(r) => r,
-                Err(e) => {
-                    add_log_command(&mut response, "error", &format!("Tx Deser fail: {:?}", e));
-                    post_rust_commands(response);
-                    return;
-                }
-            };
-
-            // 2. Add to Mempool (Validation)
-            let pool_val = serde_wasm_bindgen::to_value(&res.transaction).unwrap();
-            match add_transaction_to_pool(pool_val) {
-                Ok(_) => {
-                    // 3. Persist Wallet State to DB
-                    if let Err(e) = save_wallet_to_db(&req.from_wallet_id, &res.updated_wallet_json).await {
-                        add_log_command(&mut response, "error", &format!("Failed to save wallet: {:?}", e));
-                    } else {
-                        // 4. Broadcast to Network
-                        let tx_proto = p2p::Transaction::from(res.transaction);
-                        let mut tx_bytes = Vec::new();
-                        if tx_proto.encode(&mut tx_bytes).is_ok() {
-                            // Use Dandelion Stem (custom protocol or topic)
-                            add_p2p_publish_command(&mut response, crate::p2p::TOPICS::TRANSACTIONS.to_string(), tx_bytes);
-                            add_log_command(&mut response, "success", "Transaction created and broadcast.");
-                            
-                            // 5. Update UI Balance
-                            let balance = wallet_session_get_balance_internal(&req.from_wallet_id).unwrap_or(0);
-                            response.commands.push(p2p::RustCommand {
-                                command: Some(p2p::rust_command::Command::UpdateUiBalance(p2p::UpdateUiBalance {
-                                    wallet_id: req.from_wallet_id,
-                                    balance_string: balance.to_string(),
-                                })),
-                            });
-                        }
-                    }
-                },
-                Err(e) => add_log_command(&mut response, "error", &format!("Mempool rejected tx: {:?}", e)),
-            }
-        },
-        Err(e) => add_log_command(&mut response, "error", &format!("Failed to create transaction: {:?}", e)),
-    }
-    post_rust_commands(response);
+    log("TODO: Implement handle_create_transaction_internal");
+    // 1. Call wallet_session_send_to_stealth_internal
+    // 2. If OK, get the transaction bytes
+    // 3. Create a P2pMessage wrapper
+    // 4. Create a RustToJs_CommandBatch
+    // 5. Add a p2p_publish command to the batch
+    // 6. Send the batch back to JS
 }
 
 // --- Node & Chain Helpers ---
 
 async fn handle_toggle_miner_internal(req: p2p::ToggleMinerRequest) {
-    let mut response = p2p::RustToJsCommandBatch::default();
-    let mut state = NODE_STATE.lock().unwrap();
-    
-    if req.miner_id.is_empty() {
-        // Stop mining
-        state.is_mining = false;
-        state.miner_wallet_id = None;
-        
-        response.commands.push(p2p::RustCommand {
-            command: Some(p2p::rust_command::Command::ControlMining(p2p::ControlMining {
-                start: false,
-                ..Default::default()
-            })),
-        });
-        response.commands.push(p2p::RustCommand {
-            command: Some(p2p::rust_command::Command::UpdateUiMinerStatus(p2p::UpdateUiMinerStatus { is_mining: false })),
-        });
-        add_log_command(&mut response, "info", "Mining stopped.");
-    } else {
-        // Start mining
-        state.is_mining = true;
-        state.miner_wallet_id = Some(req.miner_id.clone());
-        
-        // Prepare mining params
-        let chain = BLOCKCHAIN.lock().unwrap();
-        let wallet_map = WALLET_SESSIONS.lock().unwrap();
-        
-        if let Some(wallet) = wallet_map.get(&req.miner_id) {
-            let next_height = *chain.current_height + 1;
-            let prev_hash = chain.tip_hash.clone();
-            state.mining_job_id += 1;
-
-            // Logic to calculate next difficulty (simplified here, usually async req)
-            // For now, use current chain params. Ideally, call `calculate_next_difficulty` logic.
-            let vrf_threshold = chain.current_vrf_threshold.to_vec();
-            let vdf_iterations = *chain.current_vdf_iterations;
-
-            response.commands.push(p2p::RustCommand {
-                command: Some(p2p::rust_command::Command::ControlMining(p2p::ControlMining {
-                    start: true,
-                    height: next_height,
-                    miner_pubkey: wallet.scan_pub.compress().to_bytes().to_vec(),
-                    miner_secret_key: wallet.spend_priv.to_bytes().to_vec(),
-                    prev_hash,
-                    vrf_threshold,
-                    vdf_iterations,
-                    job_id: state.mining_job_id,
-                })),
-            });
-            response.commands.push(p2p::RustCommand {
-                command: Some(p2p::rust_command::Command::UpdateUiMinerStatus(p2p::UpdateUiMinerStatus { is_mining: true })),
-            });
-            add_log_command(&mut response, "success", &format!("Mining started for wallet {}", req.miner_id));
-        } else {
-            state.is_mining = false;
-            add_log_command(&mut response, "error", "Miner wallet not loaded in session.");
-        }
-    }
-    post_rust_commands(response);
+    log("TODO: Implement handle_toggle_miner_internal");
+    // This is complex. It needs to:
+    // 1. Lock a new `GlobalState.miner_state`
+    // 2. If starting, get keys with `wallet_session_get_spend_privkey`
+    // 3. Create a `StartMining` command for JS to spin up the mining *worker*
+    // 4. If stopping, create a `StopMining` command
 }
 
-
-
 fn handle_get_status_internal(response: &mut p2p::RustToJsCommandBatch) {
-    let chain = BLOCKCHAIN.lock().unwrap();
-    add_log_command(response, "info", &format!(
-        "[STATUS] Height: {}, Work: {}, VDF Iters: {}",
-        *chain.current_height,
-        chain.total_work,
-        *chain.current_vdf_iterations
-    ));
+    log("TODO: Implement handle_get_status_internal");
+    // 1. Lock BLOCKCHAIN
+    // 2. Get height, work, etc.
+    // 3. Add LogMessage commands to response
 }
 
 async fn handle_get_supply_internal() {
-    let mut response = p2p::RustToJsCommandBatch::default();
-    match audit_total_supply().await {
-        Ok(supply) => {
-            response.commands.push(p2p::RustCommand {
-                command: Some(p2p::rust_command::Command::UiTotalSupply(p2p::UiTotalSupply {
-                    supply_string: supply,
-                })),
-            });
-        },
-        Err(e) => add_log_command(&mut response, "error", &format!("Supply audit failed: {:?}", e)),
-    }
-    post_rust_commands(response);
+    log("TODO: Implement handle_get_supply_internal");
+    // 1. Call audit_total_supply
+    // 2. Create RustToJs_CommandBatch
+    // 3. Add UiTotalSupply command
+    // 4. Send batch back to JS
 }
 
 fn handle_get_peers_internal(response: &mut p2p::RustToJsCommandBatch) {
@@ -827,33 +671,15 @@ fn handle_connect_peer_internal(response: &mut p2p::RustToJsCommandBatch, req: p
 // --- System Tick Helpers ---
 
 async fn handle_sync_tick_internal(_req: p2p::SyncTickRequest) {
-    // Logic to replace bootstrapSync
-    let mut response = p2p::RustToJsCommandBatch::default();
-    let mut state = NODE_STATE.lock().unwrap();
-
-    if state.sync_status == SyncStatus::Idle {
-        state.sync_status = SyncStatus::Consensus;
-        
-        // Create TipRequest
-        let msg = p2p::SyncMessage {
-            payload: Some(p2p::sync_message::Payload::TipRequest(p2p::TipRequest {})),
-        };
-        let mut bytes = Vec::new();
-        if msg.encode(&mut bytes).is_ok() {
-            // Wrap in P2pMessage
-            let p2p_msg = p2p::P2pMessage {
-                payload: Some(p2p::p2p_message::Payload::SyncMessage(msg)),
-            };
-            let mut p2p_bytes = Vec::new();
-            p2p_msg.encode(&mut p2p_bytes).unwrap();
-            
-            add_p2p_publish_command(&mut response, crate::p2p::TOPICS::SYNC.to_string(), p2p_bytes);
-        }
-    }
-    // Note: The logic to process responses and decide to download blocks 
-    // needs to be in `handle_network_message` (not implemented in this step, but state is ready).
-    
-    post_rust_commands(response);
+    log("TODO: Implement handle_sync_tick_internal");
+    // This will replace the logic in worker.js `bootstrapSync`
+    // 1. Lock STATE
+    // 2. Check sync_state.status
+    // 3. If "IDLE", change to "CONSENSUS"
+    // 4. Create P2P message for TipRequest
+    // 5. Create RustToJs_CommandBatch
+    // 6. Add p2p_publish command
+    // 7. Send batch back to JS
 }
 
 // --- L2 Helpers (Stubs) ---
