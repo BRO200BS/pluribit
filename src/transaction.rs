@@ -16,6 +16,7 @@ use crate::wasm_types::WasmU64;
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct TransactionInput {
+    #[serde(with = "serde_bytes")]
     pub commitment: Vec<u8>,
     pub merkle_proof: Option<crate::merkle::MerkleProof>,
     pub source_height: WasmU64, 
@@ -26,15 +27,20 @@ pub struct TransactionInput {
 pub struct TransactionOutput {
     pub commitment: Vec<u8>,
     // range_proof removed - V2 uses aggregated proof at Transaction level
+    #[serde(with = "serde_bytes")]
     pub ephemeral_key: Option<Vec<u8>>, // Stores the sender's ephemeral public key R
+    #[serde(with = "serde_bytes")]
     pub stealth_payload: Option<Vec<u8>>, // Stores the encrypted nonce || cipher
+    #[serde(with = "serde_bytes")]
     pub view_tag: Option<Vec<u8>>, // Now matches Protobuf 'bytes' type
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct TransactionKernel {
+    #[serde(with = "serde_bytes")]
     pub excess: Vec<u8>,
+    #[serde(with = "serde_bytes")]
     pub signature: Vec<u8>,
     pub fee: WasmU64,
     pub min_height: WasmU64,
@@ -48,6 +54,7 @@ pub struct Transaction {
     pub outputs: Vec<TransactionOutput>,
     pub kernels: Vec<TransactionKernel>,
     pub timestamp: WasmU64,
+    #[serde(with = "serde_bytes")]
     pub aggregated_range_proof: Vec<u8>, // V2: One proof for ALL outputs
 }
 

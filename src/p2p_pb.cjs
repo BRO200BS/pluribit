@@ -10317,6 +10317,788 @@ $root.p2p = (function() {
         return PaymentAcceptance;
     })();
 
+    p2p.GetBlockFiltersRequest = (function() {
+
+        /**
+         * Properties of a GetBlockFiltersRequest.
+         * @memberof p2p
+         * @interface IGetBlockFiltersRequest
+         * @property {number|Long|null} [startHeight] GetBlockFiltersRequest startHeight
+         * @property {number|Long|null} [endHeight] GetBlockFiltersRequest endHeight
+         * @property {string|null} [requestId] GetBlockFiltersRequest requestId
+         */
+
+        /**
+         * Constructs a new GetBlockFiltersRequest.
+         * @memberof p2p
+         * @classdesc Represents a GetBlockFiltersRequest.
+         * @implements IGetBlockFiltersRequest
+         * @constructor
+         * @param {p2p.IGetBlockFiltersRequest=} [properties] Properties to set
+         */
+        function GetBlockFiltersRequest(properties) {
+            if (properties)
+                for (var keys = Object.keys(properties), i = 0; i < keys.length; ++i)
+                    if (properties[keys[i]] != null)
+                        this[keys[i]] = properties[keys[i]];
+        }
+
+        /**
+         * GetBlockFiltersRequest startHeight.
+         * @member {number|Long} startHeight
+         * @memberof p2p.GetBlockFiltersRequest
+         * @instance
+         */
+        GetBlockFiltersRequest.prototype.startHeight = $util.Long ? $util.Long.fromBits(0,0,true) : 0;
+
+        /**
+         * GetBlockFiltersRequest endHeight.
+         * @member {number|Long} endHeight
+         * @memberof p2p.GetBlockFiltersRequest
+         * @instance
+         */
+        GetBlockFiltersRequest.prototype.endHeight = $util.Long ? $util.Long.fromBits(0,0,true) : 0;
+
+        /**
+         * GetBlockFiltersRequest requestId.
+         * @member {string} requestId
+         * @memberof p2p.GetBlockFiltersRequest
+         * @instance
+         */
+        GetBlockFiltersRequest.prototype.requestId = "";
+
+        /**
+         * Creates a new GetBlockFiltersRequest instance using the specified properties.
+         * @function create
+         * @memberof p2p.GetBlockFiltersRequest
+         * @static
+         * @param {p2p.IGetBlockFiltersRequest=} [properties] Properties to set
+         * @returns {p2p.GetBlockFiltersRequest} GetBlockFiltersRequest instance
+         */
+        GetBlockFiltersRequest.create = function create(properties) {
+            return new GetBlockFiltersRequest(properties);
+        };
+
+        /**
+         * Encodes the specified GetBlockFiltersRequest message. Does not implicitly {@link p2p.GetBlockFiltersRequest.verify|verify} messages.
+         * @function encode
+         * @memberof p2p.GetBlockFiltersRequest
+         * @static
+         * @param {p2p.IGetBlockFiltersRequest} message GetBlockFiltersRequest message or plain object to encode
+         * @param {$protobuf.Writer} [writer] Writer to encode to
+         * @returns {$protobuf.Writer} Writer
+         */
+        GetBlockFiltersRequest.encode = function encode(message, writer) {
+            if (!writer)
+                writer = $Writer.create();
+            if (message.startHeight != null && Object.hasOwnProperty.call(message, "startHeight"))
+                writer.uint32(/* id 1, wireType 0 =*/8).uint64(message.startHeight);
+            if (message.endHeight != null && Object.hasOwnProperty.call(message, "endHeight"))
+                writer.uint32(/* id 2, wireType 0 =*/16).uint64(message.endHeight);
+            if (message.requestId != null && Object.hasOwnProperty.call(message, "requestId"))
+                writer.uint32(/* id 3, wireType 2 =*/26).string(message.requestId);
+            return writer;
+        };
+
+        /**
+         * Encodes the specified GetBlockFiltersRequest message, length delimited. Does not implicitly {@link p2p.GetBlockFiltersRequest.verify|verify} messages.
+         * @function encodeDelimited
+         * @memberof p2p.GetBlockFiltersRequest
+         * @static
+         * @param {p2p.IGetBlockFiltersRequest} message GetBlockFiltersRequest message or plain object to encode
+         * @param {$protobuf.Writer} [writer] Writer to encode to
+         * @returns {$protobuf.Writer} Writer
+         */
+        GetBlockFiltersRequest.encodeDelimited = function encodeDelimited(message, writer) {
+            return this.encode(message, writer).ldelim();
+        };
+
+        /**
+         * Decodes a GetBlockFiltersRequest message from the specified reader or buffer.
+         * @function decode
+         * @memberof p2p.GetBlockFiltersRequest
+         * @static
+         * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
+         * @param {number} [length] Message length if known beforehand
+         * @returns {p2p.GetBlockFiltersRequest} GetBlockFiltersRequest
+         * @throws {Error} If the payload is not a reader or valid buffer
+         * @throws {$protobuf.util.ProtocolError} If required fields are missing
+         */
+        GetBlockFiltersRequest.decode = function decode(reader, length, error) {
+            if (!(reader instanceof $Reader))
+                reader = $Reader.create(reader);
+            var end = length === undefined ? reader.len : reader.pos + length, message = new $root.p2p.GetBlockFiltersRequest();
+            while (reader.pos < end) {
+                var tag = reader.uint32();
+                if (tag === error)
+                    break;
+                switch (tag >>> 3) {
+                case 1: {
+                        message.startHeight = reader.uint64();
+                        break;
+                    }
+                case 2: {
+                        message.endHeight = reader.uint64();
+                        break;
+                    }
+                case 3: {
+                        message.requestId = reader.string();
+                        break;
+                    }
+                default:
+                    reader.skipType(tag & 7);
+                    break;
+                }
+            }
+            return message;
+        };
+
+        /**
+         * Decodes a GetBlockFiltersRequest message from the specified reader or buffer, length delimited.
+         * @function decodeDelimited
+         * @memberof p2p.GetBlockFiltersRequest
+         * @static
+         * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
+         * @returns {p2p.GetBlockFiltersRequest} GetBlockFiltersRequest
+         * @throws {Error} If the payload is not a reader or valid buffer
+         * @throws {$protobuf.util.ProtocolError} If required fields are missing
+         */
+        GetBlockFiltersRequest.decodeDelimited = function decodeDelimited(reader) {
+            if (!(reader instanceof $Reader))
+                reader = new $Reader(reader);
+            return this.decode(reader, reader.uint32());
+        };
+
+        /**
+         * Verifies a GetBlockFiltersRequest message.
+         * @function verify
+         * @memberof p2p.GetBlockFiltersRequest
+         * @static
+         * @param {Object.<string,*>} message Plain object to verify
+         * @returns {string|null} `null` if valid, otherwise the reason why it is not
+         */
+        GetBlockFiltersRequest.verify = function verify(message) {
+            if (typeof message !== "object" || message === null)
+                return "object expected";
+            if (message.startHeight != null && message.hasOwnProperty("startHeight"))
+                if (!$util.isInteger(message.startHeight) && !(message.startHeight && $util.isInteger(message.startHeight.low) && $util.isInteger(message.startHeight.high)))
+                    return "startHeight: integer|Long expected";
+            if (message.endHeight != null && message.hasOwnProperty("endHeight"))
+                if (!$util.isInteger(message.endHeight) && !(message.endHeight && $util.isInteger(message.endHeight.low) && $util.isInteger(message.endHeight.high)))
+                    return "endHeight: integer|Long expected";
+            if (message.requestId != null && message.hasOwnProperty("requestId"))
+                if (!$util.isString(message.requestId))
+                    return "requestId: string expected";
+            return null;
+        };
+
+        /**
+         * Creates a GetBlockFiltersRequest message from a plain object. Also converts values to their respective internal types.
+         * @function fromObject
+         * @memberof p2p.GetBlockFiltersRequest
+         * @static
+         * @param {Object.<string,*>} object Plain object
+         * @returns {p2p.GetBlockFiltersRequest} GetBlockFiltersRequest
+         */
+        GetBlockFiltersRequest.fromObject = function fromObject(object) {
+            if (object instanceof $root.p2p.GetBlockFiltersRequest)
+                return object;
+            var message = new $root.p2p.GetBlockFiltersRequest();
+            if (object.startHeight != null)
+                if ($util.Long)
+                    (message.startHeight = $util.Long.fromValue(object.startHeight)).unsigned = true;
+                else if (typeof object.startHeight === "string")
+                    message.startHeight = parseInt(object.startHeight, 10);
+                else if (typeof object.startHeight === "number")
+                    message.startHeight = object.startHeight;
+                else if (typeof object.startHeight === "object")
+                    message.startHeight = new $util.LongBits(object.startHeight.low >>> 0, object.startHeight.high >>> 0).toNumber(true);
+            if (object.endHeight != null)
+                if ($util.Long)
+                    (message.endHeight = $util.Long.fromValue(object.endHeight)).unsigned = true;
+                else if (typeof object.endHeight === "string")
+                    message.endHeight = parseInt(object.endHeight, 10);
+                else if (typeof object.endHeight === "number")
+                    message.endHeight = object.endHeight;
+                else if (typeof object.endHeight === "object")
+                    message.endHeight = new $util.LongBits(object.endHeight.low >>> 0, object.endHeight.high >>> 0).toNumber(true);
+            if (object.requestId != null)
+                message.requestId = String(object.requestId);
+            return message;
+        };
+
+        /**
+         * Creates a plain object from a GetBlockFiltersRequest message. Also converts values to other types if specified.
+         * @function toObject
+         * @memberof p2p.GetBlockFiltersRequest
+         * @static
+         * @param {p2p.GetBlockFiltersRequest} message GetBlockFiltersRequest
+         * @param {$protobuf.IConversionOptions} [options] Conversion options
+         * @returns {Object.<string,*>} Plain object
+         */
+        GetBlockFiltersRequest.toObject = function toObject(message, options) {
+            if (!options)
+                options = {};
+            var object = {};
+            if (options.defaults) {
+                if ($util.Long) {
+                    var long = new $util.Long(0, 0, true);
+                    object.startHeight = options.longs === String ? long.toString() : options.longs === Number ? long.toNumber() : long;
+                } else
+                    object.startHeight = options.longs === String ? "0" : 0;
+                if ($util.Long) {
+                    var long = new $util.Long(0, 0, true);
+                    object.endHeight = options.longs === String ? long.toString() : options.longs === Number ? long.toNumber() : long;
+                } else
+                    object.endHeight = options.longs === String ? "0" : 0;
+                object.requestId = "";
+            }
+            if (message.startHeight != null && message.hasOwnProperty("startHeight"))
+                if (typeof message.startHeight === "number")
+                    object.startHeight = options.longs === String ? String(message.startHeight) : message.startHeight;
+                else
+                    object.startHeight = options.longs === String ? $util.Long.prototype.toString.call(message.startHeight) : options.longs === Number ? new $util.LongBits(message.startHeight.low >>> 0, message.startHeight.high >>> 0).toNumber(true) : message.startHeight;
+            if (message.endHeight != null && message.hasOwnProperty("endHeight"))
+                if (typeof message.endHeight === "number")
+                    object.endHeight = options.longs === String ? String(message.endHeight) : message.endHeight;
+                else
+                    object.endHeight = options.longs === String ? $util.Long.prototype.toString.call(message.endHeight) : options.longs === Number ? new $util.LongBits(message.endHeight.low >>> 0, message.endHeight.high >>> 0).toNumber(true) : message.endHeight;
+            if (message.requestId != null && message.hasOwnProperty("requestId"))
+                object.requestId = message.requestId;
+            return object;
+        };
+
+        /**
+         * Converts this GetBlockFiltersRequest to JSON.
+         * @function toJSON
+         * @memberof p2p.GetBlockFiltersRequest
+         * @instance
+         * @returns {Object.<string,*>} JSON object
+         */
+        GetBlockFiltersRequest.prototype.toJSON = function toJSON() {
+            return this.constructor.toObject(this, $protobuf.util.toJSONOptions);
+        };
+
+        /**
+         * Gets the default type url for GetBlockFiltersRequest
+         * @function getTypeUrl
+         * @memberof p2p.GetBlockFiltersRequest
+         * @static
+         * @param {string} [typeUrlPrefix] your custom typeUrlPrefix(default "type.googleapis.com")
+         * @returns {string} The default type url
+         */
+        GetBlockFiltersRequest.getTypeUrl = function getTypeUrl(typeUrlPrefix) {
+            if (typeUrlPrefix === undefined) {
+                typeUrlPrefix = "type.googleapis.com";
+            }
+            return typeUrlPrefix + "/p2p.GetBlockFiltersRequest";
+        };
+
+        return GetBlockFiltersRequest;
+    })();
+
+    p2p.BlockFilterData = (function() {
+
+        /**
+         * Properties of a BlockFilterData.
+         * @memberof p2p
+         * @interface IBlockFilterData
+         * @property {number|Long|null} [height] BlockFilterData height
+         * @property {Uint8Array|null} [filterEntries] BlockFilterData filterEntries
+         */
+
+        /**
+         * Constructs a new BlockFilterData.
+         * @memberof p2p
+         * @classdesc Represents a BlockFilterData.
+         * @implements IBlockFilterData
+         * @constructor
+         * @param {p2p.IBlockFilterData=} [properties] Properties to set
+         */
+        function BlockFilterData(properties) {
+            if (properties)
+                for (var keys = Object.keys(properties), i = 0; i < keys.length; ++i)
+                    if (properties[keys[i]] != null)
+                        this[keys[i]] = properties[keys[i]];
+        }
+
+        /**
+         * BlockFilterData height.
+         * @member {number|Long} height
+         * @memberof p2p.BlockFilterData
+         * @instance
+         */
+        BlockFilterData.prototype.height = $util.Long ? $util.Long.fromBits(0,0,true) : 0;
+
+        /**
+         * BlockFilterData filterEntries.
+         * @member {Uint8Array} filterEntries
+         * @memberof p2p.BlockFilterData
+         * @instance
+         */
+        BlockFilterData.prototype.filterEntries = $util.newBuffer([]);
+
+        /**
+         * Creates a new BlockFilterData instance using the specified properties.
+         * @function create
+         * @memberof p2p.BlockFilterData
+         * @static
+         * @param {p2p.IBlockFilterData=} [properties] Properties to set
+         * @returns {p2p.BlockFilterData} BlockFilterData instance
+         */
+        BlockFilterData.create = function create(properties) {
+            return new BlockFilterData(properties);
+        };
+
+        /**
+         * Encodes the specified BlockFilterData message. Does not implicitly {@link p2p.BlockFilterData.verify|verify} messages.
+         * @function encode
+         * @memberof p2p.BlockFilterData
+         * @static
+         * @param {p2p.IBlockFilterData} message BlockFilterData message or plain object to encode
+         * @param {$protobuf.Writer} [writer] Writer to encode to
+         * @returns {$protobuf.Writer} Writer
+         */
+        BlockFilterData.encode = function encode(message, writer) {
+            if (!writer)
+                writer = $Writer.create();
+            if (message.height != null && Object.hasOwnProperty.call(message, "height"))
+                writer.uint32(/* id 1, wireType 0 =*/8).uint64(message.height);
+            if (message.filterEntries != null && Object.hasOwnProperty.call(message, "filterEntries"))
+                writer.uint32(/* id 2, wireType 2 =*/18).bytes(message.filterEntries);
+            return writer;
+        };
+
+        /**
+         * Encodes the specified BlockFilterData message, length delimited. Does not implicitly {@link p2p.BlockFilterData.verify|verify} messages.
+         * @function encodeDelimited
+         * @memberof p2p.BlockFilterData
+         * @static
+         * @param {p2p.IBlockFilterData} message BlockFilterData message or plain object to encode
+         * @param {$protobuf.Writer} [writer] Writer to encode to
+         * @returns {$protobuf.Writer} Writer
+         */
+        BlockFilterData.encodeDelimited = function encodeDelimited(message, writer) {
+            return this.encode(message, writer).ldelim();
+        };
+
+        /**
+         * Decodes a BlockFilterData message from the specified reader or buffer.
+         * @function decode
+         * @memberof p2p.BlockFilterData
+         * @static
+         * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
+         * @param {number} [length] Message length if known beforehand
+         * @returns {p2p.BlockFilterData} BlockFilterData
+         * @throws {Error} If the payload is not a reader or valid buffer
+         * @throws {$protobuf.util.ProtocolError} If required fields are missing
+         */
+        BlockFilterData.decode = function decode(reader, length, error) {
+            if (!(reader instanceof $Reader))
+                reader = $Reader.create(reader);
+            var end = length === undefined ? reader.len : reader.pos + length, message = new $root.p2p.BlockFilterData();
+            while (reader.pos < end) {
+                var tag = reader.uint32();
+                if (tag === error)
+                    break;
+                switch (tag >>> 3) {
+                case 1: {
+                        message.height = reader.uint64();
+                        break;
+                    }
+                case 2: {
+                        message.filterEntries = reader.bytes();
+                        break;
+                    }
+                default:
+                    reader.skipType(tag & 7);
+                    break;
+                }
+            }
+            return message;
+        };
+
+        /**
+         * Decodes a BlockFilterData message from the specified reader or buffer, length delimited.
+         * @function decodeDelimited
+         * @memberof p2p.BlockFilterData
+         * @static
+         * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
+         * @returns {p2p.BlockFilterData} BlockFilterData
+         * @throws {Error} If the payload is not a reader or valid buffer
+         * @throws {$protobuf.util.ProtocolError} If required fields are missing
+         */
+        BlockFilterData.decodeDelimited = function decodeDelimited(reader) {
+            if (!(reader instanceof $Reader))
+                reader = new $Reader(reader);
+            return this.decode(reader, reader.uint32());
+        };
+
+        /**
+         * Verifies a BlockFilterData message.
+         * @function verify
+         * @memberof p2p.BlockFilterData
+         * @static
+         * @param {Object.<string,*>} message Plain object to verify
+         * @returns {string|null} `null` if valid, otherwise the reason why it is not
+         */
+        BlockFilterData.verify = function verify(message) {
+            if (typeof message !== "object" || message === null)
+                return "object expected";
+            if (message.height != null && message.hasOwnProperty("height"))
+                if (!$util.isInteger(message.height) && !(message.height && $util.isInteger(message.height.low) && $util.isInteger(message.height.high)))
+                    return "height: integer|Long expected";
+            if (message.filterEntries != null && message.hasOwnProperty("filterEntries"))
+                if (!(message.filterEntries && typeof message.filterEntries.length === "number" || $util.isString(message.filterEntries)))
+                    return "filterEntries: buffer expected";
+            return null;
+        };
+
+        /**
+         * Creates a BlockFilterData message from a plain object. Also converts values to their respective internal types.
+         * @function fromObject
+         * @memberof p2p.BlockFilterData
+         * @static
+         * @param {Object.<string,*>} object Plain object
+         * @returns {p2p.BlockFilterData} BlockFilterData
+         */
+        BlockFilterData.fromObject = function fromObject(object) {
+            if (object instanceof $root.p2p.BlockFilterData)
+                return object;
+            var message = new $root.p2p.BlockFilterData();
+            if (object.height != null)
+                if ($util.Long)
+                    (message.height = $util.Long.fromValue(object.height)).unsigned = true;
+                else if (typeof object.height === "string")
+                    message.height = parseInt(object.height, 10);
+                else if (typeof object.height === "number")
+                    message.height = object.height;
+                else if (typeof object.height === "object")
+                    message.height = new $util.LongBits(object.height.low >>> 0, object.height.high >>> 0).toNumber(true);
+            if (object.filterEntries != null)
+                if (typeof object.filterEntries === "string")
+                    $util.base64.decode(object.filterEntries, message.filterEntries = $util.newBuffer($util.base64.length(object.filterEntries)), 0);
+                else if (object.filterEntries.length >= 0)
+                    message.filterEntries = object.filterEntries;
+            return message;
+        };
+
+        /**
+         * Creates a plain object from a BlockFilterData message. Also converts values to other types if specified.
+         * @function toObject
+         * @memberof p2p.BlockFilterData
+         * @static
+         * @param {p2p.BlockFilterData} message BlockFilterData
+         * @param {$protobuf.IConversionOptions} [options] Conversion options
+         * @returns {Object.<string,*>} Plain object
+         */
+        BlockFilterData.toObject = function toObject(message, options) {
+            if (!options)
+                options = {};
+            var object = {};
+            if (options.defaults) {
+                if ($util.Long) {
+                    var long = new $util.Long(0, 0, true);
+                    object.height = options.longs === String ? long.toString() : options.longs === Number ? long.toNumber() : long;
+                } else
+                    object.height = options.longs === String ? "0" : 0;
+                if (options.bytes === String)
+                    object.filterEntries = "";
+                else {
+                    object.filterEntries = [];
+                    if (options.bytes !== Array)
+                        object.filterEntries = $util.newBuffer(object.filterEntries);
+                }
+            }
+            if (message.height != null && message.hasOwnProperty("height"))
+                if (typeof message.height === "number")
+                    object.height = options.longs === String ? String(message.height) : message.height;
+                else
+                    object.height = options.longs === String ? $util.Long.prototype.toString.call(message.height) : options.longs === Number ? new $util.LongBits(message.height.low >>> 0, message.height.high >>> 0).toNumber(true) : message.height;
+            if (message.filterEntries != null && message.hasOwnProperty("filterEntries"))
+                object.filterEntries = options.bytes === String ? $util.base64.encode(message.filterEntries, 0, message.filterEntries.length) : options.bytes === Array ? Array.prototype.slice.call(message.filterEntries) : message.filterEntries;
+            return object;
+        };
+
+        /**
+         * Converts this BlockFilterData to JSON.
+         * @function toJSON
+         * @memberof p2p.BlockFilterData
+         * @instance
+         * @returns {Object.<string,*>} JSON object
+         */
+        BlockFilterData.prototype.toJSON = function toJSON() {
+            return this.constructor.toObject(this, $protobuf.util.toJSONOptions);
+        };
+
+        /**
+         * Gets the default type url for BlockFilterData
+         * @function getTypeUrl
+         * @memberof p2p.BlockFilterData
+         * @static
+         * @param {string} [typeUrlPrefix] your custom typeUrlPrefix(default "type.googleapis.com")
+         * @returns {string} The default type url
+         */
+        BlockFilterData.getTypeUrl = function getTypeUrl(typeUrlPrefix) {
+            if (typeUrlPrefix === undefined) {
+                typeUrlPrefix = "type.googleapis.com";
+            }
+            return typeUrlPrefix + "/p2p.BlockFilterData";
+        };
+
+        return BlockFilterData;
+    })();
+
+    p2p.BlockFiltersResponse = (function() {
+
+        /**
+         * Properties of a BlockFiltersResponse.
+         * @memberof p2p
+         * @interface IBlockFiltersResponse
+         * @property {Array.<p2p.IBlockFilterData>|null} [filters] BlockFiltersResponse filters
+         * @property {string|null} [requestId] BlockFiltersResponse requestId
+         */
+
+        /**
+         * Constructs a new BlockFiltersResponse.
+         * @memberof p2p
+         * @classdesc Represents a BlockFiltersResponse.
+         * @implements IBlockFiltersResponse
+         * @constructor
+         * @param {p2p.IBlockFiltersResponse=} [properties] Properties to set
+         */
+        function BlockFiltersResponse(properties) {
+            this.filters = [];
+            if (properties)
+                for (var keys = Object.keys(properties), i = 0; i < keys.length; ++i)
+                    if (properties[keys[i]] != null)
+                        this[keys[i]] = properties[keys[i]];
+        }
+
+        /**
+         * BlockFiltersResponse filters.
+         * @member {Array.<p2p.IBlockFilterData>} filters
+         * @memberof p2p.BlockFiltersResponse
+         * @instance
+         */
+        BlockFiltersResponse.prototype.filters = $util.emptyArray;
+
+        /**
+         * BlockFiltersResponse requestId.
+         * @member {string} requestId
+         * @memberof p2p.BlockFiltersResponse
+         * @instance
+         */
+        BlockFiltersResponse.prototype.requestId = "";
+
+        /**
+         * Creates a new BlockFiltersResponse instance using the specified properties.
+         * @function create
+         * @memberof p2p.BlockFiltersResponse
+         * @static
+         * @param {p2p.IBlockFiltersResponse=} [properties] Properties to set
+         * @returns {p2p.BlockFiltersResponse} BlockFiltersResponse instance
+         */
+        BlockFiltersResponse.create = function create(properties) {
+            return new BlockFiltersResponse(properties);
+        };
+
+        /**
+         * Encodes the specified BlockFiltersResponse message. Does not implicitly {@link p2p.BlockFiltersResponse.verify|verify} messages.
+         * @function encode
+         * @memberof p2p.BlockFiltersResponse
+         * @static
+         * @param {p2p.IBlockFiltersResponse} message BlockFiltersResponse message or plain object to encode
+         * @param {$protobuf.Writer} [writer] Writer to encode to
+         * @returns {$protobuf.Writer} Writer
+         */
+        BlockFiltersResponse.encode = function encode(message, writer) {
+            if (!writer)
+                writer = $Writer.create();
+            if (message.filters != null && message.filters.length)
+                for (var i = 0; i < message.filters.length; ++i)
+                    $root.p2p.BlockFilterData.encode(message.filters[i], writer.uint32(/* id 1, wireType 2 =*/10).fork()).ldelim();
+            if (message.requestId != null && Object.hasOwnProperty.call(message, "requestId"))
+                writer.uint32(/* id 2, wireType 2 =*/18).string(message.requestId);
+            return writer;
+        };
+
+        /**
+         * Encodes the specified BlockFiltersResponse message, length delimited. Does not implicitly {@link p2p.BlockFiltersResponse.verify|verify} messages.
+         * @function encodeDelimited
+         * @memberof p2p.BlockFiltersResponse
+         * @static
+         * @param {p2p.IBlockFiltersResponse} message BlockFiltersResponse message or plain object to encode
+         * @param {$protobuf.Writer} [writer] Writer to encode to
+         * @returns {$protobuf.Writer} Writer
+         */
+        BlockFiltersResponse.encodeDelimited = function encodeDelimited(message, writer) {
+            return this.encode(message, writer).ldelim();
+        };
+
+        /**
+         * Decodes a BlockFiltersResponse message from the specified reader or buffer.
+         * @function decode
+         * @memberof p2p.BlockFiltersResponse
+         * @static
+         * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
+         * @param {number} [length] Message length if known beforehand
+         * @returns {p2p.BlockFiltersResponse} BlockFiltersResponse
+         * @throws {Error} If the payload is not a reader or valid buffer
+         * @throws {$protobuf.util.ProtocolError} If required fields are missing
+         */
+        BlockFiltersResponse.decode = function decode(reader, length, error) {
+            if (!(reader instanceof $Reader))
+                reader = $Reader.create(reader);
+            var end = length === undefined ? reader.len : reader.pos + length, message = new $root.p2p.BlockFiltersResponse();
+            while (reader.pos < end) {
+                var tag = reader.uint32();
+                if (tag === error)
+                    break;
+                switch (tag >>> 3) {
+                case 1: {
+                        if (!(message.filters && message.filters.length))
+                            message.filters = [];
+                        message.filters.push($root.p2p.BlockFilterData.decode(reader, reader.uint32()));
+                        break;
+                    }
+                case 2: {
+                        message.requestId = reader.string();
+                        break;
+                    }
+                default:
+                    reader.skipType(tag & 7);
+                    break;
+                }
+            }
+            return message;
+        };
+
+        /**
+         * Decodes a BlockFiltersResponse message from the specified reader or buffer, length delimited.
+         * @function decodeDelimited
+         * @memberof p2p.BlockFiltersResponse
+         * @static
+         * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
+         * @returns {p2p.BlockFiltersResponse} BlockFiltersResponse
+         * @throws {Error} If the payload is not a reader or valid buffer
+         * @throws {$protobuf.util.ProtocolError} If required fields are missing
+         */
+        BlockFiltersResponse.decodeDelimited = function decodeDelimited(reader) {
+            if (!(reader instanceof $Reader))
+                reader = new $Reader(reader);
+            return this.decode(reader, reader.uint32());
+        };
+
+        /**
+         * Verifies a BlockFiltersResponse message.
+         * @function verify
+         * @memberof p2p.BlockFiltersResponse
+         * @static
+         * @param {Object.<string,*>} message Plain object to verify
+         * @returns {string|null} `null` if valid, otherwise the reason why it is not
+         */
+        BlockFiltersResponse.verify = function verify(message) {
+            if (typeof message !== "object" || message === null)
+                return "object expected";
+            if (message.filters != null && message.hasOwnProperty("filters")) {
+                if (!Array.isArray(message.filters))
+                    return "filters: array expected";
+                for (var i = 0; i < message.filters.length; ++i) {
+                    var error = $root.p2p.BlockFilterData.verify(message.filters[i]);
+                    if (error)
+                        return "filters." + error;
+                }
+            }
+            if (message.requestId != null && message.hasOwnProperty("requestId"))
+                if (!$util.isString(message.requestId))
+                    return "requestId: string expected";
+            return null;
+        };
+
+        /**
+         * Creates a BlockFiltersResponse message from a plain object. Also converts values to their respective internal types.
+         * @function fromObject
+         * @memberof p2p.BlockFiltersResponse
+         * @static
+         * @param {Object.<string,*>} object Plain object
+         * @returns {p2p.BlockFiltersResponse} BlockFiltersResponse
+         */
+        BlockFiltersResponse.fromObject = function fromObject(object) {
+            if (object instanceof $root.p2p.BlockFiltersResponse)
+                return object;
+            var message = new $root.p2p.BlockFiltersResponse();
+            if (object.filters) {
+                if (!Array.isArray(object.filters))
+                    throw TypeError(".p2p.BlockFiltersResponse.filters: array expected");
+                message.filters = [];
+                for (var i = 0; i < object.filters.length; ++i) {
+                    if (typeof object.filters[i] !== "object")
+                        throw TypeError(".p2p.BlockFiltersResponse.filters: object expected");
+                    message.filters[i] = $root.p2p.BlockFilterData.fromObject(object.filters[i]);
+                }
+            }
+            if (object.requestId != null)
+                message.requestId = String(object.requestId);
+            return message;
+        };
+
+        /**
+         * Creates a plain object from a BlockFiltersResponse message. Also converts values to other types if specified.
+         * @function toObject
+         * @memberof p2p.BlockFiltersResponse
+         * @static
+         * @param {p2p.BlockFiltersResponse} message BlockFiltersResponse
+         * @param {$protobuf.IConversionOptions} [options] Conversion options
+         * @returns {Object.<string,*>} Plain object
+         */
+        BlockFiltersResponse.toObject = function toObject(message, options) {
+            if (!options)
+                options = {};
+            var object = {};
+            if (options.arrays || options.defaults)
+                object.filters = [];
+            if (options.defaults)
+                object.requestId = "";
+            if (message.filters && message.filters.length) {
+                object.filters = [];
+                for (var j = 0; j < message.filters.length; ++j)
+                    object.filters[j] = $root.p2p.BlockFilterData.toObject(message.filters[j], options);
+            }
+            if (message.requestId != null && message.hasOwnProperty("requestId"))
+                object.requestId = message.requestId;
+            return object;
+        };
+
+        /**
+         * Converts this BlockFiltersResponse to JSON.
+         * @function toJSON
+         * @memberof p2p.BlockFiltersResponse
+         * @instance
+         * @returns {Object.<string,*>} JSON object
+         */
+        BlockFiltersResponse.prototype.toJSON = function toJSON() {
+            return this.constructor.toObject(this, $protobuf.util.toJSONOptions);
+        };
+
+        /**
+         * Gets the default type url for BlockFiltersResponse
+         * @function getTypeUrl
+         * @memberof p2p.BlockFiltersResponse
+         * @static
+         * @param {string} [typeUrlPrefix] your custom typeUrlPrefix(default "type.googleapis.com")
+         * @returns {string} The default type url
+         */
+        BlockFiltersResponse.getTypeUrl = function getTypeUrl(typeUrlPrefix) {
+            if (typeUrlPrefix === undefined) {
+                typeUrlPrefix = "type.googleapis.com";
+            }
+            return typeUrlPrefix + "/p2p.BlockFiltersResponse";
+        };
+
+        return BlockFiltersResponse;
+    })();
+
     p2p.P2pMessage = (function() {
 
         /**
@@ -10342,6 +11124,8 @@ $root.p2p = (function() {
          * @property {p2p.IPaymentAcceptance|null} [channelPayAccept] P2pMessage channelPayAccept
          * @property {p2p.IChannelNonce|null} [channelCloseNonce] P2pMessage channelCloseNonce
          * @property {p2p.IChannelPartialSig|null} [channelCloseSig] P2pMessage channelCloseSig
+         * @property {p2p.IGetBlockFiltersRequest|null} [getBlockFilters] P2pMessage getBlockFilters
+         * @property {p2p.IBlockFiltersResponse|null} [blockFiltersResponse] P2pMessage blockFiltersResponse
          */
 
         /**
@@ -10511,17 +11295,33 @@ $root.p2p = (function() {
          */
         P2pMessage.prototype.channelCloseSig = null;
 
+        /**
+         * P2pMessage getBlockFilters.
+         * @member {p2p.IGetBlockFiltersRequest|null|undefined} getBlockFilters
+         * @memberof p2p.P2pMessage
+         * @instance
+         */
+        P2pMessage.prototype.getBlockFilters = null;
+
+        /**
+         * P2pMessage blockFiltersResponse.
+         * @member {p2p.IBlockFiltersResponse|null|undefined} blockFiltersResponse
+         * @memberof p2p.P2pMessage
+         * @instance
+         */
+        P2pMessage.prototype.blockFiltersResponse = null;
+
         // OneOf field names bound to virtual getters and setters
         var $oneOfFields;
 
         /**
          * P2pMessage payload.
-         * @member {"block"|"transaction"|"blockAnnouncement"|"blockRequest"|"getHashesRequest"|"hashesResponse"|"syncMessage"|"dandelionStem"|"swapPropose"|"swapRespond"|"swapAliceAdaptorSig"|"channelPropose"|"channelAccept"|"channelFundNonce"|"channelFundSig"|"channelPayPropose"|"channelPayAccept"|"channelCloseNonce"|"channelCloseSig"|undefined} payload
+         * @member {"block"|"transaction"|"blockAnnouncement"|"blockRequest"|"getHashesRequest"|"hashesResponse"|"syncMessage"|"dandelionStem"|"swapPropose"|"swapRespond"|"swapAliceAdaptorSig"|"channelPropose"|"channelAccept"|"channelFundNonce"|"channelFundSig"|"channelPayPropose"|"channelPayAccept"|"channelCloseNonce"|"channelCloseSig"|"getBlockFilters"|"blockFiltersResponse"|undefined} payload
          * @memberof p2p.P2pMessage
          * @instance
          */
         Object.defineProperty(P2pMessage.prototype, "payload", {
-            get: $util.oneOfGetter($oneOfFields = ["block", "transaction", "blockAnnouncement", "blockRequest", "getHashesRequest", "hashesResponse", "syncMessage", "dandelionStem", "swapPropose", "swapRespond", "swapAliceAdaptorSig", "channelPropose", "channelAccept", "channelFundNonce", "channelFundSig", "channelPayPropose", "channelPayAccept", "channelCloseNonce", "channelCloseSig"]),
+            get: $util.oneOfGetter($oneOfFields = ["block", "transaction", "blockAnnouncement", "blockRequest", "getHashesRequest", "hashesResponse", "syncMessage", "dandelionStem", "swapPropose", "swapRespond", "swapAliceAdaptorSig", "channelPropose", "channelAccept", "channelFundNonce", "channelFundSig", "channelPayPropose", "channelPayAccept", "channelCloseNonce", "channelCloseSig", "getBlockFilters", "blockFiltersResponse"]),
             set: $util.oneOfSetter($oneOfFields)
         });
 
@@ -10587,6 +11387,10 @@ $root.p2p = (function() {
                 $root.p2p.ChannelNonce.encode(message.channelCloseNonce, writer.uint32(/* id 18, wireType 2 =*/146).fork()).ldelim();
             if (message.channelCloseSig != null && Object.hasOwnProperty.call(message, "channelCloseSig"))
                 $root.p2p.ChannelPartialSig.encode(message.channelCloseSig, writer.uint32(/* id 19, wireType 2 =*/154).fork()).ldelim();
+            if (message.getBlockFilters != null && Object.hasOwnProperty.call(message, "getBlockFilters"))
+                $root.p2p.GetBlockFiltersRequest.encode(message.getBlockFilters, writer.uint32(/* id 20, wireType 2 =*/162).fork()).ldelim();
+            if (message.blockFiltersResponse != null && Object.hasOwnProperty.call(message, "blockFiltersResponse"))
+                $root.p2p.BlockFiltersResponse.encode(message.blockFiltersResponse, writer.uint32(/* id 21, wireType 2 =*/170).fork()).ldelim();
             return writer;
         };
 
@@ -10697,6 +11501,14 @@ $root.p2p = (function() {
                     }
                 case 19: {
                         message.channelCloseSig = $root.p2p.ChannelPartialSig.decode(reader, reader.uint32());
+                        break;
+                    }
+                case 20: {
+                        message.getBlockFilters = $root.p2p.GetBlockFiltersRequest.decode(reader, reader.uint32());
+                        break;
+                    }
+                case 21: {
+                        message.blockFiltersResponse = $root.p2p.BlockFiltersResponse.decode(reader, reader.uint32());
                         break;
                     }
                 default:
@@ -10923,6 +11735,26 @@ $root.p2p = (function() {
                         return "channelCloseSig." + error;
                 }
             }
+            if (message.getBlockFilters != null && message.hasOwnProperty("getBlockFilters")) {
+                if (properties.payload === 1)
+                    return "payload: multiple values";
+                properties.payload = 1;
+                {
+                    var error = $root.p2p.GetBlockFiltersRequest.verify(message.getBlockFilters);
+                    if (error)
+                        return "getBlockFilters." + error;
+                }
+            }
+            if (message.blockFiltersResponse != null && message.hasOwnProperty("blockFiltersResponse")) {
+                if (properties.payload === 1)
+                    return "payload: multiple values";
+                properties.payload = 1;
+                {
+                    var error = $root.p2p.BlockFiltersResponse.verify(message.blockFiltersResponse);
+                    if (error)
+                        return "blockFiltersResponse." + error;
+                }
+            }
             return null;
         };
 
@@ -11032,6 +11864,16 @@ $root.p2p = (function() {
                 if (typeof object.channelCloseSig !== "object")
                     throw TypeError(".p2p.P2pMessage.channelCloseSig: object expected");
                 message.channelCloseSig = $root.p2p.ChannelPartialSig.fromObject(object.channelCloseSig);
+            }
+            if (object.getBlockFilters != null) {
+                if (typeof object.getBlockFilters !== "object")
+                    throw TypeError(".p2p.P2pMessage.getBlockFilters: object expected");
+                message.getBlockFilters = $root.p2p.GetBlockFiltersRequest.fromObject(object.getBlockFilters);
+            }
+            if (object.blockFiltersResponse != null) {
+                if (typeof object.blockFiltersResponse !== "object")
+                    throw TypeError(".p2p.P2pMessage.blockFiltersResponse: object expected");
+                message.blockFiltersResponse = $root.p2p.BlockFiltersResponse.fromObject(object.blockFiltersResponse);
             }
             return message;
         };
@@ -11143,6 +11985,16 @@ $root.p2p = (function() {
                 object.channelCloseSig = $root.p2p.ChannelPartialSig.toObject(message.channelCloseSig, options);
                 if (options.oneofs)
                     object.payload = "channelCloseSig";
+            }
+            if (message.getBlockFilters != null && message.hasOwnProperty("getBlockFilters")) {
+                object.getBlockFilters = $root.p2p.GetBlockFiltersRequest.toObject(message.getBlockFilters, options);
+                if (options.oneofs)
+                    object.payload = "getBlockFilters";
+            }
+            if (message.blockFiltersResponse != null && message.hasOwnProperty("blockFiltersResponse")) {
+                object.blockFiltersResponse = $root.p2p.BlockFiltersResponse.toObject(message.blockFiltersResponse, options);
+                if (options.oneofs)
+                    object.payload = "blockFiltersResponse";
             }
             return object;
         };
@@ -12735,6 +13587,442 @@ $root.p2p = (function() {
         return RustToJs_CommandBatch;
     })();
 
+    p2p.ControlMining = (function() {
+
+        /**
+         * Properties of a ControlMining.
+         * @memberof p2p
+         * @interface IControlMining
+         * @property {boolean|null} [start] ControlMining start
+         * @property {number|Long|null} [height] ControlMining height
+         * @property {Uint8Array|null} [minerPubkey] ControlMining minerPubkey
+         * @property {Uint8Array|null} [minerSecretKey] ControlMining minerSecretKey
+         * @property {string|null} [prevHash] ControlMining prevHash
+         * @property {Uint8Array|null} [vrfThreshold] ControlMining vrfThreshold
+         * @property {number|Long|null} [vdfIterations] ControlMining vdfIterations
+         * @property {number|Long|null} [jobId] ControlMining jobId
+         */
+
+        /**
+         * Constructs a new ControlMining.
+         * @memberof p2p
+         * @classdesc Represents a ControlMining.
+         * @implements IControlMining
+         * @constructor
+         * @param {p2p.IControlMining=} [properties] Properties to set
+         */
+        function ControlMining(properties) {
+            if (properties)
+                for (var keys = Object.keys(properties), i = 0; i < keys.length; ++i)
+                    if (properties[keys[i]] != null)
+                        this[keys[i]] = properties[keys[i]];
+        }
+
+        /**
+         * ControlMining start.
+         * @member {boolean} start
+         * @memberof p2p.ControlMining
+         * @instance
+         */
+        ControlMining.prototype.start = false;
+
+        /**
+         * ControlMining height.
+         * @member {number|Long} height
+         * @memberof p2p.ControlMining
+         * @instance
+         */
+        ControlMining.prototype.height = $util.Long ? $util.Long.fromBits(0,0,true) : 0;
+
+        /**
+         * ControlMining minerPubkey.
+         * @member {Uint8Array} minerPubkey
+         * @memberof p2p.ControlMining
+         * @instance
+         */
+        ControlMining.prototype.minerPubkey = $util.newBuffer([]);
+
+        /**
+         * ControlMining minerSecretKey.
+         * @member {Uint8Array} minerSecretKey
+         * @memberof p2p.ControlMining
+         * @instance
+         */
+        ControlMining.prototype.minerSecretKey = $util.newBuffer([]);
+
+        /**
+         * ControlMining prevHash.
+         * @member {string} prevHash
+         * @memberof p2p.ControlMining
+         * @instance
+         */
+        ControlMining.prototype.prevHash = "";
+
+        /**
+         * ControlMining vrfThreshold.
+         * @member {Uint8Array} vrfThreshold
+         * @memberof p2p.ControlMining
+         * @instance
+         */
+        ControlMining.prototype.vrfThreshold = $util.newBuffer([]);
+
+        /**
+         * ControlMining vdfIterations.
+         * @member {number|Long} vdfIterations
+         * @memberof p2p.ControlMining
+         * @instance
+         */
+        ControlMining.prototype.vdfIterations = $util.Long ? $util.Long.fromBits(0,0,true) : 0;
+
+        /**
+         * ControlMining jobId.
+         * @member {number|Long} jobId
+         * @memberof p2p.ControlMining
+         * @instance
+         */
+        ControlMining.prototype.jobId = $util.Long ? $util.Long.fromBits(0,0,true) : 0;
+
+        /**
+         * Creates a new ControlMining instance using the specified properties.
+         * @function create
+         * @memberof p2p.ControlMining
+         * @static
+         * @param {p2p.IControlMining=} [properties] Properties to set
+         * @returns {p2p.ControlMining} ControlMining instance
+         */
+        ControlMining.create = function create(properties) {
+            return new ControlMining(properties);
+        };
+
+        /**
+         * Encodes the specified ControlMining message. Does not implicitly {@link p2p.ControlMining.verify|verify} messages.
+         * @function encode
+         * @memberof p2p.ControlMining
+         * @static
+         * @param {p2p.IControlMining} message ControlMining message or plain object to encode
+         * @param {$protobuf.Writer} [writer] Writer to encode to
+         * @returns {$protobuf.Writer} Writer
+         */
+        ControlMining.encode = function encode(message, writer) {
+            if (!writer)
+                writer = $Writer.create();
+            if (message.start != null && Object.hasOwnProperty.call(message, "start"))
+                writer.uint32(/* id 1, wireType 0 =*/8).bool(message.start);
+            if (message.height != null && Object.hasOwnProperty.call(message, "height"))
+                writer.uint32(/* id 2, wireType 0 =*/16).uint64(message.height);
+            if (message.minerPubkey != null && Object.hasOwnProperty.call(message, "minerPubkey"))
+                writer.uint32(/* id 3, wireType 2 =*/26).bytes(message.minerPubkey);
+            if (message.minerSecretKey != null && Object.hasOwnProperty.call(message, "minerSecretKey"))
+                writer.uint32(/* id 4, wireType 2 =*/34).bytes(message.minerSecretKey);
+            if (message.prevHash != null && Object.hasOwnProperty.call(message, "prevHash"))
+                writer.uint32(/* id 5, wireType 2 =*/42).string(message.prevHash);
+            if (message.vrfThreshold != null && Object.hasOwnProperty.call(message, "vrfThreshold"))
+                writer.uint32(/* id 6, wireType 2 =*/50).bytes(message.vrfThreshold);
+            if (message.vdfIterations != null && Object.hasOwnProperty.call(message, "vdfIterations"))
+                writer.uint32(/* id 7, wireType 0 =*/56).uint64(message.vdfIterations);
+            if (message.jobId != null && Object.hasOwnProperty.call(message, "jobId"))
+                writer.uint32(/* id 8, wireType 0 =*/64).uint64(message.jobId);
+            return writer;
+        };
+
+        /**
+         * Encodes the specified ControlMining message, length delimited. Does not implicitly {@link p2p.ControlMining.verify|verify} messages.
+         * @function encodeDelimited
+         * @memberof p2p.ControlMining
+         * @static
+         * @param {p2p.IControlMining} message ControlMining message or plain object to encode
+         * @param {$protobuf.Writer} [writer] Writer to encode to
+         * @returns {$protobuf.Writer} Writer
+         */
+        ControlMining.encodeDelimited = function encodeDelimited(message, writer) {
+            return this.encode(message, writer).ldelim();
+        };
+
+        /**
+         * Decodes a ControlMining message from the specified reader or buffer.
+         * @function decode
+         * @memberof p2p.ControlMining
+         * @static
+         * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
+         * @param {number} [length] Message length if known beforehand
+         * @returns {p2p.ControlMining} ControlMining
+         * @throws {Error} If the payload is not a reader or valid buffer
+         * @throws {$protobuf.util.ProtocolError} If required fields are missing
+         */
+        ControlMining.decode = function decode(reader, length, error) {
+            if (!(reader instanceof $Reader))
+                reader = $Reader.create(reader);
+            var end = length === undefined ? reader.len : reader.pos + length, message = new $root.p2p.ControlMining();
+            while (reader.pos < end) {
+                var tag = reader.uint32();
+                if (tag === error)
+                    break;
+                switch (tag >>> 3) {
+                case 1: {
+                        message.start = reader.bool();
+                        break;
+                    }
+                case 2: {
+                        message.height = reader.uint64();
+                        break;
+                    }
+                case 3: {
+                        message.minerPubkey = reader.bytes();
+                        break;
+                    }
+                case 4: {
+                        message.minerSecretKey = reader.bytes();
+                        break;
+                    }
+                case 5: {
+                        message.prevHash = reader.string();
+                        break;
+                    }
+                case 6: {
+                        message.vrfThreshold = reader.bytes();
+                        break;
+                    }
+                case 7: {
+                        message.vdfIterations = reader.uint64();
+                        break;
+                    }
+                case 8: {
+                        message.jobId = reader.uint64();
+                        break;
+                    }
+                default:
+                    reader.skipType(tag & 7);
+                    break;
+                }
+            }
+            return message;
+        };
+
+        /**
+         * Decodes a ControlMining message from the specified reader or buffer, length delimited.
+         * @function decodeDelimited
+         * @memberof p2p.ControlMining
+         * @static
+         * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
+         * @returns {p2p.ControlMining} ControlMining
+         * @throws {Error} If the payload is not a reader or valid buffer
+         * @throws {$protobuf.util.ProtocolError} If required fields are missing
+         */
+        ControlMining.decodeDelimited = function decodeDelimited(reader) {
+            if (!(reader instanceof $Reader))
+                reader = new $Reader(reader);
+            return this.decode(reader, reader.uint32());
+        };
+
+        /**
+         * Verifies a ControlMining message.
+         * @function verify
+         * @memberof p2p.ControlMining
+         * @static
+         * @param {Object.<string,*>} message Plain object to verify
+         * @returns {string|null} `null` if valid, otherwise the reason why it is not
+         */
+        ControlMining.verify = function verify(message) {
+            if (typeof message !== "object" || message === null)
+                return "object expected";
+            if (message.start != null && message.hasOwnProperty("start"))
+                if (typeof message.start !== "boolean")
+                    return "start: boolean expected";
+            if (message.height != null && message.hasOwnProperty("height"))
+                if (!$util.isInteger(message.height) && !(message.height && $util.isInteger(message.height.low) && $util.isInteger(message.height.high)))
+                    return "height: integer|Long expected";
+            if (message.minerPubkey != null && message.hasOwnProperty("minerPubkey"))
+                if (!(message.minerPubkey && typeof message.minerPubkey.length === "number" || $util.isString(message.minerPubkey)))
+                    return "minerPubkey: buffer expected";
+            if (message.minerSecretKey != null && message.hasOwnProperty("minerSecretKey"))
+                if (!(message.minerSecretKey && typeof message.minerSecretKey.length === "number" || $util.isString(message.minerSecretKey)))
+                    return "minerSecretKey: buffer expected";
+            if (message.prevHash != null && message.hasOwnProperty("prevHash"))
+                if (!$util.isString(message.prevHash))
+                    return "prevHash: string expected";
+            if (message.vrfThreshold != null && message.hasOwnProperty("vrfThreshold"))
+                if (!(message.vrfThreshold && typeof message.vrfThreshold.length === "number" || $util.isString(message.vrfThreshold)))
+                    return "vrfThreshold: buffer expected";
+            if (message.vdfIterations != null && message.hasOwnProperty("vdfIterations"))
+                if (!$util.isInteger(message.vdfIterations) && !(message.vdfIterations && $util.isInteger(message.vdfIterations.low) && $util.isInteger(message.vdfIterations.high)))
+                    return "vdfIterations: integer|Long expected";
+            if (message.jobId != null && message.hasOwnProperty("jobId"))
+                if (!$util.isInteger(message.jobId) && !(message.jobId && $util.isInteger(message.jobId.low) && $util.isInteger(message.jobId.high)))
+                    return "jobId: integer|Long expected";
+            return null;
+        };
+
+        /**
+         * Creates a ControlMining message from a plain object. Also converts values to their respective internal types.
+         * @function fromObject
+         * @memberof p2p.ControlMining
+         * @static
+         * @param {Object.<string,*>} object Plain object
+         * @returns {p2p.ControlMining} ControlMining
+         */
+        ControlMining.fromObject = function fromObject(object) {
+            if (object instanceof $root.p2p.ControlMining)
+                return object;
+            var message = new $root.p2p.ControlMining();
+            if (object.start != null)
+                message.start = Boolean(object.start);
+            if (object.height != null)
+                if ($util.Long)
+                    (message.height = $util.Long.fromValue(object.height)).unsigned = true;
+                else if (typeof object.height === "string")
+                    message.height = parseInt(object.height, 10);
+                else if (typeof object.height === "number")
+                    message.height = object.height;
+                else if (typeof object.height === "object")
+                    message.height = new $util.LongBits(object.height.low >>> 0, object.height.high >>> 0).toNumber(true);
+            if (object.minerPubkey != null)
+                if (typeof object.minerPubkey === "string")
+                    $util.base64.decode(object.minerPubkey, message.minerPubkey = $util.newBuffer($util.base64.length(object.minerPubkey)), 0);
+                else if (object.minerPubkey.length >= 0)
+                    message.minerPubkey = object.minerPubkey;
+            if (object.minerSecretKey != null)
+                if (typeof object.minerSecretKey === "string")
+                    $util.base64.decode(object.minerSecretKey, message.minerSecretKey = $util.newBuffer($util.base64.length(object.minerSecretKey)), 0);
+                else if (object.minerSecretKey.length >= 0)
+                    message.minerSecretKey = object.minerSecretKey;
+            if (object.prevHash != null)
+                message.prevHash = String(object.prevHash);
+            if (object.vrfThreshold != null)
+                if (typeof object.vrfThreshold === "string")
+                    $util.base64.decode(object.vrfThreshold, message.vrfThreshold = $util.newBuffer($util.base64.length(object.vrfThreshold)), 0);
+                else if (object.vrfThreshold.length >= 0)
+                    message.vrfThreshold = object.vrfThreshold;
+            if (object.vdfIterations != null)
+                if ($util.Long)
+                    (message.vdfIterations = $util.Long.fromValue(object.vdfIterations)).unsigned = true;
+                else if (typeof object.vdfIterations === "string")
+                    message.vdfIterations = parseInt(object.vdfIterations, 10);
+                else if (typeof object.vdfIterations === "number")
+                    message.vdfIterations = object.vdfIterations;
+                else if (typeof object.vdfIterations === "object")
+                    message.vdfIterations = new $util.LongBits(object.vdfIterations.low >>> 0, object.vdfIterations.high >>> 0).toNumber(true);
+            if (object.jobId != null)
+                if ($util.Long)
+                    (message.jobId = $util.Long.fromValue(object.jobId)).unsigned = true;
+                else if (typeof object.jobId === "string")
+                    message.jobId = parseInt(object.jobId, 10);
+                else if (typeof object.jobId === "number")
+                    message.jobId = object.jobId;
+                else if (typeof object.jobId === "object")
+                    message.jobId = new $util.LongBits(object.jobId.low >>> 0, object.jobId.high >>> 0).toNumber(true);
+            return message;
+        };
+
+        /**
+         * Creates a plain object from a ControlMining message. Also converts values to other types if specified.
+         * @function toObject
+         * @memberof p2p.ControlMining
+         * @static
+         * @param {p2p.ControlMining} message ControlMining
+         * @param {$protobuf.IConversionOptions} [options] Conversion options
+         * @returns {Object.<string,*>} Plain object
+         */
+        ControlMining.toObject = function toObject(message, options) {
+            if (!options)
+                options = {};
+            var object = {};
+            if (options.defaults) {
+                object.start = false;
+                if ($util.Long) {
+                    var long = new $util.Long(0, 0, true);
+                    object.height = options.longs === String ? long.toString() : options.longs === Number ? long.toNumber() : long;
+                } else
+                    object.height = options.longs === String ? "0" : 0;
+                if (options.bytes === String)
+                    object.minerPubkey = "";
+                else {
+                    object.minerPubkey = [];
+                    if (options.bytes !== Array)
+                        object.minerPubkey = $util.newBuffer(object.minerPubkey);
+                }
+                if (options.bytes === String)
+                    object.minerSecretKey = "";
+                else {
+                    object.minerSecretKey = [];
+                    if (options.bytes !== Array)
+                        object.minerSecretKey = $util.newBuffer(object.minerSecretKey);
+                }
+                object.prevHash = "";
+                if (options.bytes === String)
+                    object.vrfThreshold = "";
+                else {
+                    object.vrfThreshold = [];
+                    if (options.bytes !== Array)
+                        object.vrfThreshold = $util.newBuffer(object.vrfThreshold);
+                }
+                if ($util.Long) {
+                    var long = new $util.Long(0, 0, true);
+                    object.vdfIterations = options.longs === String ? long.toString() : options.longs === Number ? long.toNumber() : long;
+                } else
+                    object.vdfIterations = options.longs === String ? "0" : 0;
+                if ($util.Long) {
+                    var long = new $util.Long(0, 0, true);
+                    object.jobId = options.longs === String ? long.toString() : options.longs === Number ? long.toNumber() : long;
+                } else
+                    object.jobId = options.longs === String ? "0" : 0;
+            }
+            if (message.start != null && message.hasOwnProperty("start"))
+                object.start = message.start;
+            if (message.height != null && message.hasOwnProperty("height"))
+                if (typeof message.height === "number")
+                    object.height = options.longs === String ? String(message.height) : message.height;
+                else
+                    object.height = options.longs === String ? $util.Long.prototype.toString.call(message.height) : options.longs === Number ? new $util.LongBits(message.height.low >>> 0, message.height.high >>> 0).toNumber(true) : message.height;
+            if (message.minerPubkey != null && message.hasOwnProperty("minerPubkey"))
+                object.minerPubkey = options.bytes === String ? $util.base64.encode(message.minerPubkey, 0, message.minerPubkey.length) : options.bytes === Array ? Array.prototype.slice.call(message.minerPubkey) : message.minerPubkey;
+            if (message.minerSecretKey != null && message.hasOwnProperty("minerSecretKey"))
+                object.minerSecretKey = options.bytes === String ? $util.base64.encode(message.minerSecretKey, 0, message.minerSecretKey.length) : options.bytes === Array ? Array.prototype.slice.call(message.minerSecretKey) : message.minerSecretKey;
+            if (message.prevHash != null && message.hasOwnProperty("prevHash"))
+                object.prevHash = message.prevHash;
+            if (message.vrfThreshold != null && message.hasOwnProperty("vrfThreshold"))
+                object.vrfThreshold = options.bytes === String ? $util.base64.encode(message.vrfThreshold, 0, message.vrfThreshold.length) : options.bytes === Array ? Array.prototype.slice.call(message.vrfThreshold) : message.vrfThreshold;
+            if (message.vdfIterations != null && message.hasOwnProperty("vdfIterations"))
+                if (typeof message.vdfIterations === "number")
+                    object.vdfIterations = options.longs === String ? String(message.vdfIterations) : message.vdfIterations;
+                else
+                    object.vdfIterations = options.longs === String ? $util.Long.prototype.toString.call(message.vdfIterations) : options.longs === Number ? new $util.LongBits(message.vdfIterations.low >>> 0, message.vdfIterations.high >>> 0).toNumber(true) : message.vdfIterations;
+            if (message.jobId != null && message.hasOwnProperty("jobId"))
+                if (typeof message.jobId === "number")
+                    object.jobId = options.longs === String ? String(message.jobId) : message.jobId;
+                else
+                    object.jobId = options.longs === String ? $util.Long.prototype.toString.call(message.jobId) : options.longs === Number ? new $util.LongBits(message.jobId.low >>> 0, message.jobId.high >>> 0).toNumber(true) : message.jobId;
+            return object;
+        };
+
+        /**
+         * Converts this ControlMining to JSON.
+         * @function toJSON
+         * @memberof p2p.ControlMining
+         * @instance
+         * @returns {Object.<string,*>} JSON object
+         */
+        ControlMining.prototype.toJSON = function toJSON() {
+            return this.constructor.toObject(this, $protobuf.util.toJSONOptions);
+        };
+
+        /**
+         * Gets the default type url for ControlMining
+         * @function getTypeUrl
+         * @memberof p2p.ControlMining
+         * @static
+         * @param {string} [typeUrlPrefix] your custom typeUrlPrefix(default "type.googleapis.com")
+         * @returns {string} The default type url
+         */
+        ControlMining.getTypeUrl = function getTypeUrl(typeUrlPrefix) {
+            if (typeUrlPrefix === undefined) {
+                typeUrlPrefix = "type.googleapis.com";
+            }
+            return typeUrlPrefix + "/p2p.ControlMining";
+        };
+
+        return ControlMining;
+    })();
+
     p2p.RustCommand = (function() {
 
         /**
@@ -12752,6 +14040,7 @@ $root.p2p = (function() {
          * @property {p2p.IUiWalletLoaded|null} [uiWalletLoaded] RustCommand uiWalletLoaded
          * @property {p2p.IUiPeerList|null} [uiPeerList] RustCommand uiPeerList
          * @property {p2p.IUiTotalSupply|null} [uiTotalSupply] RustCommand uiTotalSupply
+         * @property {p2p.IControlMining|null} [controlMining] RustCommand controlMining
          */
 
         /**
@@ -12857,17 +14146,25 @@ $root.p2p = (function() {
          */
         RustCommand.prototype.uiTotalSupply = null;
 
+        /**
+         * RustCommand controlMining.
+         * @member {p2p.IControlMining|null|undefined} controlMining
+         * @memberof p2p.RustCommand
+         * @instance
+         */
+        RustCommand.prototype.controlMining = null;
+
         // OneOf field names bound to virtual getters and setters
         var $oneOfFields;
 
         /**
          * RustCommand command.
-         * @member {"logMessage"|"p2pPublish"|"p2pSendDirect"|"p2pHangUp"|"updateUiBalance"|"updateUiMinerStatus"|"updateUiSyncProgress"|"uiNetworkInitialized"|"uiWalletLoaded"|"uiPeerList"|"uiTotalSupply"|undefined} command
+         * @member {"logMessage"|"p2pPublish"|"p2pSendDirect"|"p2pHangUp"|"updateUiBalance"|"updateUiMinerStatus"|"updateUiSyncProgress"|"uiNetworkInitialized"|"uiWalletLoaded"|"uiPeerList"|"uiTotalSupply"|"controlMining"|undefined} command
          * @memberof p2p.RustCommand
          * @instance
          */
         Object.defineProperty(RustCommand.prototype, "command", {
-            get: $util.oneOfGetter($oneOfFields = ["logMessage", "p2pPublish", "p2pSendDirect", "p2pHangUp", "updateUiBalance", "updateUiMinerStatus", "updateUiSyncProgress", "uiNetworkInitialized", "uiWalletLoaded", "uiPeerList", "uiTotalSupply"]),
+            get: $util.oneOfGetter($oneOfFields = ["logMessage", "p2pPublish", "p2pSendDirect", "p2pHangUp", "updateUiBalance", "updateUiMinerStatus", "updateUiSyncProgress", "uiNetworkInitialized", "uiWalletLoaded", "uiPeerList", "uiTotalSupply", "controlMining"]),
             set: $util.oneOfSetter($oneOfFields)
         });
 
@@ -12917,6 +14214,8 @@ $root.p2p = (function() {
                 $root.p2p.UiPeerList.encode(message.uiPeerList, writer.uint32(/* id 10, wireType 2 =*/82).fork()).ldelim();
             if (message.uiTotalSupply != null && Object.hasOwnProperty.call(message, "uiTotalSupply"))
                 $root.p2p.UiTotalSupply.encode(message.uiTotalSupply, writer.uint32(/* id 11, wireType 2 =*/90).fork()).ldelim();
+            if (message.controlMining != null && Object.hasOwnProperty.call(message, "controlMining"))
+                $root.p2p.ControlMining.encode(message.controlMining, writer.uint32(/* id 12, wireType 2 =*/98).fork()).ldelim();
             return writer;
         };
 
@@ -12995,6 +14294,10 @@ $root.p2p = (function() {
                     }
                 case 11: {
                         message.uiTotalSupply = $root.p2p.UiTotalSupply.decode(reader, reader.uint32());
+                        break;
+                    }
+                case 12: {
+                        message.controlMining = $root.p2p.ControlMining.decode(reader, reader.uint32());
                         break;
                     }
                 default:
@@ -13141,6 +14444,16 @@ $root.p2p = (function() {
                         return "uiTotalSupply." + error;
                 }
             }
+            if (message.controlMining != null && message.hasOwnProperty("controlMining")) {
+                if (properties.command === 1)
+                    return "command: multiple values";
+                properties.command = 1;
+                {
+                    var error = $root.p2p.ControlMining.verify(message.controlMining);
+                    if (error)
+                        return "controlMining." + error;
+                }
+            }
             return null;
         };
 
@@ -13210,6 +14523,11 @@ $root.p2p = (function() {
                 if (typeof object.uiTotalSupply !== "object")
                     throw TypeError(".p2p.RustCommand.uiTotalSupply: object expected");
                 message.uiTotalSupply = $root.p2p.UiTotalSupply.fromObject(object.uiTotalSupply);
+            }
+            if (object.controlMining != null) {
+                if (typeof object.controlMining !== "object")
+                    throw TypeError(".p2p.RustCommand.controlMining: object expected");
+                message.controlMining = $root.p2p.ControlMining.fromObject(object.controlMining);
             }
             return message;
         };
@@ -13281,6 +14599,11 @@ $root.p2p = (function() {
                 object.uiTotalSupply = $root.p2p.UiTotalSupply.toObject(message.uiTotalSupply, options);
                 if (options.oneofs)
                     object.command = "uiTotalSupply";
+            }
+            if (message.controlMining != null && message.hasOwnProperty("controlMining")) {
+                object.controlMining = $root.p2p.ControlMining.toObject(message.controlMining, options);
+                if (options.oneofs)
+                    object.command = "controlMining";
             }
             return object;
         };

@@ -24,13 +24,16 @@ pub struct Block {
    pub lottery_nonce: WasmU64,
    pub vrf_proof: VrfProof,
    pub vdf_proof: VDFProof,
+   #[serde(with = "serde_bytes")]
    pub miner_pubkey: [u8; 32],
    
    // NEW: Consensus-committed parameters
+   #[serde(with = "serde_bytes")]
    pub vrf_threshold: [u8; 32],
    pub vdf_iterations: WasmU64,
 
    // Merkle root
+   #[serde(with = "serde_bytes")]
    pub tx_merkle_root: [u8; 32],
    
    //cumulative work
