@@ -1011,6 +1011,24 @@ export async function main() {
                     }
                     break;
 
+                case 'purgeSideBlocks':
+                    try {
+                        const removed = wasm.purge_invalid_side_blocks();
+                        log(`Purged ${removed} invalid side blocks`, 'success');
+                    } catch (e) {
+                        log(`Purge failed: ${e.message}`, 'error');
+                    }
+                    break;
+
+                case 'clearSideBlocks':
+                    try {
+                        const cleared = wasm.clear_all_side_blocks();
+                        log(`Cleared ${cleared} side blocks`, 'success');
+                    } catch (e) {
+                        log(`Clear failed: ${e.message}`, 'error');
+                    }
+                    break;
+
 
                 case 'retrySync':
                     log('Manual sync retry initiated by user.', 'warn');
@@ -1871,8 +1889,25 @@ async function handleRemoteBlockDownloaded({ block }) {
             //
             // The fix is to use the returned JavaScript object directly, as it is already
             // in the correct format.
-            const result_js = await pluribit.ingest_block_bytes(blockBytes);
-            const result = result_js; // Use the object directly.
+            // Wrap block ingestion with error handling
+            let result;
+            try {
+                result = await wasm.ingest_block_bytes(blockBytes);
+            } catch (e) {
+                // Deserialize failed - ban peer
+                if (e.message && e.message.includes('Deserialize error')) {
+                    log(`[P2P] Block deserialize failed from ${peerId.slice(-6)}: ${e.message}`, 'error');
+                    if (p2pNode.recordBadBlock(peerId)) {
+                        try { await p2pNode.node.hangUp(peerId); } catch {}
+                    }
+                }
+                return;
+            }
+            
+            if (result && result.Invalid) {
+                log(`[P2P] Invalid block from ${peerId.slice(-6)}: ${result.Invalid.reason}`, 'warn');
+                p2pNode.recordBadBlock(peerId);
+            }
 
             const t = String(result?.type || '').toLowerCase();
             const reason = String(result?.reason || '').toLowerCase();

@@ -102,6 +102,7 @@ export class PluribitP2P {
      */
     constructor(log, options = {}) {
         this._peerVerificationState = new Map(); // peerId -> { powSolved: bool, isSubscribed: bool }
+        this._badBlockPeers = new Map(); // peerId -> { count, bannedUntil }
         this.log = log;
         this.node = null;
         this.handlers = new Map();
@@ -150,6 +151,29 @@ export class PluribitP2P {
         // Track which transactions we've seen in stem phase
         this._seenStemTransactions = new Set();
     }
+    
+    // Track peers sending bad blocks
+    recordBadBlock(peerId) {
+        const entry = this._badBlockPeers.get(peerId) || { count: 0, bannedUntil: 0 };
+        entry.count++;
+        if (entry.count >= 3) {
+            entry.bannedUntil = Date.now() + 15 * 60 * 1000; // 15 min ban
+            this.log(`[P2P] BANNED peer ${peerId.slice(-6)} for bad blocks`, 'warn');
+        }
+        this._badBlockPeers.set(peerId, entry);
+        return entry.count >= 3;
+    }
+    
+    isPeerBannedForBadBlocks(peerId) {
+        const entry = this._badBlockPeers.get(peerId);
+        if (!entry || !entry.bannedUntil) return false;
+        if (Date.now() >= entry.bannedUntil) {
+            entry.bannedUntil = 0;
+            entry.count = 0;
+            return false;
+        }
+        return true;
+    }    
     
     /**
      * Select a random verified peer for stem relay
@@ -1436,6 +1460,13 @@ if (this.isBootstrap) {
             const from = msg.from?.toString?.() ?? String(msg.from);
 
             this.log(`[P2P RAW] Received message on topic ${msg.topic} from ${from}`, 'debug');
+            
+            // Check bad block ban
+            if (this.isPeerBannedForBadBlocks(from)) {
+                this.log(`[P2P] Dropping msg from bad-block-banned peer ${from.slice(-6)}`, 'warn');
+                return;
+            }
+            
             // CRITICAL: Verify ALL peers (including self for loopback)
             if (!this.isPeerVerified(from)) {
                 this.log(`[P2P] Dropping message from unverified peer ${from}`, 'warn');

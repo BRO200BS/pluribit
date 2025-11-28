@@ -386,7 +386,6 @@ pub fn handle_command(request_bytes: Vec<u8>) -> Vec<u8> {
 
 // ===================================================================
 // INTERNAL HELPER FUNCTIONS
-// (These are the stubs you need to implement)
 // ===================================================================
 
 // --- Command Response Helpers ---
@@ -806,6 +805,46 @@ pub fn wallet_check_filter(wallet_json: &str, filter_entries_json: &str) -> Resu
     }
 
     Ok(false)
+}
+
+/// Purge invalid side blocks
+#[wasm_bindgen(js_name = "purge_invalid_side_blocks")]
+pub fn purge_invalid_side_blocks() -> Result<u32, JsValue> {
+    let mut side_blocks = SIDE_BLOCKS.lock().unwrap();
+    let mut lru = SIDE_BLOCKS_LRU.lock().unwrap();
+    let initial = side_blocks.len();
+    
+    let bad: Vec<String> = side_blocks.iter()
+        .filter(|(hash, block)| {
+            block.compute_hash() != **hash ||
+            block.transactions.iter().any(|tx| {
+                tx.kernels.is_empty() ||
+                tx.outputs.iter().any(|o| o.commitment.len() != 32) ||
+                tx.inputs.iter().any(|i| i.commitment.len() != 32)
+            })
+        })
+        .map(|(h, _)| h.clone())
+        .collect();
+    
+    for h in &bad {
+        side_blocks.remove(h);
+        log(&format!("[PURGE] Removed invalid side block {}", &h[..12]));
+    }
+    lru.retain(|h| !bad.contains(h));
+    
+    Ok((initial - side_blocks.len()) as u32)
+}
+
+/// Clear all side blocks
+#[wasm_bindgen(js_name = "clear_all_side_blocks")]
+pub fn clear_all_side_blocks() -> u32 {
+    let mut side_blocks = SIDE_BLOCKS.lock().unwrap();
+    let mut lru = SIDE_BLOCKS_LRU.lock().unwrap();
+    let count = side_blocks.len();
+    side_blocks.clear();
+    lru.clear();
+    log(&format!("[CLEAR] Removed {} side blocks", count));
+    count as u32
 }
 
 /// (Public WASM Export) Loads a range of block filters from the DB.

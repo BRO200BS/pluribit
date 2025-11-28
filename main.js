@@ -206,6 +206,14 @@ async function handleCommand(command, args) {
         case 'audit':
             worker.postMessage({ action: 'auditDetailed' });
             break;
+        case 'purge_side':
+            worker.postMessage({ action: 'purgeSideBlocks' });
+            break;
+
+        case 'clear_side':
+            worker.postMessage({ action: 'clearSideBlocks' });
+            break;
+
         case 'inspect':
             worker.postMessage({ action: 'inspectBlock', height: args[0] });
             break;
