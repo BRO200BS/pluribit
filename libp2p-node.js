@@ -150,16 +150,33 @@ export class PluribitP2P {
         
         // Track which transactions we've seen in stem phase
         this._seenStemTransactions = new Set();
-    }
+
+        // ═══════════════════════════════════════════════════════════
+        // CONSENSUS SHIELD — BLOCK HASH POISONING (prevents fake reorgs)
+        // ═══════════════════════════════════════════════════════════
+        this._poisonedHashes = new Set();                    // permanently banned block hashes
+        this._pendingBlockRequests = new Map();              // hash → { peerId, requestedAt }
+
+        // Auto-cleanup stale pending requests (prevents memory leak)
+        setInterval(() => {
+            const now = Date.now();
+            for (const [hash, info] of this._pendingBlockRequests.entries()) {
+                if (now - info.requestedAt > 30_000) {
+                    this._pendingBlockRequests.delete(hash);
+                }
+            }
+        }, 15_000);
+    } 
     
     // Track peers sending bad blocks
-    recordBadBlock(peerId) {
+    recordBadBlock(peerId, hash = null) {
         const entry = this._badBlockPeers.get(peerId) || { count: 0, bannedUntil: 0 };
         entry.count++;
+
         if (entry.count >= 3) {
-            entry.bannedUntil = Date.now() + 15 * 60 * 1000; // 15 min ban
-            this.log(`[P2P] BANNED peer ${peerId.slice(-6)} for bad blocks`, 'warn');
+            this.banPeer(peerId, `bad block x${entry.count}`, true, hash);
         }
+
         this._badBlockPeers.set(peerId, entry);
         return entry.count >= 3;
     }
@@ -173,7 +190,48 @@ export class PluribitP2P {
             return false;
         }
         return true;
-    }    
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // CONSENSUS SHIELD — POISON HASH + ENHANCED BAN
+    // ═══════════════════════════════════════════════════════════
+    poisonHash(hash, reason = 'unknown', fromPeer = null) {
+        if (this._poisonedHashes.has(hash)) return;
+
+        this._poisonedHashes.add(hash);
+        const short = hash.slice(0, 12);
+        this.log(`[CONSENSUS SHIELD] POISONED hash ${short}… — ${reason}${fromPeer ? ` (from ${fromPeer.slice(-8)})` : ''}`, 'warn');
+
+        if (fromPeer) {
+            this.banPeer(fromPeer, `sent poisoned hash (${reason})`, true);
+        }
+    }
+
+    isHashPoisoned(hash) {
+        return this._poisonedHashes.has(hash);
+    }
+
+    // Enhanced ban that also poisons any associated hash
+    async banPeer(peerIdStr, reason = 'unknown', permanent = false, poisonedHash = null) {
+        if (!this.node) return;
+
+        const short = peerIdStr.slice(-8);
+        this.log(`[P2P] ⚡ BANNED peer ${short} — ${reason}`, 'warn');
+
+        const banMs = permanent ? 365 * 24 * 60 * 60 * 1000 : 30 * 60 * 1000;
+        this._badBlockPeers.set(peerIdStr, {
+            count: 999,
+            bannedUntil: Date.now() + banMs
+        });
+
+        if (poisonedHash) {
+            this.poisonHash(poisonedHash, reason, peerIdStr);
+        }
+
+        try {
+            await this.node.hangUp(peerIdStr);
+        } catch (_) {}
+    }   
     
     /**
      * Select a random verified peer for stem relay
@@ -1499,29 +1557,41 @@ if (this.isBootstrap) {
             // @ts-ignore - dynamic property access on protobuf message
             const data = p2pMessage[payloadType];
 
+
+            // <<< POISONED HASH SHIELD - CHECK BEFORE ANY HANDLER RUNS >>>
+            if (data?.hash && this.isHashPoisoned(data.hash)) {
+                this.log(`[CONSENSUS SHIELD] Dropping message with poisoned hash ${data.hash.slice(0,12)}… from ${from.slice(-8)}`, 'warn');
+                this.banPeer(from, 'sent poisoned hash', true);
+                return;
+            }
+
+
             // Rationale: We now dispatch based on the `oneof` payload type defined
             // in our schema. This is more explicit and safer than relying on a
             // string topic from the network.
             const handlers = this.handlers.get(msg.topic) || [];
             for (const handler of handlers) {
                 try {
-                    // Rationale: Pass the raw bytes along with the decoded data.
-                    // Handlers that interface with WASM (like block ingestion) can use
-                    // the raw bytes for maximum performance and security, while other
-                    // handlers can use the convenient decoded JS object.
                     await handler(data, { from, topic: msg.topic, rawData: msg.data });
                 } catch (e) {
                     const err = /** @type {Error} */ (e);
-                    this.log(`[P2P] Handler error for ${msg.topic}: ${err.message}`, 'error');
+
+                    // <<< POISON THE HASH IF WE CAN >>>
+                    if (data?.hash) {
+                        this.poisonHash(data.hash, `handler rejected: ${err.message}`, from);
+                    }
+
+                    this.log(`[P2P] Handler error from ${from.slice(-8)} on ${msg.topic}: ${err.message}`, 'warn');
+                    this.banPeer(from, `handler error (${err.message})`, true);
                 }
             }
         } catch (e) {
-            // Rationale: Catching errors from `P2PMessage.decode` is our primary
-            // defense. If an attacker sends malformed binary data, the decoder
-            // will throw, we'll log it, and drop the message, protecting the rest
-            // of the application. This prevents crashes from invalid data.
             const err = /** @type {Error} */ (e);
-            this.log(`[P2P] Failed to decode Protobuf message or handle it: ${err.message}`, 'error');
+            const from = msg.from?.toString?.() ?? 'unknown';
+
+            // We couldn't even decode the P2pMessage → we have no hash → just nuke the peer
+            this.log(`[P2P] Malformed protobuf from ${from.slice(-8)}: ${err.message}`, 'warn');
+            this.banPeer(from, `malformed protobuf (${err.message})`, true);
         }
     }
 
