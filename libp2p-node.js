@@ -1924,15 +1924,19 @@ if (this.isBootstrap) {
             });
     }
     
-    /**
+/**
      * Get a list of ALL known peers from the address book, 
      * including those not currently connected.
      */
     async getKnownPeers() {
         if (!this.node) return [];
         const peers = [];
-        // peerStore.all() returns an AsyncIterable
-        for await (const peer of this.node.peerStore.all()) {
+        
+        // FIX: In modern libp2p, .all() returns a Promise<Peer[]>, not an iterable.
+        // We must await the result, then iterate the array.
+        const allPeers = await this.node.peerStore.all();
+        
+        for (const peer of allPeers) {
             peers.push(peer.id.toString());
         }
         return peers;
@@ -1950,15 +1954,19 @@ if (this.isBootstrap) {
         return latency;
     }
     
-    /**
+/**
      * Save known peers to disk so we remember them after restart.
      */
     async savePeers() {
         if (!this.node) return;
         try {
             const peersToSave = [];
+            
+            // FIX: await the array, do not use 'for await'
+            const allPeers = await this.node.peerStore.all();
+            
             // Iterate all peers we know about
-            for await (const peer of this.node.peerStore.all()) {
+            for (const peer of allPeers) {
                 const addrs = peer.addresses.map(a => a.multiaddr.toString());
                 if (addrs.length > 0) {
                     peersToSave.push({
