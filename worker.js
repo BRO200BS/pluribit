@@ -2216,7 +2216,9 @@ blockRequestCleanupTimer = setInterval(() => {
             blockRequestState.peerRequests.delete(peer);
         }
     }
-    
+
+ }, blockRequestState.CLEANUP_INTERVAL);
+
     // RATIONALE ( Memory Leak): Periodically clean up the hash request
     // rate-limiting map to prevent it from growing indefinitely with stale peer entries.
     const PEER_HASH_REQUEST_CLEANUP_INTERVAL = 5 * 60 * 1000; // 5 minutes
@@ -2229,7 +2231,6 @@ blockRequestCleanupTimer = setInterval(() => {
             }
         }
     }, PEER_HASH_REQUEST_CLEANUP_INTERVAL);
- }, blockRequestState.CLEANUP_INTERVAL);
 
     log('P2P stack online.', 'success');
     parentPort.postMessage({ type: 'networkInitialized' });
@@ -3886,9 +3887,9 @@ async function handleSwapRespondP2P(response, { from }) {
             swapId: swapIdBytes, // Send the raw bytes
             adaptorSig: { // ProtobufJS creates the message from this object
                 publicNonce: adaptorSig.public_nonce,
-                adaptorPoint: adaptor_sig.adaptor_point,
-                preSignature: adaptor_sig.pre_signature,
-                challenge: adaptor_sig.challenge,
+                adaptorPoint: adaptorSig.adaptor_point,
+                preSignature: adaptorSig.pre_signature,
+                challenge: adaptorSig.challenge,
             }
         });
 

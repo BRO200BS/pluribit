@@ -25,6 +25,9 @@ import crypto from 'crypto';
 import nacl from 'tweetnacl';
 import fs from 'fs/promises';
 import path from 'path';
+import { peerIdFromString } from '@libp2p/peer-id';
+import { createFromPrivKey } from '@libp2p/peer-id-factory';
+import { unmarshalPrivateKey } from '@libp2p/crypto/keys';
 
 // Rationale: In an ES Module project, CommonJS files must be loaded using `createRequire`.
 // By naming the generated file with a .cjs extension, we ensure Node.js always
@@ -208,12 +211,12 @@ export class PluribitP2P {
             this.banPeer(peerId, `bad block x${entry.count}`, true, hash);
         }
 
-        this._badBlockPeers.set(peerId, entry);
+        this._badBlockPeers.set(peerIdStr, entry);
         return entry.count >= 3;
     }
     
     isPeerBannedForBadBlocks(peerId) {
-        const entry = this._badBlockPeers.get(peerId);
+        const entry = this._badBlockPeers.get(peerId.toString());
         if (!entry || !entry.bannedUntil) return false;
         if (Date.now() >= entry.bannedUntil) {
             entry.bannedUntil = 0;
@@ -492,8 +495,9 @@ async banPeer(peerIdStr, reason = 'unknown', permanent = false, poisonedHash = n
                 await this._sendStemDirect(nextRelay, nextStemMessage);
                 this.log(`[Dandelion] Relayed stem transaction ${txHash} (hop ${hopCount + 1})`, 'debug');
             } catch (e) {
-                // If stem relay fails, the initial local publish acts as the fallback fluff.
-                this.log(`[Dandelion] Stem relay failed, fluffing: ${e.message}`, 'warn');
+                this.log(`[Dandelion] Stem relay failed, forcing fluff: ${e.message}`, 'warn');
+                // Ensure fluff happens even if local publish failed earlier
+                await this.publish(TOPICS.TRANSACTIONS, transaction).catch(() => {});
             }
         } else {
             // Switch to fluff phase
@@ -1339,17 +1343,12 @@ if (this.isBootstrap) {
         this.log(`[P2P] Key bytes decoded, ${keyBytes.length} bytes`, 'debug');
         
         // Unmarshal the private key bytes to get a proper PrivateKey object
-        const privateKeyObj = keys.privateKeyFromProtobuf(keyBytes);
+        const privateKey = await unmarshalPrivateKey(keyBytes);
         this.log(`[P2P] Key unmarshalled, type: ${privateKeyObj.type}`, 'debug');
         
         // Create a peerId-like object that libp2p will accept
         // We return the same structure that createEd25519PeerId() returns
-        const peerId = {
-            type: 'Ed25519',
-            privateKey: keyBytes,
-            publicKey: uint8ArrayFromString(stored.pubKey, 'base64'),
-            toString: () => stored.id
-        };
+        const peerId = await createFromPrivKey(privateKey);
         
         this.log(`[P2P] Successfully loaded permanent bootstrap ID: ${stored.id}`, 'success');
         return peerId;
@@ -1551,10 +1550,11 @@ if (this.isBootstrap) {
 
             // --- IP-Based Exponential Backoff ---
             const ip = this.getIpFromMultiaddr(connection.remoteAddr);
+                        
             if (!ip) {
-                this.log(`[SECURITY] Could not get IP for peer ${peerIdStr}, closing.`, 'warn');
-                try { connection.close(); } catch {}
-                return;
+                // Allow relay connections through - they're valid
+                this.log(`[P2P] Relay connection from ${peerIdStr}, skipping IP rate limit`, 'debug');
+                // Continue without IP-based rate limiting for relay connections
             }
 
             const now = Date.now();
@@ -1896,33 +1896,24 @@ if (this.isBootstrap) {
         }
 
         const connections = this.node.getConnections();
-
-        // Map over connections to get peer IDs, then immediately filter out any
-        // that are undefined. This is the crucial step.
-        return connections
-            .map(c => c.remotePeer)
-            .filter(peerId => peerId != null) // This ensures only valid PeerId objects proceed
-            .map(peerId => {
-                try {
-                    // Now we can safely call peerStore.get because peerId is guaranteed to be valid.
-                    // @ts-ignore - peerStore.get() API has varied across versions
-                    const peer = this.node.peerStore.get(peerId);
-                    
-                    // @ts-ignore
-                    const protocols = peer?.protocols ?? [];
-                    
-                    return {
-                        id: peerId.toString(),
-                        protocols
-                    };
-                } catch (e) {
-                    // This fallback is just in case peerStore.get fails for other reasons.
-                    return {
-                        id: peerId.toString(),
-                        protocols: []
-                    };
-                }
-            });
+        const peers = [];
+        for (const conn of connections) {
+            const peerId = conn.remotePeer;
+            try {
+                const peer = await this.node.peerStore.get(peerId);
+                peers.push({
+                    id: peerId.toString(),
+                    protocols: peer.protocols
+                });
+            } catch (e) {
+                // If peer not in store yet, just return ID
+                peers.push({
+                    id: peerId.toString(),
+                    protocols: []
+                });
+            }
+        }
+        return peers;
     }
     
 /**
@@ -2048,21 +2039,21 @@ async reVerifyPeer(peerId, timeoutMs = 5000) {
             const peers = JSON.parse(data);
             
             let count = 0;
-            for (const p of peers) {
-                try {
-                    const peerId = await createFromPubKey({ publicKey:  /* not needed for add */ null }) 
-                                    || p.id; // Just using the ID string is enough for address book usually
-                                    
-                    // Convert string addrs back to Multiaddr objects
-                    const multiaddrs = p.addrs.map(a => multiaddr(a));                   
-               
-                    // We will parse the multiaddrs. If valid, we add them.
-                     await this._addToAddressBookCompat(p.id, multiaddrs);
-                     count++;
-                } catch (e) {
-                    // ignore malformed entries
+                for (const p of peers) {
+                    try {
+                        // 1. Convert string ID to PeerId object
+                        const peerId = peerIdFromString(p.id);
+
+                        // 2. Convert string addrs to Multiaddr objects
+                        const multiaddrs = p.addrs.map(a => multiaddr(a));                   
+                   
+                        // 3. Add to address book
+                        await this._addToAddressBookCompat(peerId, multiaddrs);
+                        count++;
+                    } catch (e) {
+                        // ignore malformed entries
+                    }
                 }
-            }
             this.log(`[PERSISTENCE] Loaded ${count} peers from disk.`, 'info');
         } catch (e) {
             this.log(`[PERSISTENCE] Failed to load peers: ${e.message}`, 'error');
