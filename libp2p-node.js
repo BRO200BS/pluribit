@@ -1041,21 +1041,33 @@ export class PluribitP2P {
    async loadOrCreatePeerId() {
         const peerIdPath = './pluribit-data/peer-id.json';
 
+        // --- BOOTSTRAP NODE LOADING LOGIC ---
         if (this.isBootstrap) {
             this.log('[P2P] Attempting to load permanent bootstrap PeerID from file...');
             try {
                 await fs.mkdir('./pluribit-data', { recursive: true });
                 const data = await fs.readFile(peerIdPath, 'utf-8');
-
                 const stored = JSON.parse(data);
 
-                // --- FIX: Use unmarshalPrivateKey (same as normal path) ---
-                // This handles both Protobuf and raw Ed25519 keys automatically
-                const { unmarshalPrivateKey } = await import('@libp2p/crypto/keys');
-                const keyBytes = uint8ArrayFromString(stored.privKey, 'base64');
+                // FIX: Import as namespace to handle ESM/CJS interop safely
+                const keysModule = await import('@libp2p/crypto/keys');
                 
-                const privateKeyObj = await unmarshalPrivateKey(keyBytes);
-                // ----------------------------------------------------------
+                // Try finding the function on the module or default export
+                const unmarshal = keysModule.unmarshalPrivateKey || keysModule.default?.unmarshalPrivateKey;
+                const keyBytes = uint8ArrayFromString(stored.privKey, 'base64');
+
+                let privateKeyObj;
+                if (typeof unmarshal === 'function') {
+                    privateKeyObj = await unmarshal(keyBytes);
+                } else {
+                    // Fallback: Try older method name if unmarshalPrivateKey is missing
+                    const fromProto = keysModule.privateKeyFromProtobuf || keysModule.default?.privateKeyFromProtobuf;
+                    if (typeof fromProto === 'function') {
+                         privateKeyObj = await fromProto(keyBytes);
+                    } else {
+                        throw new Error("Could not find unmarshalPrivateKey function in crypto library");
+                    }
+                }
 
                 const peerId = await createFromPrivKey(privateKeyObj);
 
@@ -1068,11 +1080,11 @@ export class PluribitP2P {
             } catch (e) {
                 this.log(`[P2P] Bootstrap load failed: ${e.message}`, 'error');
                 this.log('[P2P] FATAL: Could not load "peer-id.json" for bootstrap node.', 'error');
-                this.log('[P2P] Make sure ./pluribit-data/peer-id.json exists and contains valid ed25519 key in base64.', 'error');
                 process.exit(1);
             }
         }
 
+        // --- NORMAL NODE LOADING LOGIC ---
         try {
             await fs.mkdir('./pluribit-data', { recursive: true });
 
