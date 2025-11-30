@@ -8,21 +8,34 @@ export const CONFIG = {
   P2P: {
     TCP_PORT: 26658,
     WS_PORT: 26659,
-    MAX_CONNECTIONS: 50,
-    MIN_CONNECTIONS: 12,
+    MAX_CONNECTIONS: 300, 
+    MIN_CONNECTIONS: 20,
     RENDEZVOUS_DISCOVERY_INTERVAL_MS: 600000, // 10 minute
-
+    
+    // --- NEW: Mesh Maintenance Settings ---
+    MESH: {
+      MAINTENANCE_INTERVAL_MS: 60000,   // How often to run mesh health checks (60s)
+      PEERS_TO_PING_PER_TICK: 5,        // Don't ping all peers every tick - stagger them
+      PEERS_TO_PEX_PER_TICK: 5,         // How many peers to exchange addresses with per tick
+      PEERS_TO_DIAL_PER_TICK: 3,        // Max new connections to attempt per tick
+      MAX_PING_FAILURES: 3,             // Disconnect after N consecutive ping failures
+      PING_TIMEOUT_MS: 10000,           // Timeout for ping health checks (10s)
+      VERIFICATION_GRACE_PERIOD_MS: 5 * 60 * 1000, // Keep verification state for 5min after disconnect
+      // Challenge settings
+      CHALLENGE_MAX_ATTEMPTS: 3,          // Retry challenge this many times
+      CHALLENGE_RETRY_DELAY_MS: 1000,     // Wait between retries
+    },
   
   // --- IP Rate Limiting with Exponential Backoff ---
     IP_BACKOFF: {
-      BASE_BACKOFF_MS: 10000,   // 10 seconds for first failure
+      BASE_BACKOFF_MS: 5000,   // 5 seconds for first failure
       MAX_BACKOFF_MS: 15 * 60 * 1000, // 15 minutes max
       MAX_FAILURES: 10,           // After 10 failures, they hit the max backoff time
     },
 
     // --- Dynamic PoW Difficulty ---
     DYNAMIC_POW: {
-      MIN_DIFFICULTY: '00000',        // Peacetime (5 zeros)
+      MIN_DIFFICULTY: '0000',        // Peacetime (4 zeros)
       MAX_DIFFICULTY: '00000000',    // Max attack (8 zeros)
       SURGE_THRESHOLD: 100,         // 100 connection attempts / minute to trigger increase
       ADJUSTMENT_INTERVAL_MS: 60000, // Check load every 1 minute
@@ -33,8 +46,8 @@ export const CONFIG = {
       // P7: Set a hard cap on the score
       scoreCap: 100,
       // P0: Thresholds to prune/ban peers
-      pruneThreshold: -50,
-      graftThreshold: -25,
+      pruneThreshold: -100,
+      graftThreshold: -50,
       // P3b: Penalty for sending invalid messages
       invalidMessagePenalty: -100,
       // P4: Penalty for being the first to send a duplicate

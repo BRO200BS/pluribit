@@ -2159,6 +2159,7 @@ setInterval(safe(debugReorgState), 60000); // Every 60 seconds
     const tcpPort = process.env.PLURIBIT_TCP_PORT || CONFIG.P2P.TCP_PORT;
     const wsPort = process.env.PLURIBIT_WS_PORT || CONFIG.P2P.WS_PORT;
 
+    
     log(`Attempting to start P2P node on TCP:${tcpPort} and WS:${wsPort} (use PLURIBIT_TCP_PORT/PLURIBIT_WS_PORT to override)`);
 
     workerState.p2p = new PluribitP2P(log, { 
@@ -2243,8 +2244,9 @@ blockRequestCleanupTimer = setInterval(() => {
     // 2. Actively fill our slots with other peers we've seen (Mesh).
     // 3. Ping active connections to kill zombie sockets.
     
-    const NETWORK_MAINTENANCE_INTERVAL = 30000; // Run every 30 seconds
 
+    
+    
     // Initialize Bootstrap IDs
     workerState.bootstrapPeerIds = new Set();
     let bootstrapAddresses = [];
@@ -2260,92 +2262,116 @@ blockRequestCleanupTimer = setInterval(() => {
     }
 
  setInterval(safe(async () => {
-        if (!workerState.p2p || !workerState.p2p.node) return;
+    if (!workerState.p2p || !workerState.p2p.node) return;
 
-        const myPeerId = workerState.p2p.node.peerId.toString();
-        const connectedPeers = workerState.p2p.node.getConnections().map(c => c.remotePeer.toString());
-        const connectedSet = new Set(connectedPeers);
-        
-        // 1. PEX (Peer Exchange) - The missing piece
-        // Pick 2 random connected peers and swap address books
-        if (connectedPeers.length > 0) {
-            const peersToPex = connectedPeers.sort(() => Math.random() - 0.5).slice(0, 2);
-            for (const p of peersToPex) {
-                workerState.p2p.exchangePeers(p);
-            }
+    const {
+        MAINTENANCE_INTERVAL_MS,
+        PEERS_TO_PING_PER_TICK,
+        PEERS_TO_PEX_PER_TICK,
+        PEERS_TO_DIAL_PER_TICK,
+        MAX_PING_FAILURES,
+        PING_TIMEOUT_MS,
+    } = CONFIG.P2P.MESH;
+
+    const myPeerId = workerState.p2p.node.peerId.toString();
+    const connectedPeers = workerState.p2p.node.getConnections().map(c => c.remotePeer.toString());
+    const connectedSet = new Set(connectedPeers);
+    
+    // Initialize pingFailures map if needed
+    if (!workerState.pingFailures) {
+        workerState.pingFailures = new Map();
+    }
+    
+    // Log mesh status every tick
+    const verifiedCount = [...workerState.p2p._peerVerificationState.entries()]
+        .filter(([_, state]) => state.powSolved && state.isSubscribed).length;
+    log(`[MESH] Status: ${connectedPeers.length} connected, ${verifiedCount} verified`, 'info');
+
+    // 1. PEX (Peer Exchange) - Exchange with configured number of peers
+    if (connectedPeers.length > 0) {
+        const peersToPex = connectedPeers
+            .sort(() => Math.random() - 0.5)
+            .slice(0, PEERS_TO_PEX_PER_TICK);
+        for (const p of peersToPex) {
+            try {
+                await workerState.p2p.exchangePeers(p);
+            } catch (e) {}
         }
+    }
 
-        // 2. BOOTSTRAP RECONNECT
-        // Ensure we always maintain a line to the boss
+    // 2. BOOTSTRAP RECONNECT - Only if very low on connections
+    if (connectedPeers.length < CONFIG.P2P.MIN_CONNECTIONS) {
         for (const addr of bootstrapAddresses) {
             try {
                 const peerId = addr.getPeerId();
                 if (peerId && !connectedSet.has(peerId) && peerId !== myPeerId) {
-                    // Only redial if we are mostly empty
-                    if (connectedPeers.length < CONFIG.P2P.MIN_CONNECTIONS) {
-                        await workerState.p2p.node.dial(addr);
-                    }
+                    log(`[MESH] Low connections (${connectedPeers.length}), dialing bootstrap...`, 'info');
+                    await workerState.p2p.node.dial(addr);
                 }
             } catch (e) {}
         }
+    }
 
-        // 3. AGGRESSIVE MESH EXPANSION
-        const MAX_CONNS = CONFIG.P2P.MAX_CONNECTIONS || 50;
-        
-        // If we have room, dial known peers actively
-        if (connectedPeers.length < MAX_CONNS) {
-            const knownPeers = await workerState.p2p.getKnownPeers();
+    // 3. MESH EXPANSION - Fill slots with known peers
+    if (connectedPeers.length < CONFIG.P2P.MAX_CONNECTIONS) {
+        const knownPeers = await workerState.p2p.getKnownPeers();
+        const candidates = knownPeers.filter(id => id !== myPeerId && !connectedSet.has(id));
+        candidates.sort(() => Math.random() - 0.5);
+
+        const slotsAvailable = CONFIG.P2P.MAX_CONNECTIONS - connectedPeers.length;
+        const peersToDial = candidates.slice(0, Math.min(slotsAvailable, PEERS_TO_DIAL_PER_TICK));
+
+        if (peersToDial.length > 0) {
+            log(`[MESH] Dialing ${peersToDial.length} peers (Current: ${connectedPeers.length}/${CONFIG.P2P.MAX_CONNECTIONS})...`, 'debug');
+            for (const peerId of peersToDial) {
+                try {
+                    await workerState.p2p.node.dial(peerIdFromString(peerId));
+                } catch (e) {}
+            }
+        }
+    }
+
+    // 4. PRUNING - Remove excess connections
+    if (connectedPeers.length > CONFIG.P2P.MAX_CONNECTIONS) {
+        const peersToPrune = connectedPeers.slice(CONFIG.P2P.MAX_CONNECTIONS);
+        for (const p of peersToPrune) {
+            log(`[MESH] Pruning excess: ${p.slice(-6)}`, 'debug');
+            try { await workerState.p2p.node.hangUp(p); } catch {}
+        }
+    }
+
+    // 5. KEEPALIVE - Use native ping, check only a subset of peers
+    const peersToCheck = connectedPeers
+        .sort(() => Math.random() - 0.5)
+        .slice(0, PEERS_TO_PING_PER_TICK);
+    
+    for (const peerIdStr of peersToCheck) {
+        try {
+            // Use libp2p's built-in ping service
+            const peerId = peerIdFromString(peerIdStr);
+            await workerState.p2p.node.services.ping.ping(peerId, { timeout: PING_TIMEOUT_MS });
             
-            // Filter: Not self, Not already connected
-            const candidates = knownPeers.filter(id => id !== myPeerId && !connectedSet.has(id));
+            // Ping succeeded - reset failure count
+            workerState.pingFailures.delete(peerIdStr);
             
-            // Randomize to avoid everyone dialing the same list in order
-            candidates.sort(() => Math.random() - 0.5);
-
-            // Dial up to 3 new peers per tick to fill slots
-            const slotsAvailable = MAX_CONNS - connectedPeers.length;
-            const peersToDial = candidates.slice(0, Math.min(slotsAvailable, 3));
-
-            if (peersToDial.length > 0) {
-                log(`[MESH] Dialing ${peersToDial.length} peers to expand mesh (Current: ${connectedPeers.length}/${MAX_CONNS})...`, 'debug');
-                for (const peerId of peersToDial) {
-                    try {
-                        // We rely on the address book having the multiaddr
-                        await workerState.p2p.node.dial(multiaddr(peerId) ? peerId : peerId); 
-                    } catch (e) {
-                        // Peer likely offline, ignore
-                    }
-                }
+        } catch (e) {
+            // Ping failed - increment failure count
+            const failCount = (workerState.pingFailures.get(peerIdStr) || 0) + 1;
+            workerState.pingFailures.set(peerIdStr, failCount);
+            
+            if (failCount >= MAX_PING_FAILURES) {
+                log(`[MESH] Peer ${peerIdStr.slice(-6)} failed ${failCount} pings. Disconnecting.`, 'warn');
+                try {
+                    await workerState.p2p.node.hangUp(peerIdStr);
+                } catch {}
+                workerState.pingFailures.delete(peerIdStr);
+            } else {
+                log(`[MESH] Peer ${peerIdStr.slice(-6)} ping failed (${failCount}/${MAX_PING_FAILURES})`, 'debug');
             }
         }
+    }
 
-        // 4. PRUNING / HEALTH CHECK
-        // If we are OVER the limit, prune the worst performing peers
-        if (connectedPeers.length > MAX_CONNS) {
-            const peersToPrune = connectedPeers.slice(MAX_CONNS); // Simple LIFO for now, or implement scoring
-            for (const p of peersToPrune) {
-                log(`[MESH] Pruning excess connection: ${p.slice(-6)}`, 'debug');
-                try { await workerState.p2p.node.hangUp(p); } catch {}
-            }
-        }
-
-        // 5. KEEPALIVE via Re-Verify (replaces unreliable libp2p ping)
-        for (const peerId of connectedPeers) {
-            try {
-                const isAlive = await workerState.p2p.reVerifyPeer(peerId, 5000);
-                
-                if (!isAlive) {
-                    log(`[MESH] Peer ${peerId.slice(-6)} failed re-verify. Disconnecting zombie.`, 'warn');
-                    try {
-                        await workerState.p2p.node.hangUp(peerId);
-                    } catch (err) {}
-                }
-            } catch (e) {
-                log(`[MESH] Error re-verifying ${peerId.slice(-6)}: ${e.message}`, 'debug');
-            }
-        }
-
-    }), NETWORK_MAINTENANCE_INTERVAL);
+}), CONFIG.P2P.MESH.MAINTENANCE_INTERVAL_MS);
     
     
     log('Network initialization complete.', 'success');

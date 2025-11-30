@@ -118,13 +118,7 @@ export class PluribitP2P {
             tcp: options.tcpPort || 26658,
             ws: options.wsPort || 26659
           },
-          bootstrap: this.isBootstrap ? [] : [
-            '/dnsaddr/bootstrap.libp2p.io/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN',
-            '/dnsaddr/bootstrap.libp2p.io/p2p/QmQCU2EcMqAqQPR2i9bChDtGNJchTbq5TbXJJ16u19uLTa',
-            '/dnsaddr/bootstrap.libp2p.io/p2p/QmbLHAnMoJPWSCR5Zhtx6BHJX9KiKNN6tpvbUcqanj75Nb',
-            '/dnsaddr/bootstrap.libp2p.io/p2p/QmcZf59bWwK5XFi76CZX8cbJ4BhTzzA3gU1ZjYZcYW3dwt',
-            '/ip4/104.131.131.82/tcp/4001/p2p/QmaCpDMGvV2BGHeYERUEnRQAwe3N8SzbUtfsmvsqQLuvuJ'
-          ]
+            bootstrap: this.isBootstrap ? [] : []
         };
         
         this._stemRelay = null;
@@ -418,93 +412,107 @@ export class PluribitP2P {
     }
 
     async sendDirectChallenge(peerId) {
-        let connection;
-        let ip;
+        // <---  Added Retry Logic (Max 3 attempts) --->
+        const { CHALLENGE_MAX_ATTEMPTS, CHALLENGE_RETRY_DELAY_MS } = CONFIG.P2P.MESH;
 
-        try {
-            if (!this.node) throw new Error('Node not initialized');
 
-            const connections = this.node.getConnections();
-            connection = connections.find(c => c.remotePeer.toString() === peerId);
-            if (!connection) throw new Error('No connection to peer');
-            ip = this.getIpFromMultiaddr(connection.remoteAddr);
+        for (let attempt = 1; attempt <= CHALLENGE_MAX_ATTEMPTS; attempt++) {
+            let connection;
+            let ip;
+            let stream;
+            try {
+                if (!this.node) throw new Error('Node not initialized');
 
-            const challenge = crypto.randomBytes(32).toString('hex');
-            
-            this._peerChallenges.set(peerId, {
-                challenge,
-                timestamp: Date.now(),
-                attempts: 0
-             });
-            
-            const stream = await connection.newStream('/pluribit/challenge/1.0.0');
-            
-            const currentDifficulty = this._currentChallengeDifficulty;
-            const message = p2p.Challenge.create({ 
-                challenge, 
-                from: this.node.peerId.toString(),
-                difficulty: currentDifficulty 
-            });
+                const connections = this.node.getConnections();
+                connection = connections.find(c => c.remotePeer.toString() === peerId);
+                if (!connection) return false; // Connection lost naturally
+                
+                ip = this.getIpFromMultiaddr(connection.remoteAddr);
 
-            const encodedMessage = p2p.Challenge.encode(message).finish();
-            await pipe([encodedMessage], stream.sink);
-            
-            const chunks = [];
-            for await (const chunk of stream.source) {
-                chunks.push(chunk.subarray());
-            }
-            const responseBuffer = Buffer.concat(chunks);
-            const response = p2p.ChallengeResponse.decode(responseBuffer);
-           
-            const verify = crypto.createHash('sha256')
-                .update(challenge)
-                // @ts-ignore
-                .update(response.nonce || '')
-                .digest('hex');
-            
-            // @ts-ignore
-            if (verify === response.solution && (response.solution || '').startsWith(currentDifficulty)) {
-                this._updateVerificationState(peerId, { powSolved: true, isSubscribed: undefined });
-                this._peerChallenges.delete(peerId);
-                this.log(`[P2P] ✓ Peer ${peerId} solved challenge (difficulty: ${currentDifficulty.length})`, 'success');
+                // Create challenge data
+                const challenge = crypto.randomBytes(32).toString('hex');
+                this._peerChallenges.set(peerId, {
+                    challenge,
+                    timestamp: Date.now(),
+                    attempts: attempt
+                });
+                
+                // Open a NEW stream for every attempt
+                stream = await connection.newStream('/pluribit/challenge/1.0.0');
+                
+                const currentDifficulty = this._currentChallengeDifficulty;
+                const message = p2p.Challenge.create({ 
+                    challenge, 
+                    from: this.node.peerId.toString(),
+                    difficulty: currentDifficulty 
+                });
 
-                if (this._badBlockPeers.has(peerId)) {
-                    this.log(`[P2P] 🖕 Banned peer ${peerId.slice(-8)} solved hard PoW — hanging up anyway`, 'warn');
-                    try { await this.node.hangUp(peerId); } catch {}
-                    return false;
+                const encodedMessage = p2p.Challenge.encode(message).finish();
+                await pipe([encodedMessage], stream.sink);
+                
+                const chunks = [];
+                for await (const chunk of stream.source) {
+                    chunks.push(chunk.subarray());
                 }
-                if (ip) this._ipChallengeTracker.delete(ip);
-                return true;
-            }
+                const responseBuffer = Buffer.concat(chunks);
+                const response = p2p.ChallengeResponse.decode(responseBuffer);
+            
+                const verify = crypto.createHash('sha256')
+                    .update(challenge)
+                    // @ts-ignore
+                    .update(response.nonce || '')
+                    .digest('hex');
+                
+                // @ts-ignore
+                if (verify === response.solution && (response.solution || '').startsWith(currentDifficulty)) {
+                    this._updateVerificationState(peerId, { powSolved: true, isSubscribed: undefined });
+                    this._peerChallenges.delete(peerId);
+                    
+                    if (attempt > 1) {
+                         this.log(`[P2P] ✓ Peer ${peerId.slice(-8)} solved challenge on attempt #${attempt}`, 'info');
+                    } else {
+                         this.log(`[P2P] ✓ Peer ${peerId.slice(-8)} verified (diff: ${currentDifficulty.length})`, 'debug');
+                    }
 
-            this.log(`[P2P] ✗ Peer ${peerId} FAILED challenge (difficulty: ${currentDifficulty.length}). Hanging up.`, 'warn');
-            if (ip) {
-                const entry = this._ipChallengeTracker.get(ip) || { failures: 0, lastAttempt: Date.now() };
-                entry.failures++;
-                entry.lastAttempt = Date.now();
-                this._ipChallengeTracker.set(ip, entry);
+                    if (this._badBlockPeers.has(peerId)) {
+                        this.log(`[P2P] 🖕 Banned peer ${peerId.slice(-8)} solved hard PoW — hanging up anyway`, 'warn');
+                        try { await this.node.hangUp(peerId); } catch {}
+                        return false;
+                    }
+                    if (ip) this._ipChallengeTracker.delete(ip);
+                    return true;
+                } 
+                
+                // Verification failed for this attempt
+                this.log(`[P2P] ⚠ Peer ${peerId.slice(-8)} provided wrong solution (attempt ${attempt}/${CHALLENGE_MAX_ATTEMPTS})`, 'warn');
+        
+            } catch (e) {
+                const err = /** @type {Error} */ (e);
+                const isExpected = /protocol selection failed|No connection to peer|stream reset/i.test(err.message);
+                
+                if (attempt === CHALLENGE_MAX_ATTEMPTS) {
+                    this.log(`[P2P] Failed challenge with ${peerId}: ${err.message}`, isExpected ? 'debug' : 'warn');
+                    
+                    if (ip && !isExpected) {
+                        const entry = this._ipChallengeTracker.get(ip) || { failures: 0, lastAttempt: Date.now() };
+                        entry.failures++;
+                        entry.lastAttempt = Date.now();
+                        this._ipChallengeTracker.set(ip, entry);
+                    }
+                }
+            } finally {
+                try { stream?.close(); } catch {}
             }
-            try { this.node.hangUp(peerId); } catch {}
-            return false;
-
-        } catch (e) {
-            const err = /** @type {Error} */ (e);
-            const msg = err?.message || '';
-            const isExpected = /protocol selection failed|No connection to peer|stream reset/i.test(msg);
-            const logLevel = isExpected ? 'debug' : 'error';
-            this.log(`[P2P] Failed to send challenge to ${peerId}: ${msg}`, logLevel);
-
-            if (ip && !isExpected) {
-                 const entry = this._ipChallengeTracker.get(ip) || { failures: 0, lastAttempt: Date.now() };
-                 entry.failures++;
-                 entry.lastAttempt = Date.now();
-                 this._ipChallengeTracker.set(ip, entry);
-                 if (connection) {
-                    try { connection.close(); } catch {}
-                 }
+            // Wait 1 second before retrying
+            if (attempt < CHALLENGE_MAX_ATTEMPTS) {
+                await new Promise(resolve => setTimeout(resolve, CHALLENGE_RETRY_DELAY_MS));
             }
-            return false;
         }
+
+        // Only hang up after ALL attempts fail
+        this.log(`[P2P] 🚫 Peer ${peerId.slice(-8)} failed ${CHALLENGE_MAX_ATTEMPTS} challenge attempts. Disconnecting.`, 'warn');
+        try { await this.node.hangUp(peerId); } catch {}
+        return false;
     }
 
     async _addToAddressBookCompat(id, multiaddrs) {
@@ -719,7 +727,7 @@ export class PluribitP2P {
             transports: [
                 tcp(),
                 webSockets(),
-                webRTC(),
+               // webRTC(), //disabled 
                 circuitRelayTransport({
                     discoverRelays: this.isBootstrap ? 0 : 2
                 })
@@ -1181,13 +1189,23 @@ async loadOrCreatePeerId() {
         
         this.node.addEventListener('peer:connect', async (evt) => {
             const peerId = evt.detail.toString();
-    
+
+            // Check if this is a reconnecting peer with saved verification
+            const state = this._peerVerificationState.get(peerId);
+            if (state?.disconnectedAt) {
+                delete state.disconnectedAt;
+                this.log(`[P2P] Peer ${peerId.slice(-6)} reconnected, keeping verification ✅`, 'info');
+                // Skip re-challenge since they're already verified
+                return;
+            }
+
+            // Check if banned
             if (this.isPeerBannedForBadBlocks(peerId)) {
-                this.log(`[P2P] ⚡ Rejecting reconnection from permanently banned peer ${peerId.slice(-8)}`, 'warn');
+                this.log(`[P2P] ⚡ Rejecting reconnection from banned peer ${peerId.slice(-8)}`, 'warn');
                 try { await this.node.hangUp(peerId); } catch {}
                 return;
             }
-    
+
             this.log(`[P2P] Connected to ${peerId}`, 'debug');
 
             const isBootstrap = this.config.bootstrap.some(addr => addr.includes(peerId));
@@ -1217,12 +1235,31 @@ async loadOrCreatePeerId() {
         
         this.node.addEventListener('peer:disconnect', (evt) => {
             const peerId = evt.detail;
-            this.log(`[P2P] Disconnected from ${peerId.toString()}`, 'debug');
             const peerIdStr = peerId.toString();
+            this.log(`[P2P] Disconnected from ${peerIdStr}`, 'debug');
+            
+            // Clear challenges and rate limit buckets
             this._peerChallenges.delete(peerIdStr);
-            this._peerVerificationState.delete(peerIdStr);
             this._buckets.delete(peerIdStr);
-        });
+            
+            // DON'T immediately delete verification state!
+            // Mark as disconnected and give a grace period
+            const state = this._peerVerificationState.get(peerIdStr);
+            if (state) {
+                state.disconnectedAt = Date.now();
+                
+                // Clean up after grace period if they don't reconnect
+                const gracePeriod = CONFIG.P2P.MESH.VERIFICATION_GRACE_PERIOD_MS;
+                setTimeout(() => {
+                    const currentState = this._peerVerificationState.get(peerIdStr);
+                    if (currentState?.disconnectedAt) {
+                        this._peerVerificationState.delete(peerIdStr);
+                        this.log(`[P2P] Cleared stale verification for ${peerIdStr.slice(-6)}`, 'debug');
+                    }
+                }, gracePeriod);
+            }
+});
+
         
         this.node.addEventListener('peer:discovery', async (evt) => {
             const { id, multiaddrs } = evt.detail;
