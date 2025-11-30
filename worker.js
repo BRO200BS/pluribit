@@ -2532,7 +2532,9 @@ if (verifiedPeers.length === 0) {
                     // 'ingest_block_bytes' performs validation without modifying the DB if it's a side block.
                     let isValid = false;
                     try {
-                        const blockBytes = p2p.Block.encode(tipBlock).finish();
+                        // FIX: Use P2PBlock (the imported class) instead of p2p.Block
+                        // The 'p2p' object might not have the Block class attached directly depending on the export 
+                        const blockBytes = P2PBlock.encode(tipBlock).finish();
                         
                         const result = await pluribit.ingest_block_bytes(blockBytes);
                         
