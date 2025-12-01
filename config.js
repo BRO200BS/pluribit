@@ -10,8 +10,10 @@ export const CONFIG = {
     WS_PORT: 26659,
     MAX_CONNECTIONS: 300, 
     MIN_CONNECTIONS: 20,
-    RENDEZVOUS_DISCOVERY_INTERVAL_MS: 600000, // 10 minute
-    
+    RENDEZVOUS_DISCOVERY_INTERVAL_MS: 60000, // 1 minute
+    DHT_RANDOM_WALK_INTERVAL_MS: 30000,       
+    MIN_DHT_PEERS_BEFORE_HEALTHY: 8,    
+    NEIGHBORHOOD_DHT_RANDOM_WALK_INTERVAL_MS: 60000, //less frequent than the normal one. 
     // --- NEW: Mesh Maintenance Settings ---
     MESH: {
       MAINTENANCE_INTERVAL_MS: 60000,   // How often to run mesh health checks (60s)

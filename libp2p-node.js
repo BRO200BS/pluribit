@@ -63,28 +63,28 @@ function sha256Hex(inputUtf8) {
 const NET = process.env.PLURIBIT_NET || 'mainnet';
 
 export const TOPICS = {
-  BLOCKS: `/pluribit/${NET}/blocks/1.0.0`,
-  TRANSACTIONS: `/pluribit/${NET}/transactions/1.0.0`,
-  BLOCK_REQUEST: `/pluribit/${NET}/block-request/1.0.0`,
-  SYNC: `/pluribit/${NET}/sync/1.0.0`,   
-  GET_HASHES_REQUEST: `/pluribit/${NET}/get-hashes-request/1.0.0`,
-  HASHES_RESPONSE: `/pluribit/${NET}/hashes-response/1.0.0`,
-  BLOCK_ANNOUNCEMENTS: `/pluribit/${NET}/block-announcements/1.0.0`,
-  DANDELION_STEM: `/pluribit/${NET}/dandelion-stem/1.0.0`,
-  CHANNEL_PROPOSE: `/pluribit/${NET}/channel-propose/1.0.0`,
-  CHANNEL_ACCEPT: `/pluribit/${NET}/channel-accept/1.0.0`,
-  CHANNEL_FUND_NONCE: `/pluribit/${NET}/channel-fund-nonce/1.0.0`,
-  CHANNEL_FUND_SIG: `/pluribit/${NET}/channel-fund-sig/1.0.0`,
-  CHANNEL_PAY_PROPOSE: `/pluribit/${NET}/channel-pay-propose/1.0.0`,
-  CHANNEL_PAY_ACCEPT: `/pluribit/${NET}/channel-pay-accept/1.0.0`,
-  CHANNEL_CLOSE_NONCE: `/pluribit/${NET}/channel-close-nonce/1.0.0`,
-  CHANNEL_CLOSE_SIG: `/pluribit/${NET}/channel-close-sig/1.0.0`,
-  SWAP_PROPOSE: `/pluribit/${NET}/swap-propose/1.0.0`,
-  SWAP_RESPOND: `/pluribit/${NET}/swap-respond/1.0.0`,
-  SWAP_ALICE_ADAPTOR_SIG: `/pluribit/${NET}/swap-alice-sig/1.0.0`,
+  BLOCKS: `/pluribit/${NET}/blocks/1.0.0.1`,
+  TRANSACTIONS: `/pluribit/${NET}/transactions/1.0.0.1`,
+  BLOCK_REQUEST: `/pluribit/${NET}/block-request/1.0.0.1`,
+  SYNC: `/pluribit/${NET}/sync/1.0.0.1`,   
+  GET_HASHES_REQUEST: `/pluribit/${NET}/get-hashes-request/1.0.0.1`,
+  HASHES_RESPONSE: `/pluribit/${NET}/hashes-response/1.0.0.1`,
+  BLOCK_ANNOUNCEMENTS: `/pluribit/${NET}/block-announcements/1.0.0.1`,
+  DANDELION_STEM: `/pluribit/${NET}/dandelion-stem/1.0.0.1`,
+  CHANNEL_PROPOSE: `/pluribit/${NET}/channel-propose/1.0.0.1`,
+  CHANNEL_ACCEPT: `/pluribit/${NET}/channel-accept/1.0.0.1`,
+  CHANNEL_FUND_NONCE: `/pluribit/${NET}/channel-fund-nonce/1.0.0.1`,
+  CHANNEL_FUND_SIG: `/pluribit/${NET}/channel-fund-sig/1.0.0.1`,
+  CHANNEL_PAY_PROPOSE: `/pluribit/${NET}/channel-pay-propose/1.0.0.1`,
+  CHANNEL_PAY_ACCEPT: `/pluribit/${NET}/channel-pay-accept/1.0.0.1`,
+  CHANNEL_CLOSE_NONCE: `/pluribit/${NET}/channel-close-nonce/1.0.0.1`,
+  CHANNEL_CLOSE_SIG: `/pluribit/${NET}/channel-close-sig/1.0.0.1`,
+  SWAP_PROPOSE: `/pluribit/${NET}/swap-propose/1.0.0.1`,
+  SWAP_RESPOND: `/pluribit/${NET}/swap-respond/1.0.0.1`,
+  SWAP_ALICE_ADAPTOR_SIG: `/pluribit/${NET}/swap-alice-sig/1.0.0.1`,
 };
 
-const PEX_PROTOCOL = `/pluribit/${NET}/pex/1.0.0`;
+const PEX_PROTOCOL = `/pluribit/${NET}/pex/1.0.0.1`;
 
 export class PluribitP2P {
     constructor(log, options = {}) {
@@ -1024,21 +1024,74 @@ export class PluribitP2P {
             }
         }, CONFIG.P2P.DYNAMIC_POW.ADJUSTMENT_INTERVAL_MS);
                
-        setInterval(async () => {
-            if (!this.node) return;
-            
-            const connectedCount = this.node.getConnections().length;
-            const maxConns = CONFIG.P2P.MAX_CONNECTIONS;
-            
-            if (connectedCount < maxConns) {
-                try {
-                    // @ts-ignore
-                    const neighborGen = this.node.services.dht.getClosestPeers(this.node.peerId.toBytes());
-                    for await (const event of neighborGen) {}
-                } catch (e) {
+// DHT Random Walk - discovers diverse peers across the network
+setInterval(async () => {
+    if (!this.node?.services?.dht) return;
+    
+    const connectedCount = this.node.getConnections().length;
+    const maxConns = CONFIG.P2P.MAX_CONNECTIONS;
+    
+    try {
+        // Generate a RANDOM 32-byte key to walk to a random part of the DHT
+        // we're not just looking for neighbors of ourselves
+        const randomKey = crypto.randomBytes(32);
+        
+        this.log(`[DHT] Starting random walk (${connectedCount} connections)...`, 'debug');
+        
+        let discovered = 0;
+        // @ts-ignore
+        for await (const event of this.node.services.dht.getClosestPeers(randomKey)) {
+            // event.peer contains discovered peer info
+            if (event.name === 'PEER_RESPONSE' && event.closer) {
+                for (const peer of event.closer) {
+                    discovered++;
+                    // Try to connect if we have room and aren't already connected
+                    if (connectedCount < maxConns) {
+                        const peerId = peer.id.toString();
+                        const alreadyConnected = this.node.getConnections()
+                            .some(c => c.remotePeer.toString() === peerId);
+                        
+                        if (!alreadyConnected && peer.multiaddrs?.length > 0) {
+                            try {
+                                await this._addToAddressBookCompat(peer.id, peer.multiaddrs);
+                                await this.node.dial(peer.id);
+                                this.log(`[DHT] Connected to discovered peer ${peerId.slice(-8)}`, 'info');
+                            } catch (e) {
+                                // Dial failures are normal, peer might be unreachable
+                            }
+                        }
+                    }
                 }
             }
-        }, 30000); 
+        }
+        
+        if (discovered > 0) {
+            this.log(`[DHT] Random walk discovered ${discovered} peers`, 'debug');
+        }
+    } catch (e) {
+        // DHT queries can timeout or fail, that's expected
+        this.log(`[DHT] Random walk failed: ${e.message}`, 'debug');
+    }
+}, CONFIG.P2P.DHT_RANDOM_WALK_INTERVAL_MS);
+        
+        
+        // Neighborhood refresh - keeps your DHT routing table entries fresh
+        // This is different from random walk: it maintains connections to peers 
+        // that are "close" to you in the DHT keyspace (your Kademlia neighbors)
+        setInterval(async () => {
+            if (!this.node?.services?.dht) return;
+            
+            try {
+                this.log(`[DHT] Refreshing neighborhood...`, 'debug');
+                // @ts-ignore
+                for await (const event of this.node.services.dht.getClosestPeers(this.node.peerId.toBytes())) {
+                    // Just iterating is enough - it refreshes routing table entries
+                    // and keeps the DHT protocol active with nearby peers
+                }
+            } catch (e) {
+                // Expected to fail sometimes
+            }
+        }, CONFIG.P2P.NEIGHBORHOOD_DHT_RANDOM_WALK_INTERVAL_MS); 
         
         return this.node;
     }
