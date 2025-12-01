@@ -1884,15 +1884,14 @@ async function handleRemoteBlockDownloaded({ block, peerId }) {
             // This is required by the new, more secure 'ingest_block_bytes' Rust function.
             let blockBytes = p2p.Block.encode(block).finish();
 
-            // --- FIX (Serialization): Ensure pure Uint8Array for Wasm ---
-            if (blockBytes.buffer) {
-                blockBytes = new Uint8Array(blockBytes.buffer, blockBytes.byteOffset, blockBytes.byteLength);
-            }
+            // FIX: Convert Uint8Array to standard Array for WASM compatibility
+            // This prevents "Deserialize error: invalid type: byte array, expected a sequence"
+            const blockBytesArray = Array.from(blockBytes);
 
            let result;
             try {
                 // Ensure we await the async Rust function
-                result = await pluribit.ingest_block_bytes(blockBytes);
+                result = await pluribit.ingest_block_bytes(blockBytesArray);
             } catch (e) {
                 // Deserialize failed - ban peer
                 if (e.message && e.message.includes('Deserialize error')) {
@@ -1928,7 +1927,10 @@ async function handleRemoteBlockDownloaded({ block, peerId }) {
             if (t === 'invalid') {
                         const reason = result.reason || 'Unknown consensus failure';
                         log(`[CONSENSUS] 🛡️ Rust rejected block: ${reason}`, 'warn');
-
+                        // FIX: Ignore harmless duplicates to prevent log noise
+                        if (reason.includes("Duplicate canonical block")) {
+                            return;
+                        }
                         if (peerId && workerState.p2p) {
                             // 1. Trigger the Bad Block Counter from libp2p-node.js
                             // This increments the count and bans if > 3 
@@ -2882,6 +2884,13 @@ await p2p.subscribe(TOPICS.SWAP_PROPOSE, async (proposal, { from }) => {
     // Register block-transfer responder via P2P wrapper (libp2p-node will proxy to this)
     const NET = process.env.PLURIBIT_NET || 'mainnet';
     const BLOCK_TRANSFER_PROTOCOL = `/pluribit/${NET}/block-transfer/1.0.0`;
+    
+    // Don't try to fetch from ourselves
+    if (peerId.toString() === workerState.p2p?.node?.peerId?.toString()) {
+        log(`[DEBUG] Skipping self-fetch for block ${hash.substring(0, 12)}`, 'debug');
+        return null;
+    }
+    
     await p2p.subscribe(BLOCK_TRANSFER_PROTOCOL, async (hash) => {
       try { return await pluribit.get_block_by_hash(hash); }
       catch { return null; }
