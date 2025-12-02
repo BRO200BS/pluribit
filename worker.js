@@ -123,7 +123,7 @@ if (obj === null || typeof obj !== 'object') {
 }
 // --- END: Added helper functions ---
 
-
+import { peerIdFromString } from '@libp2p/peer-id';
 import { pipe } from 'it-pipe';
 import http from 'http';
 import util from 'node:util';
@@ -151,8 +151,6 @@ function ensureUint8Array(arr) {
 
 // --- CHANGED: Manually expose DB functions from NATIVE module ---
 // RATIONALE: Wrap all native DB functions in async wrappers.
-// *** FIX: Convert Node.js Buffers (from Neon) into standard Uint8Arrays ***
-// *** (which serde-wasm-bindgen expects) before returning to WASM. ***
 
 global.load_block_from_db = async (...args) => {
     const buffer = native_db.load_block_from_db(...args);
@@ -1173,8 +1171,15 @@ async function fetchBlockDirectly(peerId, hash) {
             chunks.push(chunk.subarray());
         }
         
+        // FIX: Check for empty response before decoding
+        const totalBuffer = Buffer.concat(chunks);
+        if (totalBuffer.length === 0) {
+             // Stream closed without data (peer didn't have block or errored)
+             return null;
+        }
+
         // The response is now a BlockTransferResponse wrapper
-        const response = p2p.BlockTransferResponse.decode(Buffer.concat(chunks));
+        const response = p2p.BlockTransferResponse.decode(totalBuffer);
 
         if (response.payload === 'blockData' && response.blockData) {
             reorgState.requestedBlocks.delete(hash);
