@@ -141,15 +141,16 @@
 <script type="importmap">
     {
       "imports": {
-        "libp2p": "https://esm.sh/libp2p@1.9.4", 
-        "@libp2p/websockets": "https://esm.sh/@libp2p/websockets@8.2.0",
-        "@chainsafe/libp2p-noise": "https://esm.sh/@chainsafe/libp2p-noise@15.1.1",
-        "@chainsafe/libp2p-yamux": "https://esm.sh/@chainsafe/libp2p-yamux@6.0.2",
-        "@chainsafe/libp2p-gossipsub": "https://esm.sh/@chainsafe/libp2p-gossipsub@13.1.0",
         "@multiformats/multiaddr": "https://esm.sh/@multiformats/multiaddr@12.3.0",
-        "@multiformats/multiaddr/resolvers": "https://esm.sh/@multiformats/multiaddr@12.3.0/resolvers",
-        "@libp2p/mplex": "https://esm.sh/@libp2p/mplex@10.1.5",
-        "@libp2p/identify": "https://esm.sh/@libp2p/identify@2.1.5",
+        "libp2p": "https://esm.sh/libp2p@1.9.4?external=@multiformats/multiaddr", 
+        "@libp2p/websockets": "https://esm.sh/@libp2p/websockets@8.2.0?external=@multiformats/multiaddr",
+        "@libp2p/websockets/filters": "https://esm.sh/@libp2p/websockets@8.2.0/filters?external=@multiformats/multiaddr",
+        "@libp2p/peer-id": "https://esm.sh/@libp2p/peer-id@4.2.4?external=@multiformats/multiaddr",
+        "@chainsafe/libp2p-noise": "https://esm.sh/@chainsafe/libp2p-noise@15.1.1?external=@multiformats/multiaddr",
+        "@chainsafe/libp2p-yamux": "https://esm.sh/@chainsafe/libp2p-yamux@6.0.2?external=@multiformats/multiaddr",
+        "@chainsafe/libp2p-gossipsub": "https://esm.sh/@chainsafe/libp2p-gossipsub@13.1.0?external=@multiformats/multiaddr",
+        "@libp2p/mplex": "https://esm.sh/@libp2p/mplex@10.1.5?external=@multiformats/multiaddr",
+        "@libp2p/identify": "https://esm.sh/@libp2p/identify@2.1.5?external=@multiformats/multiaddr",
         "protobufjs": "https://esm.sh/protobufjs@7.2.6",
         "uint8arrays": "https://esm.sh/uint8arrays@5.1.0"
       }
@@ -403,6 +404,7 @@
     import { mplex } from '@libp2p/mplex';
     import { identify } from '@libp2p/identify';
     import protobuf from 'protobufjs';
+    import { peerIdFromString } from '@libp2p/peer-id';
 
     const NETWORK = 'mainnet';
     const WALLET_ID = 'browser_primary';
@@ -535,7 +537,14 @@
 
     async function connectP2P() {
         const btn = document.getElementById('btn-connect');
-        const addrInput = document.getElementById('node-addr').value.trim();
+        // Clean the input - remove any hidden characters, extra spaces, newlines
+        const addrInput = document.getElementById('node-addr').value
+            .trim()
+            .replace(/[\s\r\n]+/g, '')
+            .replace(/[^\x20-\x7E]/g, ''); // Remove non-printable ASCII
+        
+        log(`Cleaned address (${addrInput.length} chars): ${addrInput}`, "info");
+        
         btn.disabled = true;
         btn.textContent = "Connecting...";
 
@@ -552,8 +561,25 @@
             if (!p2pNode) {
                 log("Initializing Libp2p...", "info");
                 
+                // Create our own filter that logs and accepts all ws/wss
+                const myFilter = (multiaddrs) => {
+                    log(`myFilter called with ${multiaddrs.length} addrs`, "info");
+                    return multiaddrs.filter(ma => {
+                        const protos = ma.protoNames();
+                        const isWs = protos.includes('ws') || protos.includes('wss');
+                        log(`  checking ${ma.toString()}: ${isWs ? 'ACCEPT' : 'REJECT'}`, "info");
+                        return isWs;
+                    });
+                };
+                
+                // Create websocket transport manually first to debug
+                log(`Creating WebSocket transport...`, "info");
+                const wsTransportFn = webSockets({ filter: myFilter });
+                log(`wsTransportFn type: ${typeof wsTransportFn}`, "info");
+                
+                // Create the node
                 p2pNode = await createLibp2p({
-                    transports: [ webSockets() ],
+                    transports: [ wsTransportFn ],
                     connectionEncryption: [ noise() ],
                     streamMuxers: [ yamux(), mplex() ],
                     services: {
@@ -561,6 +587,40 @@
                         identify: identify()
                     }
                 });
+                
+                // Log transport info after creation
+                log(`Node created, checking transports...`, "info");
+                try {
+                    const tm = p2pNode.components.transportManager;
+                    log(`TransportManager exists: ${!!tm}`, "info");
+                    
+                    // Get all registered transports
+                    const transports = tm.getTransports ? tm.getTransports() : [];
+                    log(`Registered transports: ${transports.length}`, "info");
+                    
+                    // Try to list what the transport manager has
+                    log(`TM keys: ${Object.keys(tm).join(', ')}`, "info");
+                    
+                    // Test different multiaddr formats
+                    const testAddrs = [
+                        '/ip4/134.199.169.244/tcp/26659/ws',
+                        '/ip4/127.0.0.1/tcp/8080/ws',
+                        '/dns4/example.com/tcp/443/wss',
+                    ];
+                    
+                    for (const addr of testAddrs) {
+                        try {
+                            const ma = multiaddr(addr);
+                            const transport = tm.dialTransportForMultiaddr ? tm.dialTransportForMultiaddr(ma) : null;
+                            log(`  ${addr}: ${transport ? 'HAS TRANSPORT' : 'no transport'}`, transport ? "success" : "warn");
+                        } catch (e) {
+                            log(`  ${addr}: error - ${e.message}`, "error");
+                        }
+                    }
+                } catch(e) {
+                    log(`Transport inspection failed: ${e.message}`, "warn");
+                    console.error(e);
+                }
 
                 p2pNode.services.pubsub.addEventListener('message', handleP2PMessage);
                 
@@ -583,20 +643,164 @@
 
             log(`Dialing: ${addrInput}`, "info");
 
-let target = addrInput.trim();
-if (target.includes('/p2p/')) {
-    target = target.split('/p2p/')[0];
-}
-const conn = await p2pNode.dial(multiaddr(target));
-            document.getElementById('status-dot').classList.add('connected');
-            btn.disabled = false;
-            btn.textContent = "Connected";
-            log(`✓ Connected to Bootstrap Node!`, "success");
+            // Parse and log the multiaddr for debugging
+            const targetAddr = multiaddr(addrInput);
+            log(`Parsed multiaddr protocols: ${targetAddr.protoNames().join(', ')}`, "info");
+            log(`Multiaddr string: ${targetAddr.toString()}`, "info");
             
-            updatePeerUI();
+            // Try to extract and validate peer ID
+            try {
+                const peerIdStr = targetAddr.getPeerId();
+                log(`Extracted peer ID: ${peerIdStr}`, "info");
+            } catch (pidErr) {
+                log(`Failed to extract peer ID: ${pidErr.message}`, "warn");
+            }
+            
+            // Log available transports
+            log(`Available transports: ${p2pNode.components?.transportManager ? 'yes' : 'no'}`, "info");
+            
+            // Test raw WebSocket connection first
+            const wsUrl = `ws://134.199.169.244:26659`;
+            log(`Testing raw WebSocket to ${wsUrl}...`, "info");
+            try {
+                const testWs = new WebSocket(wsUrl);
+                await new Promise((resolve, reject) => {
+                    testWs.onopen = () => {
+                        log(`Raw WebSocket connected!`, "success");
+                        testWs.close();
+                        resolve();
+                    };
+                    testWs.onerror = (e) => {
+                        log(`Raw WebSocket error: ${e.type}`, "warn");
+                        reject(e);
+                    };
+                    setTimeout(() => reject(new Error('WebSocket timeout')), 5000);
+                });
+            } catch (wsErr) {
+                log(`Raw WebSocket test failed: ${wsErr.message || wsErr}`, "warn");
+            }
+            
+            let connectionSuccess = false;
+            
+            try {
+                // Try different dial approaches
+                log(`Attempting dial...`, "info");
+                
+                // Extract peer ID string from multiaddr
+                const peerIdStr = targetAddr.getPeerId();
+                log(`Using peer ID: ${peerIdStr}`, "info");
+                
+                // Get transport-only address (without /p2p/ part)
+                const transportOnly = addrInput.split('/p2p/')[0];
+                log(`Transport address string: ${transportOnly}`, "info");
+                
+                // Convert peer ID string to PeerId object
+                const peerId = peerIdFromString(peerIdStr);
+                log(`PeerId object created: ${peerId.toString()}`, "info");
+                
+                // Log what transports are available
+                try {
+                    const dialableAddrs = await p2pNode.components.addressManager.getAddresses();
+                    log(`Our dialable addresses: ${dialableAddrs.length}`, "info");
+                } catch(e) {}
+                
+                // Try approach 1: Just dial the full multiaddr string directly
+                if (!connectionSuccess) {
+                    try {
+                        log(`Approach 1: Dialing full address string...`, "info");
+                        const conn = await p2pNode.dial(addrInput);
+                        log(`Connection established: ${conn.remotePeer.toString()}`, "success");
+                        connectionSuccess = true;
+                    } catch (err1) {
+                        log(`Approach 1 failed: ${err1.code || err1.message}`, "warn");
+                    }
+                }
+                
+                // Try approach 2: Dial transport-only string
+                if (!connectionSuccess) {
+                    try {
+                        log(`Approach 2: Dialing transport-only string...`, "info");
+                        const conn = await p2pNode.dial(transportOnly);
+                        log(`Connection established: ${conn.remotePeer.toString()}`, "success");
+                        connectionSuccess = true;
+                    } catch (err2) {
+                        log(`Approach 2 failed: ${err2.code || err2.message}`, "warn");
+                    }
+                }
+                
+                // Try approach 3: Create multiaddr inside a try block and dial
+                if (!connectionSuccess) {
+                    try {
+                        log(`Approach 3: Using multiaddr with /p2p appended...`, "info");
+                        const fullAddrStr = `${transportOnly}/p2p/${peerIdStr}`;
+                        log(`Full address: ${fullAddrStr}`, "info");
+                        const fullAddr = multiaddr(fullAddrStr);
+                        const conn = await p2pNode.dial(fullAddr);
+                        log(`Connection established: ${conn.remotePeer.toString()}`, "success");
+                        connectionSuccess = true;
+                    } catch (err3) {
+                        log(`Approach 3 failed: ${err3.code || err3.message}`, "warn");
+                    }
+                }
+                
+                // Try approach 4: Use peerStore with string then dial peer
+                if (!connectionSuccess) {
+                    try {
+                        log(`Approach 4: PeerStore with string multiaddr...`, "info");
+                        await p2pNode.peerStore.merge(peerId, {
+                            multiaddrs: [transportOnly]
+                        });
+                        const conn = await p2pNode.dial(peerId);
+                        log(`Connection established: ${conn.remotePeer.toString()}`, "success");
+                        connectionSuccess = true;
+                    } catch (err4) {
+                        log(`Approach 4 failed: ${err4.code || err4.message}`, "warn");
+                    }
+                }
+                
+                // Try approach 5: Direct transport dial
+                if (!connectionSuccess) {
+                    try {
+                        log(`Approach 5: Direct transport dial...`, "info");
+                        const transports = p2pNode.components.transportManager;
+                        log(`TransportManager: ${transports ? 'exists' : 'missing'}`, "info");
+                        
+                        // Try to find a transport that can handle this address
+                        const transportAddr = multiaddr(transportOnly);
+                        const transport = transports.dialTransportForMultiaddr(transportAddr);
+                        log(`Found transport: ${transport ? 'yes' : 'no'}`, "info");
+                        
+                        if (transport) {
+                            const maConn = await transport.dial(transportAddr);
+                            log(`Transport dial got connection!`, "success");
+                            connectionSuccess = true;
+                        }
+                    } catch (err5) {
+                        log(`Approach 5 failed: ${err5.code || err5.message}`, "warn");
+                    }
+                }
+                
+                if (!connectionSuccess) {
+                    throw new Error("All connection approaches failed");
+                }
+                
+            } catch (dialError) {
+                console.error('Dial error details:', dialError);
+                log(`Dial error: ${dialError.message}`, "error");
+                throw dialError;
+            }
+            
+            if (connectionSuccess) {
+                document.getElementById('status-dot').classList.add('connected');
+                btn.disabled = false;
+                btn.textContent = "Connected";
+                log(`✓ Connected to Bootstrap Node!`, "success");
+                updatePeerUI();
+            }
 
         } catch (e) {
-            log(`Connection failed: ${e.message}`, "error");
+            console.error('Full connection error:', e);
+            log(`Connection failed: ${e.message || e}`, "error");
             btn.disabled = false;
             btn.textContent = "Connect P2P";
         }

@@ -59,6 +59,60 @@ const JSONStringifyWithBigInt = (obj) => {
 };
 
 /**
+ * Convert protobuf.js Long objects to BigInt safely
+ */
+function toLongSafe(value) {
+    if (value === null || value === undefined) return 0n;
+    if (typeof value === 'bigint') return value;
+    if (typeof value === 'number') return BigInt(value);
+    if (typeof value === 'string') return BigInt(value);
+    // Long.js object from protobuf.js
+    if (typeof value === 'object' && 
+        typeof value.low === 'number' && 
+        typeof value.high === 'number') {
+        const lowUnsigned = BigInt(value.low >>> 0);
+        if (value.unsigned) {
+            const highUnsigned = BigInt(value.high >>> 0);
+            return (highUnsigned << 32n) + lowUnsigned;
+        }
+        return (BigInt(value.high) << 32n) + lowUnsigned;
+    }
+    return BigInt(String(value));
+}
+
+const KNOWN_BYTE_FIELDS = new Set([
+    'commitment', 'ephemeralKey', 'stealthPayload', 'viewTag',
+    'excess', 'signature', 'aggregatedRangeProof',
+    'gamma', 'c', 's', 'output', 'y', 'pi', 'l', 'r',
+    'minerPubkey', 'vrfThreshold', 'txMerkleRoot'
+]);
+
+function fixByteFields(obj, depth = 0) {
+    if (obj === null || obj === undefined || depth > 15) return obj;
+    if (obj instanceof Uint8Array || Buffer.isBuffer(obj)) return obj;
+    if (Array.isArray(obj)) {
+        if (obj.length > 0 && obj.every(v => typeof v === 'number' && v >= 0 && v <= 255)) {
+            return new Uint8Array(obj);
+        }
+        return obj.map(v => fixByteFields(v, depth + 1));
+    }
+    if (typeof obj === 'object') {
+        const result = {};
+        for (const key of Object.keys(obj)) {
+            const value = obj[key];
+            if (KNOWN_BYTE_FIELDS.has(key) && Array.isArray(value) && 
+                value.every(v => typeof v === 'number' && v >= 0 && v <= 255)) {
+                result[key] = new Uint8Array(value);
+            } else {
+                result[key] = fixByteFields(value, depth + 1);
+            }
+        }
+        return result;
+    }
+    return obj;
+}
+
+/**
  * @param {string} str
  * @returns {any}
  */
@@ -798,14 +852,16 @@ async function checkAndRecoverFromIncompleteReorg() {
         log(`[RECOVERY] Attempted new tip: height ${marker.newTipHeight}, hash ${marker.newTipHash.substring(0,12)}...`, 'error');
         
         // Strategy: Rollback to the original tip
-        log(`[RECOVERY] Attempting rollback to height ${marker.originalTipHeight}...`, 'warn');
+        const originalTipHeightNum = Number(toLongSafe(marker.originalTipHeight));
         
-        const originalTipBlockBytes = native_db.loadBlock(marker.originalTipHeight);
+        log(`[RECOVERY] Attempting rollback to height ${originalTipHeightNum}...`, 'warn');
+        
+        const originalTipBlockBytes = native_db.loadBlock(originalTipHeightNum);
         const originalTipBlockDecoded = originalTipBlockBytes ? p2p.Block.decode(originalTipBlockBytes) : null;
         const originalTipBlock = originalTipBlockDecoded ? convertLongsToBigInts(originalTipBlockDecoded) : null;
         
         if (!originalTipBlock) {
-            log(`[RECOVERY] ✗ FATAL: Cannot find original tip block at height ${marker.originalTipHeight}!`, 'error');
+            log(`[RECOVERY] ✗ FATAL: Cannot find original tip block at height ${originalTipHeightNum}!`, 'error');
             log('[RECOVERY] Manual database inspection and repair required.', 'error');
             process.exit(1);
         }
@@ -814,18 +870,22 @@ async function checkAndRecoverFromIncompleteReorg() {
         
         try {
             await pluribit.force_reset_to_height(
-                marker.originalTipHeight, 
+                originalTipHeightNum,  // <-- Pass Number, not Long
                 originalTipBlock.hash
             );
-            log(`[RECOVERY] ✓ Rust state reset to height ${marker.originalTipHeight}`, 'success');
+            log(`[RECOVERY] ✓ Rust state reset to height ${originalTipHeightNum}`, 'success');
         } catch (e) {
-            // ... (rest of the recovery logic) ...
-            log('[RECOVERY] Attempting to resync chain state...', 'warn');
+            // FIX: Use ingest_block_bytes instead of non-existent process_block_for_recovery
+            log('[RECOVERY] Attempting to resync chain state via block re-ingestion...', 'warn');
             await pluribit.clear_utxo_set();
-            for (let h = 0n; h <= marker.originalTipHeight; h++) {
-                const block =  native_db.loadBlock(h);
-                if (block) {
-                    await pluribit.process_block_for_recovery(block);
+            for (let h = 0; h <= originalTipHeightNum; h++) {
+                const blockBytes = native_db.loadBlock(h);
+                if (blockBytes) {
+                    try {
+                        await pluribit.ingest_block_bytes(Array.from(new Uint8Array(blockBytes)));
+                    } catch (blockErr) {
+                        log(`[RECOVERY] Block ${h} reingest warning: ${blockErr.message}`, 'warn');
+                    }
                 }
             }
             log('[RECOVERY] ✓ Chain state reconstructed', 'success');
@@ -1589,7 +1649,8 @@ async function syncForward(targetHeight, targetHash, trustedPeers) {
                         log(`[SYNC] Halting linear sync and triggering reorg evaluation...`, 'warn');
                         
                         // Ingest the fork block (will return storedOnSide)
-                        const blockBytes = p2p.Block.encode(block).finish();
+                        const fixedBlock = fixByteFields(block);
+                        const blockBytes = p2p.Block.encode(fixedBlock).finish();
                         const result = await pluribit.ingest_block_bytes(Array.from(blockBytes));
 
                         
@@ -1607,7 +1668,8 @@ async function syncForward(targetHeight, targetHash, trustedPeers) {
                 }
 
                 // No block at this height - proceed with normal ingestion
-                const blockBytes = p2p.Block.encode(block).finish();
+                const fixedBlock = fixByteFields(block);
+                const blockBytes = p2p.Block.encode(fixedBlock).finish();
                 const result = await pluribit.ingest_block_bytes(Array.from(blockBytes));
 
                 if (result.type === 'storedOnSide') {
@@ -1906,8 +1968,13 @@ async function handleRemoteBlockDownloaded({ block, peerId }) {
                 log(`[DEFER] Deferring out-of-order block #${block.height} while at height ${currentHeight}. Triggering sync check.`, 'info');
                 setTimeout(safe(bootstrapSync), 500);
             }
-            // Save the block OBJECT to the native DB (not bytes)
-            native_db.saveDeferredBlock(block); 
+            // FIX: Encode to protobuf bytes before saving to avoid serialization issues
+            const fixedBlock = fixByteFields(block);
+            const deferredBytes = p2p.Block.encode(fixedBlock).finish();
+            native_db.saveDeferredBlock({ 
+                hash: fixedBlock.hash || 'unknown',
+                bytes: Buffer.from(deferredBytes).toString('base64')
+            });
              
             return;
         }
@@ -1922,10 +1989,9 @@ async function handleRemoteBlockDownloaded({ block, peerId }) {
             // RATIONALE: Encode the JavaScript block object into Protobuf binary format.
             // This is required by the new, more secure 'ingest_block_bytes' Rust function.
             
-            // Step 1: Encode the JS block object to protobuf bytes
-            let blockBytes = p2p.Block.encode(block).finish();
-            
-            // Step 2: Convert Uint8Array to Array for WASM compatibility
+            // FIX: Ensure byte fields are proper Uint8Array before encoding
+            const fixedBlock = fixByteFields(block);
+            let blockBytes = p2p.Block.encode(fixedBlock).finish();
             const blockBytesArray = Array.from(blockBytes);
 
             let result;
@@ -2217,18 +2283,30 @@ setInterval(safe(debugReorgState), 60000); // Every 60 seconds
     const MAX_DEFERRED_BLOCKS_ON_STARTUP = 1000;
     try {
         let leftoverBlocks =  native_db.loadAllDeferredBlocks();
-        if (leftoverBlocks.length > 0) {
+        let leftoverBlocks = native_db.loadAllDeferredBlocks();
+        if (leftoverBlocks && leftoverBlocks.length > 0) {
             log(`[RECOVERY] Found ${leftoverBlocks.length} leftover deferred blocks. Processing now...`, 'warn');
-            if (leftoverBlocks.length > MAX_DEFERRED_BLOCKS_ON_STARTUP) {
-                log(`[RECOVERY] Capping processing to first ${MAX_DEFERRED_BLOCKS_ON_STARTUP} blocks.`, 'warn');
-                leftoverBlocks = leftoverBlocks.slice(0, MAX_DEFERRED_BLOCKS_ON_STARTUP);
+            for (const item of leftoverBlocks) {
+                try {
+                    // Handle both old format (JS object) and new format (base64 bytes)
+                    let block;
+                    if (item.bytes) {
+                        // New format: decode from base64 protobuf bytes
+                        const bytes = Buffer.from(item.bytes, 'base64');
+                        block = convertLongsToBigInts(p2p.Block.decode(bytes));
+                    } else {
+                        // Old format: JS object (apply fixes)
+                        block = convertLongsToBigInts(item);
+                    }
+                    await handleRemoteBlockDownloaded({ block });
+                } catch (e) {
+                    log(`[RECOVERY] Failed to process deferred block: ${e.message}`, 'warn');
+                }
             }
-            for (const block of leftoverBlocks) {
-                await handleRemoteBlockDownloaded({ block });
-            }
-             native_db.clearDeferredBlocks();
-            log(`[RECOVERY] Finished processing leftover blocks.`, 'success');
+            native_db.clearDeferredBlocks();
+            log('[RECOVERY] Finished processing leftover blocks.', 'success');
         }
+
     } catch (e) {
         log(`Error during deferred block recovery: ${e.message}`, 'error');
     }
