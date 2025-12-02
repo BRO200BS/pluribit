@@ -139,7 +139,27 @@ let blockRequestCleanupTimer = null;
 // --- MODULE IMPORTS ---
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-
+// Helper: recursively converts Uint8Arrays to standard JS Arrays for Rust compatibility
+function normalizeForRust(obj) {
+  if (obj instanceof Uint8Array || Buffer.isBuffer(obj)) {
+    return Array.from(obj);
+  }
+  if (Array.isArray(obj)) {
+    return obj.map(v => normalizeForRust(v));
+  }
+  if (obj && typeof obj === 'object') {
+    const newObj = {};
+    for (const key in obj) {
+      if (Object.prototype.hasOwnProperty.call(obj, key)) {
+        // Recursively clean all properties
+        newObj[key] = normalizeForRust(obj[key]);
+      }
+    }
+    return newObj;
+  }
+  // Return primitives (BigInt, Number, String, Boolean, null) as-is
+  return obj;
+}
 function ensureUint8Array(arr) {
   if (arr instanceof Uint8Array) return arr;
   if (Array.isArray(arr) && arr.every(v => typeof v === 'number' && v >= 0 && v <= 255)) {
@@ -1875,6 +1895,7 @@ log(`[JS PRE-SAVE MINED] Block #${block?.height} Coinbase output 0 viewTag: ${bl
 async function handleRemoteBlockDownloaded({ block, peerId }) {
     log(`[JS RECEIVED BLOCK] Block #${block?.height} Coinbase output 0 viewTag: ${block?.transactions?.[0]?.outputs?.[0]?.viewTag ?? 'N/A'}`, 'debug'); 
     const release = await globalMutex.acquire();
+    const rustFriendlyBlock = normalizeForRust(block);
     try {
         const currentHeight = (await pluribit.get_blockchain_state()).current_height;
 
@@ -1885,13 +1906,8 @@ async function handleRemoteBlockDownloaded({ block, peerId }) {
                 setTimeout(safe(bootstrapSync), 500);
             }
 
-             // 1. Encode object to Uint8Array
-             const encodedBytes = p2p.Block.encode(block).finish();
-             // 2. Convert to standard Array [1, 2, 3...] to satisfy "expected a sequence"
-             const cleanSequence = Array.from(encodedBytes);
-             
-             // 3. Save the sequence
-             native_db.saveDeferredBlock(cleanSequence);
+            
+             native_db.saveDeferredBlock(rustFriendlyBlock);
              
             return;
         }
@@ -1905,16 +1921,11 @@ async function handleRemoteBlockDownloaded({ block, peerId }) {
         try {
             // RATIONALE: Encode the JavaScript block object into Protobuf binary format.
             // This is required by the new, more secure 'ingest_block_bytes' Rust function.
-            let blockBytes = p2p.Block.encode(block).finish();
-
-            // FIX: Convert Uint8Array to standard Array for WASM compatibility
-            // This prevents "Deserialize error: invalid type: byte array, expected a sequence"
-            const blockBytesArray = Array.from(blockBytes);
-
+            
            let result;
             try {
                 // Ensure we await the async Rust function
-                result = await pluribit.ingest_block_bytes(blockBytesArray);
+                result = await pluribit.ingest_block_bytes(rustFriendlyBlock);
             } catch (e) {
                 // Deserialize failed - ban peer
                 if (e.message && e.message.includes('Deserialize error')) {
