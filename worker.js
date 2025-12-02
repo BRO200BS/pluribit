@@ -1141,6 +1141,17 @@ export async function main() {
 
 
 async function fetchBlockDirectly(peerId, hash) {
+    // --- FIX: Prevent self-dialing/fetching ---
+    if (workerState.p2p && workerState.p2p.node) {
+        const myId = workerState.p2p.node.peerId.toString();
+        // Handle cases where peerId might be an object or string
+        const targetId = peerId.toString();
+        
+        if (targetId === myId) {
+            log(`[DEBUG] Skipping fetchBlockDirectly from self for ${hash.substring(0, 6)}...`, 'debug');
+            return null;
+        }
+    }
     const NET = process.env.PLURIBIT_NET || 'mainnet';
     const BLOCK_TRANSFER_PROTOCOL = `/pluribit/${NET}/block-transfer/1.0.0`;
 
@@ -2885,12 +2896,7 @@ await p2p.subscribe(TOPICS.SWAP_PROPOSE, async (proposal, { from }) => {
     const NET = process.env.PLURIBIT_NET || 'mainnet';
     const BLOCK_TRANSFER_PROTOCOL = `/pluribit/${NET}/block-transfer/1.0.0`;
     
-    // Don't try to fetch from ourselves
-    if (peerId.toString() === workerState.p2p?.node?.peerId?.toString()) {
-        log(`[DEBUG] Skipping self-fetch for block ${hash.substring(0, 12)}`, 'debug');
-        return null;
-    }
-    
+   
     await p2p.subscribe(BLOCK_TRANSFER_PROTOCOL, async (hash) => {
       try { return await pluribit.get_block_by_hash(hash); }
       catch { return null; }
