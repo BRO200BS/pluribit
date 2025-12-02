@@ -1349,23 +1349,36 @@ async loadOrCreatePeerId() {
                         
             if (!ip) {
                 this.log(`[P2P] Relay connection from ${peerIdStr}, skipping IP rate limit`, 'debug');
+                // Return here so we don't process logic below for relays
+                return; 
+            }
+
+            // --- Whitelist Localhost and Private IPs ---
+            // Prevents banning yourself or local docker containers
+            if (ip === '127.0.0.1' || ip === '::1' || ip.startsWith('192.168.') || ip.startsWith('10.') || ip.startsWith('172.')) {
+                 return;
             }
 
             const now = Date.now();
             const { BASE_BACKOFF_MS, MAX_BACKOFF_MS, MAX_FAILURES } = CONFIG.P2P.IP_BACKOFF;
             const entry = this._ipChallengeTracker.get(ip) || { failures: 0, lastAttempt: 0 };
 
-            const backoffTime = Math.min(
-                BASE_BACKOFF_MS * Math.pow(2, Math.min(entry.failures, MAX_FAILURES)),
-                MAX_BACKOFF_MS
-            );
+            // --- Only enforce backoff if they have actually FAILED before ---
+            // If failures is 0, we allow the connection update without checking time diff.
+            if (entry.failures > 0) {
+                const backoffTime = Math.min(
+                    BASE_BACKOFF_MS * Math.pow(2, Math.min(entry.failures, MAX_FAILURES)),
+                    MAX_BACKOFF_MS
+                );
 
-            if (now - entry.lastAttempt < backoffTime) {
-                this.log(`[SECURITY] IP ${ip} is in exponential backoff (${entry.failures} failures). Rejecting connection.`, 'warn');
-                try { connection.close(); } catch {}
-                return;
+                if (now - entry.lastAttempt < backoffTime) {
+                    this.log(`[SECURITY] IP ${ip} is in exponential backoff (${entry.failures} failures). Rejecting connection.`, 'warn');
+                    try { connection.close(); } catch {}
+                    return;
+                }
             }
             
+            // Reset logic: If they waited long enough, or if it's a fresh success, update tracking
             entry.lastAttempt = now;
             this._ipChallengeTracker.set(ip, entry);
             this._connectionAttempts++;

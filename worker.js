@@ -1882,10 +1882,17 @@ async function handleRemoteBlockDownloaded({ block, peerId }) {
         if (workerState.isSyncing || BigInt(block.height) > BigInt(currentHeight) + 1n) {
             if (!workerState.isSyncing) {
                 log(`[DEFER] Deferring out-of-order block #${block.height} while at height ${currentHeight}. Triggering sync check.`, 'info');
-                // This is a good place to trigger a sync check, as we've clearly missed blocks.
                 setTimeout(safe(bootstrapSync), 500);
             }
-             native_db.saveDeferredBlock(block);
+
+             // 1. Encode object to Uint8Array
+             const encodedBytes = p2p.Block.encode(block).finish();
+             // 2. Convert to standard Array [1, 2, 3...] to satisfy "expected a sequence"
+             const cleanSequence = Array.from(encodedBytes);
+             
+             // 3. Save the sequence
+             native_db.saveDeferredBlock(cleanSequence);
+             
             return;
         }
 
