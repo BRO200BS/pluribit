@@ -165,7 +165,7 @@
         <div class="card">
             <h3>Network Connection</h3>
             <label>Bootstrap Multiaddr</label>
-            <input type="text" id="node-addr" value="/ip4/139.59.239.126/tcp/26659/ws/p2p/12D3KooWKdkkG4VnUDtc5Wmg336T6KyFpRUZszWuMZG4qFy6SM1T"> 
+            <input type="text" id="node-addr" value="/ip4/134.199.169.244/tcp/26659/ws/p2p/12D3KooWPtSyhtw5MfmK9zitmU2SUjb2kVPqeqNbjuh2sKWUuFqz"> 
             <div style="font-size: 0.7rem; color: #666; margin-bottom: 10px;">
                 Must use <b>WebSockets</b> (/ws). Use `peers` command in node to get ID.
             </div>
@@ -583,7 +583,11 @@
 
             log(`Dialing: ${addrInput}`, "info");
 
-            const conn = await p2pNode.dial(addrInput);
+let target = addrInput.trim();
+if (target.includes('/p2p/')) {
+    target = target.split('/p2p/')[0];
+}
+const conn = await p2pNode.dial(multiaddr(target));
             document.getElementById('status-dot').classList.add('connected');
             btn.disabled = false;
             btn.textContent = "Connected";
