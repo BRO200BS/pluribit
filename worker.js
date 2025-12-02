@@ -2282,7 +2282,6 @@ setInterval(safe(debugReorgState), 60000); // Every 60 seconds
 
     const MAX_DEFERRED_BLOCKS_ON_STARTUP = 1000;
     try {
-        let leftoverBlocks =  native_db.loadAllDeferredBlocks();
         let leftoverBlocks = native_db.loadAllDeferredBlocks();
         if (leftoverBlocks && leftoverBlocks.length > 0) {
             log(`[RECOVERY] Found ${leftoverBlocks.length} leftover deferred blocks. Processing now...`, 'warn');
