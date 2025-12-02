@@ -1590,7 +1590,8 @@ async function syncForward(targetHeight, targetHash, trustedPeers) {
                         
                         // Ingest the fork block (will return storedOnSide)
                         const blockBytes = p2p.Block.encode(block).finish();
-                        const result = await pluribit.ingest_block_bytes(blockBytes);
+                        const result = await pluribit.ingest_block_bytes(Array.from(blockBytes));
+
                         
                         if (result.type === 'storedOnSide') {
                             await triggerReorgPlan(result.tip_hash || block.hash);
@@ -1607,7 +1608,7 @@ async function syncForward(targetHeight, targetHash, trustedPeers) {
 
                 // No block at this height - proceed with normal ingestion
                 const blockBytes = p2p.Block.encode(block).finish();
-                const result = await pluribit.ingest_block_bytes(blockBytes);
+                const result = await pluribit.ingest_block_bytes(Array.from(blockBytes));
 
                 if (result.type === 'storedOnSide') {
                     log(`[SYNC] Fork detected at height ${block.height}. Halting sync and initiating reorg plan directly.`, 'warn');
@@ -1895,7 +1896,7 @@ log(`[JS PRE-SAVE MINED] Block #${block?.height} Coinbase output 0 viewTag: ${bl
 async function handleRemoteBlockDownloaded({ block, peerId }) {
     log(`[JS RECEIVED BLOCK] Block #${block?.height} Coinbase output 0 viewTag: ${block?.transactions?.[0]?.outputs?.[0]?.viewTag ?? 'N/A'}`, 'debug'); 
     const release = await globalMutex.acquire();
-    const rustFriendlyBlock = normalizeForRust(block);
+
     try {
         const currentHeight = (await pluribit.get_blockchain_state()).current_height;
 
@@ -1905,9 +1906,8 @@ async function handleRemoteBlockDownloaded({ block, peerId }) {
                 log(`[DEFER] Deferring out-of-order block #${block.height} while at height ${currentHeight}. Triggering sync check.`, 'info');
                 setTimeout(safe(bootstrapSync), 500);
             }
-
-            
-             native_db.saveDeferredBlock(rustFriendlyBlock);
+            // Save the block OBJECT to the native DB (not bytes)
+            native_db.saveDeferredBlock(block); 
              
             return;
         }
@@ -1922,10 +1922,16 @@ async function handleRemoteBlockDownloaded({ block, peerId }) {
             // RATIONALE: Encode the JavaScript block object into Protobuf binary format.
             // This is required by the new, more secure 'ingest_block_bytes' Rust function.
             
-           let result;
+            // Step 1: Encode the JS block object to protobuf bytes
+            let blockBytes = p2p.Block.encode(block).finish();
+            
+            // Step 2: Convert Uint8Array to Array for WASM compatibility
+            const blockBytesArray = Array.from(blockBytes);
+
+            let result;
             try {
                 // Ensure we await the async Rust function
-                result = await pluribit.ingest_block_bytes(rustFriendlyBlock);
+                result = await pluribit.ingest_block_bytes(blockBytesArray);
             } catch (e) {
                 // Deserialize failed - ban peer
                 if (e.message && e.message.includes('Deserialize error')) {
@@ -2598,7 +2604,8 @@ if (verifiedPeers.length === 0) {
                         // The 'p2p' object might not have the Block class attached directly depending on the export 
                         const blockBytes = P2PBlock.encode(tipBlock).finish();
                         
-                        const result = await pluribit.ingest_block_bytes(blockBytes);
+                        const result = await pluribit.ingest_block_bytes(Array.from(blockBytes));
+
                         
                         if (result.type === 'invalid') {
                             // CASE: Legacy/Malicious Chain

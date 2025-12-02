@@ -582,8 +582,8 @@
             }
 
             log(`Dialing: ${addrInput}`, "info");
-            const conn = await p2pNode.dial(multiaddr(addrInput));
-            
+
+            const conn = await p2pNode.dial(addrInput);
             document.getElementById('status-dot').classList.add('connected');
             btn.disabled = false;
             btn.textContent = "Connected";
