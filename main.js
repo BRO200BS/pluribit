@@ -28,6 +28,39 @@ let isNetworkOnline = false;
 // --- Worker Setup ---
 const worker = new Worker(new URL('./worker.js', import.meta.url));
 
+/**
+ * Formats atomic bits into the Pluribit Binary Topology.
+ * 1 Byte = 8 Bits
+ * 1 KB = 1024 Bytes
+ * 1 MB = 1024 KB
+ */
+function formatPluribit(atomicBitsBigInt) {
+    // Convert to Number for display formatting (precision is fine for UI)
+    const bits = Number(atomicBitsBigInt);
+    
+    // < 1 ƀyte (Less than 8 bits)
+    if (bits < 8) {
+        return `${bits} ƀits`;
+    }
+    
+    // < 1 Kiloƀyte (8,192 bits)
+    if (bits < 8192) {
+        const bytes = bits / 8;
+        // If it divides evenly, don't show decimals
+        return Number.isInteger(bytes) ? `${bytes} ƀytes` : `${bytes.toFixed(2)} ƀytes`;
+    }
+    
+    // < 1 Megaƀyte (8,388,608 bits)
+    if (bits < 8388608) {
+        const kb = bits / 8192; // 8 * 1024
+        return `${kb.toFixed(2)} Kƀ`;
+    }
+    
+    // Megaƀytes and beyond
+    const mb = bits / 8388608; // 8 * 1024 * 1024
+    return `${mb.toFixed(4)} Mƀ`;
+}
+
 worker.on('message', (event) => {
     const { type, payload, error } = event;
 
@@ -110,7 +143,9 @@ worker.on('message', (event) => {
             break;
             
         case 'walletBalance':
-            console.log(chalk.yellow(`\nBalance updated for ${payload.wallet_id}: ${payload.balance}`));
+            // payload.balance is a string representation of u64 from Rust
+            const balBigInt = BigInt(payload.balance);
+            console.log(chalk.yellow(`\nBalance updated for ${payload.wallet_id}: ${formatPluribit(balBigInt)}`));
             rl.prompt(true);
             break;
         
@@ -123,11 +158,8 @@ worker.on('message', (event) => {
             break;
 
         case 'totalSupply': 
-            console.log(chalk.yellow(`\nTotal Supply: ${payload.supply} bits`));
-            // Use BigInt for the division to maintain precision
             const supplyAsBigInt = BigInt(payload.supply);
-            const coins = (supplyAsBigInt / 100_000_000n).toString();
-            console.log(`   (Which is ${coins} PLB)`);
+            console.log(chalk.yellow(`\nTotal Supply: ${formatPluribit(supplyAsBigInt)}`));
             rl.prompt(true);
             break;
 

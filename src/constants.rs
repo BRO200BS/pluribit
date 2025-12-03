@@ -40,10 +40,16 @@ pub const CANONICAL_GENESIS_HASH: &str =
 pub const GENESIS_BITCOIN_HASH: &str =
     "00000000000000000000656b995c9fec9ff94b554dc4aad46c06b71f94088c3c";
 
+// ─── Unit Topology ─────────────────────────────────────────────────────────────
+pub const ONE_BYTE: u64 = 8;
+pub const ONE_KB: u64 = 1024 * ONE_BYTE; // 8,192 atomic bits
+pub const ONE_MB: u64 = 1024 * ONE_KB;   // 8,388,608 atomic bits
+
 // ─── Block reward schedule ─────────────────────────────────────────────────────
 
-/// Base reward at the start of each era (in "bits"; 1 coin = 100_000_000 bits).
-pub const INITIAL_BASE_REWARD: u64 = 50_000_000; // 0.5 coin
+/// Base reward at the start of each era.
+/// 50 Kiloƀytes = 50 * 1024 * 8 = 409,600 atomic ƀits
+pub const INITIAL_BASE_REWARD: u64 = 50 * ONE_KB;
 
 /// Halving cadence: once every 2 years.
 pub const YEARS_PER_HALVING: u64 = 2;
