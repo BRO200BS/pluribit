@@ -118,5 +118,5 @@ pub const DOMAIN_SCHNORR_CHALLENGE: &[u8]= b"pluribit_schnorr_v1";
 pub const DOMAIN_VRF_NONCE: &[u8]        = b"pluribit_vrf_nonce_v1";
 pub const DOMAIN_VRF_CHALLENGE: &[u8]    = b"pluribit_vrf_challenge_v1";
 pub const DOMAIN_VRF_OUTPUT: &[u8]       = b"pluribit_vrf_output_v1";
-pub const DOMAIN_BLOCK_HASH: &[u8]       = b"pluribit_block_v2";
+pub const DOMAIN_BLOCK_HASH: &[u8]       = b"pluribit_block_v3";
 pub const DOMAIN_TX_HASH: &[u8]          = b"pluribit_tx_v2";
