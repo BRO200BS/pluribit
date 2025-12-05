@@ -2963,7 +2963,7 @@ await p2p.subscribe(TOPICS.BLOCK_REQUEST, async (message, { from }) => {
             const blockString = JSONStringifyWithBigInt(block);
             const bytes = new TextEncoder().encode(blockString);
 
-            if (bytes.byteLength <= CONFIG.MAX_MESSAGE_SIZE) {
+            if (blockBytes.byteLength <= CONFIG.MAX_MESSAGE_SIZE) {
                 // Now publish the properly formatted protobuf block
                 await p2p.publish(TOPICS.BLOCKS, protoBlock);
             } else {
