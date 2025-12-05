@@ -2067,7 +2067,10 @@ async function handleRemoteBlockDownloaded({ block, peerId }) {
               }
 
               try {
-                await workerState.p2p.publish(TOPICS.BLOCKS, block);
+                    const fixedBlock = fixByteFields(block);
+                    const protoBytes = p2p.Block.encode(fixedBlock).finish();
+                    const protoBlock = p2p.Block.decode(protoBytes);
+                    await workerState.p2p.publish(TOPICS.BLOCKS, protoBlock);
                 log(`[MINING DEBUG] Full block broadcast on ${TOPICS.BLOCKS}`, 'debug');
               } catch (e) {
                 log(`[MINING DEBUG] Failed to publish full block: ${e?.message || e}`, 'warn');
@@ -2943,28 +2946,34 @@ await p2p.subscribe(TOPICS.SWAP_PROPOSE, async (proposal, { from }) => {
         }
     });
     
-    await p2p.subscribe(TOPICS.BLOCK_REQUEST, async (message, { from }) => {
-        const { hash } = message;
-        if (!hash) return;
-        
-        try {
-            const block = await pluribit.get_block_by_hash(hash);
-            if (block) {
-                const blockString = JSONStringifyWithBigInt(block);
-                const bytes = new TextEncoder().encode(blockString);
+await p2p.subscribe(TOPICS.BLOCK_REQUEST, async (message, { from }) => {
+    const { hash } = message;
+    if (!hash) return;
+    
+    try {
+        const block = await pluribit.get_block_by_hash(hash);
+        if (block) {
+            // FIX: Convert serde-serialized block to proper protobuf format
+            const fixedBlock = fixByteFields(block);
+            
+            // Encode to protobuf bytes and re-decode to get proper Long types
+            const blockBytes = p2p.Block.encode(fixedBlock).finish();
+            const protoBlock = p2p.Block.decode(blockBytes);
+            
+            const blockString = JSONStringifyWithBigInt(block);
+            const bytes = new TextEncoder().encode(blockString);
 
-                if (bytes.byteLength <= CONFIG.MAX_MESSAGE_SIZE) {
-                    // Block is small enough, send it
-                    await p2p.publish(TOPICS.BLOCKS, block);
-                } else {
-                    // Block is too large - log and skip
-                    log(`Block ${hash.substring(0,12)} is too large (${bytes.byteLength} bytes). Cannot send via gossipsub.`, 'warn');
-                }
+            if (bytes.byteLength <= CONFIG.MAX_MESSAGE_SIZE) {
+                // Now publish the properly formatted protobuf block
+                await p2p.publish(TOPICS.BLOCKS, protoBlock);
+            } else {
+                log(`Block ${hash.substring(0,12)} is too large. Cannot send via gossipsub.`, 'warn');
             }
-        } catch (e) {
-            log(`Failed to serve block request: ${e.message}`, 'warn');
         }
-    });
+    } catch (e) {
+        log(`Failed to serve block request: ${e.message}`, 'warn');
+    }
+});
     
 
     // Handle lightweight block announcements (no change)
