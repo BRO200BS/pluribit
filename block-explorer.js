@@ -1229,7 +1229,7 @@ function parseUint8Array(data) {
                 document.getElementById('utxo').textContent = stats.utxoCount.toLocaleString();
                 
                 // Replicate worker's reward logic
-                const INITIAL_BASE_REWARD = 50000000n; // 0.5 PLB in bits
+                const INITIAL_BASE_REWARD = 409600n; //50kb
                 const HALVING_INTERVAL = 525600n;
                 const REWARD_RESET_INTERVAL = 5256000n;
                 
@@ -2215,9 +2215,37 @@ function drawTxGraph(transactions) {
             return num.toLocaleString();
         }
 
-        function formatBits(sats) {
-            const coins = Number(sats) / 100_000_000;
-            return coins.toFixed(8) + ' ƀ';
+        function formatBits(val) {
+            // 1. Handle BigInt or String inputs safely
+            const bits = Number(val);
+            
+            if (isNaN(bits)) return '0 ƀits';
+            if (bits === 0) return '0 ƀits';
+
+            // 2. Base Unit: < 1 ƀyte (8 bits)
+            if (bits < 8) {
+                return bits + ' ƀits';
+            }
+
+            // 3. Convert to ƀytes (Base 2^3)
+            let value = bits / 8;
+            const units = ['ƀytes', 'Kƀ', 'Mƀ', 'Gƀ', 'Tƀ'];
+            let unitIndex = 0;
+
+            // 4. Scale up by 1024 (2^10) steps
+            while (value >= 1024 && unitIndex < units.length - 1) {
+                value /= 1024;
+                unitIndex++;
+            }
+
+            // 5. Formatting
+            // If it's exact (integer), don't show decimals. Otherwise max 2 decimals.
+            const formattedValue = value.toLocaleString('en-US', {
+                minimumFractionDigits: 0,
+                maximumFractionDigits: 2
+            });
+
+            return formattedValue + ' ' + units[unitIndex];
         }
 
         function formatBytes(bytes) {

@@ -11,6 +11,23 @@ use curve25519_dalek::traits::Identity;
 use crate::log;
 use crate::p2p;
 use crate::wasm_types::WasmU64;
+use std::sync::Mutex;
+use lazy_static::lazy_static;
+
+// Define TransactionPool publicy
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TransactionPool {
+    pub pending: Vec<Transaction>,
+    pub fee_total: u64,
+}
+
+// Define the global TX_POOL here so it is accessible via crate::transaction::TX_POOL
+lazy_static! {
+    pub static ref TX_POOL: Mutex<TransactionPool> = Mutex::new(TransactionPool {
+        pending: Vec::new(),
+        fee_total: 0,
+    });
+}
 
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -101,13 +118,13 @@ impl TransactionKernel {
     }
     
 pub fn new(blinding: Scalar, fee: u64, min_height: u64, timestamp: u64) -> Result<Self, String> {
-    log("=== TRANSACTION_KERNEL::NEW DEBUG ===");
-    log(&format!("[KERNEL_NEW] Input blinding={}", hex::encode(blinding.to_bytes())));
-    log(&format!("[KERNEL_NEW] Fee={}", fee));
+  //  log("=== TRANSACTION_KERNEL::NEW DEBUG ===");
+  //  log(&format!("[KERNEL_NEW] Input blinding={}", hex::encode(blinding.to_bytes())));
+  //  log(&format!("[KERNEL_NEW] Fee={}", fee));
     
     let excess_point = mimblewimble::PC_GENS.commit(Scalar::from(fee), blinding);
 
-    log(&format!("[KERNEL_NEW] Derived excess_point={}", hex::encode(excess_point.compress().to_bytes())));
+  //  log(&format!("[KERNEL_NEW] Derived excess_point={}", hex::encode(excess_point.compress().to_bytes())));
     let mut hasher = Sha256::new();
     hasher.update(b"pluribit_kernel_v1");
     hasher.update(&16u64.to_le_bytes());    
@@ -116,7 +133,7 @@ pub fn new(blinding: Scalar, fee: u64, min_height: u64, timestamp: u64) -> Resul
     // FIX #8: Include timestamp in signature
     hasher.update(&timestamp.to_be_bytes());
     let message_hash: [u8; 32] = hasher.finalize().into();
-    log(&format!("[KERNEL_NEW] Message hash={}", hex::encode(message_hash)));
+  //  log(&format!("[KERNEL_NEW] Message hash={}", hex::encode(message_hash)));
     
     let (challenge, s) = mimblewimble::create_schnorr_signature(message_hash, &blinding)
         .map_err(|e| e.to_string())?;
@@ -253,11 +270,11 @@ pub fn create_coinbase(rewards: Vec<(Vec<u8>, u64)>) -> PluribitResult<Self> {
     let mut output_blindings = Vec::new(); 
     let mut blinding_sum = Scalar::default();
     let mut total_reward_value = 0u64;
-    log("=== CREATE_COINBASE DEBUG ===");
+  //  log("=== CREATE_COINBASE DEBUG ===");
 
     for (i, (recipient_pub_key_bytes, amount)) in rewards.iter().enumerate() {
         total_reward_value += amount;
-        log(&format!("[CREATE_COINBASE] Output {}: amount={}", i, amount));
+     //   log(&format!("[CREATE_COINBASE] Output {}: amount={}", i, amount));
 
         let scan_pub_compressed = CompressedRistretto::from_slice(&recipient_pub_key_bytes)
             .map_err(|_| PluribitError::ValidationError("Invalid public key".to_string()))?;
@@ -266,7 +283,7 @@ pub fn create_coinbase(rewards: Vec<(Vec<u8>, u64)>) -> PluribitResult<Self> {
 
         let r = Scalar::random(&mut OsRng); 
         let blinding = Scalar::random(&mut OsRng); 
-        log(&format!("[CREATE_COINBASE] Output {}: blinding={}", i, hex::encode(blinding.to_bytes()))); 
+     //   log(&format!("[CREATE_COINBASE] Output {}: blinding={}", i, hex::encode(blinding.to_bytes()))); 
 
         // Capture all 3 return values, including the view_tag
         let (ephemeral_key, payload, view_tag) = stealth::encrypt_stealth_out(&r, &scan_pub, *amount, &blinding);
@@ -274,7 +291,7 @@ pub fn create_coinbase(rewards: Vec<(Vec<u8>, u64)>) -> PluribitResult<Self> {
         // Create commitment explicitly
         let commitment_point = mimblewimble::commit(*amount, &blinding)?;
         let commitment_bytes = commitment_point.compress().to_bytes().to_vec(); 
-        log(&format!("[CREATE_COINBASE] Output {}: commitment={}", i, hex::encode(&commitment_bytes)));  
+      //  log(&format!("[CREATE_COINBASE] Output {}: commitment={}", i, hex::encode(&commitment_bytes)));  
 
         outputs.push(TransactionOutput {
             commitment: commitment_bytes.clone(), 
@@ -288,12 +305,12 @@ pub fn create_coinbase(rewards: Vec<(Vec<u8>, u64)>) -> PluribitResult<Self> {
         output_blindings.push(blinding); 
 
         blinding_sum += blinding; 
-        log(&format!("[CREATE_COINBASE] Output {}: running blinding_sum={}", i, hex::encode(blinding_sum.to_bytes()))); 
+     //   log(&format!("[CREATE_COINBASE] Output {}: running blinding_sum={}", i, hex::encode(blinding_sum.to_bytes()))); 
 
     }
 
-    log(&format!("[CREATE_COINBASE] Final blinding_sum={}", hex::encode(blinding_sum.to_bytes())));
-    log(&format!("[CREATE_COINBASE] Total reward value={}", total_reward_value)); 
+  //  log(&format!("[CREATE_COINBASE] Final blinding_sum={}", hex::encode(blinding_sum.to_bytes())));
+   // log(&format!("[CREATE_COINBASE] Total reward value={}", total_reward_value)); 
 
     // --- Generate AGGREGATED proof AFTER the loop ---
     let (aggregated_proof, _commitments) = mimblewimble::create_aggregated_range_proof(
@@ -313,8 +330,8 @@ pub fn create_coinbase(rewards: Vec<(Vec<u8>, u64)>) -> PluribitResult<Self> {
     let min_height = 0u64; // Coinbase has no minimum height 
     let kernel = TransactionKernel::new(blinding_sum, fee, min_height, timestamp) 
         .map_err(|e| PluribitError::ComputationError(e.to_string()))?; 
-    log(&format!("[CREATE_COINBASE] Kernel excess={}", hex::encode(&kernel.excess)));
-    log(&format!("[CREATE_COINBASE] Final outputs before return: {:?}", outputs));
+   // log(&format!("[CREATE_COINBASE] Kernel excess={}", hex::encode(&kernel.excess)));
+   // log(&format!("[CREATE_COINBASE] Final outputs before return: {:?}", outputs));
 
     Ok(Transaction {
         inputs: vec![], 
@@ -492,6 +509,10 @@ mod tests {
 
     lazy_static! {
         static ref TEST_MUTEX: Mutex<()> = Mutex::new(());
+        pub static ref TX_POOL: Mutex<TransactionPool> = Mutex::new(TransactionPool {
+        pending: Vec::new(),
+        fee_total: 0,
+    });
     }
 
     // Helper to reset global state for tests

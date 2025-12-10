@@ -82,6 +82,7 @@ export const TOPICS = {
   SWAP_PROPOSE: `/pluribit/${NET}/swap-propose/1.0.0.1`,
   SWAP_RESPOND: `/pluribit/${NET}/swap-respond/1.0.0.1`,
   SWAP_ALICE_ADAPTOR_SIG: `/pluribit/${NET}/swap-alice-sig/1.0.0.1`,
+  
 };
 
 const PEX_PROTOCOL = `/pluribit/${NET}/pex/1.0.0.1`;
@@ -89,8 +90,9 @@ const PEX_PROTOCOL = `/pluribit/${NET}/pex/1.0.0.1`;
 export class PluribitP2P {
     constructor(log, options = {}) {
         this._peerVerificationState = new Map();
+        this._discoveredLogSet = new Set(); // Track logged peers to prevent spam
         this._privateKey = null;
-
+        this.onPeerVerified = options.onPeerVerified || (() => {});
         this._badBlockPeers = new Map();
         this._trustedPeers = new Set();
         this.log = log;
@@ -400,12 +402,9 @@ export class PluribitP2P {
         if (isNowVerified && !wasVerified) {
             this.log(`[P2P] ✅ Fully Verified Peer: ${peerId}`, 'success');        
             try {
-                if (this.node) {
-                    this.node.dispatchEvent(new CustomEvent('pluribit:peer-verified', { detail: peerId }));
-                }
+                this.onPeerVerified(peerId);
             } catch (e) {
-                const err = /** @type {Error} */ (e);
-                this.log(`[P2P] Error dispatching peer-verified event: ${err.message}`, 'warn');
+                this.log(`[P2P] Error in verification callback: ${e.message}`, 'error');
             }       
         }
         return isNowVerified ;
@@ -648,7 +647,7 @@ export class PluribitP2P {
                 // ignore
             }
 
-            let providers = await this._findProvidersCompat(cid, { timeout: 15_000 });
+            let providers = await this._findProvidersCompat(cid, { timeout: 120_000 });
 
             if (!this.node) return;
             const myId = this.node.peerId.toString();
@@ -672,7 +671,7 @@ export class PluribitP2P {
             }
         } catch (e) {
             const err = /** @type {Error} */ (e);
-            this.log(`[P2P] Rendezvous error: ${err?.message || err}`, 'warn');
+            this.log(`[P2P] Rendezvous error: ${err?.message || err}`, 'debug');
         }
     }
 
@@ -727,10 +726,21 @@ export class PluribitP2P {
             transports: [
                 tcp(),
                 webSockets(),
-               // webRTC(), //disabled 
-                circuitRelayTransport({
-                    discoverRelays: this.isBootstrap ? 0 : 2
-                })
+                // Wrap circuit relay to catch initialization errors
+                ...(() => {
+                    try {
+                        // Return an array containing the transport
+                        return [
+                            circuitRelayTransport({
+                                discoverRelays: this.isBootstrap ? 0 : 2
+                            })
+                        ];
+                    } catch (e) {
+                        console.warn('[P2P] Circuit relay init failed, running without relay:', e.message);
+                        // Return an empty array on failure
+                        return [];
+                    }
+                })(), 
             ],
             connectionEncrypters: [noise()],
             streamMuxers: [yamux()],
@@ -922,7 +932,30 @@ export class PluribitP2P {
                 this.log(`[P2P] Error handling block transfer protocol: ${err.message}`, 'error');
             }
         });
-        
+        await this.node.handle(TOPICS.SYNC, async ({ stream, connection }) => {
+            try {
+                const peerId = connection.remotePeer.toString();
+                
+                const chunks = [];
+                for await (const chunk of stream.source) {
+                    chunks.push(chunk.subarray());
+                }
+                const buffer = Buffer.concat(chunks);
+
+                // Dispatch event for Worker/Rust to handle
+                this.node.dispatchEvent(new CustomEvent('pluribit:sync-message', { 
+                    detail: { 
+                        topic: TOPICS.SYNC, 
+                        data: buffer, 
+                        from: peerId 
+                    } 
+                }));
+            } catch (e) {
+                this.log(`[P2P] Error handling sync protocol: ${e.message}`, 'error');
+            } finally {
+                try { await stream.close(); } catch {}
+            }
+        });
         await this.node.handle(TOPICS.DANDELION_STEM, async ({ stream, connection }) => {
             const peerId = connection.remotePeer.toString(); 
             this.log(`[Dandelion] Received incoming STEM connection from ${peerId.slice(-6)}`, 'debug');
@@ -1093,8 +1126,63 @@ setInterval(async () => {
             }
         }, CONFIG.P2P.NEIGHBORHOOD_DHT_RANDOM_WALK_INTERVAL_MS); 
         
+        this._startMeshMaintenance();
+        
         return this.node;
     }
+
+
+_startMeshMaintenance() {
+        if (this._meshTimer) clearInterval(this._meshTimer);
+
+        this.log('[P2P] 🛡️ Starting Mesh Maintenance Loop', 'info');
+
+        this._meshTimer = setInterval(async () => {
+            if (!this.node) return;
+
+            const peers = this.node.getConnections().map(c => c.remotePeer);
+            if (peers.length === 0) return;
+
+            // 1. Randomly select peers to ping (staggered check)
+            const count = CONFIG.P2P.MESH.PEERS_TO_PING_PER_TICK || 5;
+            const shuffled = peers.sort(() => 0.5 - Math.random());
+            const selected = shuffled.slice(0, count);
+
+            for (const peerId of selected) {
+                const peerIdStr = peerId.toString();
+                
+                try {
+                    // Use libp2p's built-in ping service
+                    // This sends a lightweight heartbeat
+                    const latency = await this.node.services.ping.ping(peerId);
+                    
+                    // Reset failure count on success
+                    if (this._ipChallengeTracker.has(peerIdStr)) {
+                        this._ipChallengeTracker.delete(peerIdStr); 
+                    }
+                    // Optional: log heavy lag
+                    if (latency > 2000) {
+                        this.log(`[MESH] 🐢 Slow peer ${peerIdStr.slice(-6)}: ${latency}ms`, 'debug');
+                    }
+                } catch (e) {
+                    this.log(`[MESH] ❌ Ping failed for ${peerIdStr.slice(-6)}: ${e.message}`, 'debug');
+                    
+                    // Track consecutive failures
+                    const tracker = this._ipChallengeTracker.get(peerIdStr) || { failures: 0 };
+                    tracker.failures += 1;
+                    this._ipChallengeTracker.set(peerIdStr, tracker);
+
+                    // Disconnect if threshold reached
+                    if (tracker.failures >= (CONFIG.P2P.MESH.MAX_PING_FAILURES || 3)) {
+                        this.log(`[MESH] 💀 Pruning dead peer ${peerIdStr.slice(-6)} (${tracker.failures} fails)`, 'warn');
+                        this.node.hangUp(peerId).catch(() => {});
+                        this._ipChallengeTracker.delete(peerIdStr);
+                    }
+                }
+            }
+        }, CONFIG.P2P.MESH.MAINTENANCE_INTERVAL_MS || 60000);
+    }
+
 
 
 async loadOrCreatePeerId() {
@@ -1245,12 +1333,7 @@ async loadOrCreatePeerId() {
 
             // Check if this is a reconnecting peer with saved verification
             const state = this._peerVerificationState.get(peerId);
-            if (state?.disconnectedAt) {
-                delete state.disconnectedAt;
-                this.log(`[P2P] Peer ${peerId.slice(-6)} reconnected, keeping verification ✅`, 'info');
-                // Skip re-challenge since they're already verified
-                return;
-            }
+
 
             // Check if banned
             if (this.isPeerBannedForBadBlocks(peerId)) {
@@ -1295,23 +1378,11 @@ async loadOrCreatePeerId() {
             this._peerChallenges.delete(peerIdStr);
             this._buckets.delete(peerIdStr);
             
-            // DON'T immediately delete verification state!
-            // Mark as disconnected and give a grace period
-            const state = this._peerVerificationState.get(peerIdStr);
-            if (state) {
-                state.disconnectedAt = Date.now();
-                
-                // Clean up after grace period if they don't reconnect
-                const gracePeriod = CONFIG.P2P.MESH.VERIFICATION_GRACE_PERIOD_MS;
-                setTimeout(() => {
-                    const currentState = this._peerVerificationState.get(peerIdStr);
-                    if (currentState?.disconnectedAt) {
-                        this._peerVerificationState.delete(peerIdStr);
-                        this.log(`[P2P] Cleared stale verification for ${peerIdStr.slice(-6)}`, 'debug');
-                    }
-                }, gracePeriod);
-            }
-});
+            // Nuke verification state immediately. 
+            // This forces a fresh handshake if they reconnect 1ms later.
+            this._peerVerificationState.delete(peerIdStr);
+            // --------------------------
+        });
 
         
         this.node.addEventListener('peer:discovery', async (evt) => {
@@ -1319,25 +1390,17 @@ async loadOrCreatePeerId() {
 
             if (!this.node) return;
             if (id?.toString?.() === this.node.peerId.toString()) return;
-
+            
+            const peerIdStr = id.toString();
+            if (this._discoveredLogSet.has(peerIdStr)) return; // Skip if already logged
+            this._discoveredLogSet.add(peerIdStr);
+            
             if (multiaddrs?.length) {
                 await this._addToAddressBookCompat(id, multiaddrs);
             }
 
             this.log(`[P2P] Discovered peer: ${id.toString()} (${multiaddrs?.length ?? 0} addrs)`, 'debug');
 
-            const connections = this.node.getConnections();
-            const already = connections.some(c => c.remotePeer.toString() === id.toString());
-            const total = connections.length;
-            const target = CONFIG.P2P.MIN_CONNECTIONS;
-
-            if (!already && total < target) {
-                try {
-                    await this.node.dial(id);
-                    this.log(`[P2P] Auto-dialed discovered peer ${id.toString()}`, 'debug');
-                } catch (e) {
-                }
-            }
         });
 
         this.node.addEventListener('connection:open', (evt) => {
@@ -1411,6 +1474,10 @@ async loadOrCreatePeerId() {
         try {
             const from = msg.from?.toString?.() ?? String(msg.from);
             
+            if (this.node && from === this.node.peerId.toString()) {
+                return; // Ignore messages from myself
+            }
+            
             if (this.isPeerBannedForBadBlocks(from)) {
                 return;
             }
@@ -1479,23 +1546,58 @@ async loadOrCreatePeerId() {
         this.handlers.get(topic)?.push(handler);
     }
 
-    async publish(topic, data) {
+async publish(topic, data) {
         if (!this.node) return;
-        
-        const payloadType = this._getPayloadTypeForTopic(topic);
-        if (!payloadType) {
-            throw new Error(`No Protobuf payload type for topic ${topic}`);
-        }
 
-        const message = p2p.P2pMessage.create({ [payloadType]: data });
-        const bytes = p2p.P2pMessage.encode(message).finish();
+        let bytes;
+
+        // CHECK: Is this data coming from Rust (Uint8Array) or legacy JS (Object)?
+        if (data instanceof Uint8Array || Buffer.isBuffer(data)) {
+            // It's already a pre-encoded Protobuf from Rust. Send as-is.
+            bytes = data;
+        } else {
+            // It's a JS object (legacy Dandelion or internal logic). Wrap it.
+            const payloadType = this._getPayloadTypeForTopic(topic);
+            if (!payloadType) {
+                throw new Error(`No Protobuf payload type for topic ${topic}`);
+            }
+            const message = p2p.P2pMessage.create({ [payloadType]: data });
+            bytes = p2p.P2pMessage.encode(message).finish();
+        }
 
         if (bytes.byteLength > CONFIG.MAX_MESSAGE_SIZE) {
             throw new Error(`Refusing to publish >MAX_MESSAGE_SIZE on ${topic}`);
         }
+        
         await this.node.services.pubsub.publish(topic, bytes);
     }
+async sendDirect(peerId, protocol, data) {
+        if (!this.node) return;
+        try {
+            // 1. Find the active connection
+            const connection = this.node.getConnections().find(
+                c => c.remotePeer.toString() === peerId
+            );
 
+            if (!connection) {
+                // It's common to lose connection during sync, just warn and return
+                this.log(`[P2P] ⚠️ Cannot send direct to ${peerId.slice(-8)}: No connection`, 'warn');
+                return;
+            }
+
+            // 2. Open a stream on the requested protocol
+            const stream = await connection.newStream(protocol);
+
+            // 3. Write the raw bytes (data) to the stream
+            await pipe(
+                [data],
+                stream.sink
+            );
+            
+        } catch (e) {
+            this.log(`[P2P] ❌ Failed direct send to ${peerId.slice(-8)}: ${e.message}`, 'error');
+        }
+    }
    async store(key, value) {
         if (!this.node) return;
         if (!this._privateKey) {
@@ -1837,6 +1939,12 @@ async loadOrCreatePeerId() {
             // @ts-ignore
             this._challengeGcTimer = null;
         }
+        
+        if (this._meshTimer) {
+            clearInterval(this._meshTimer);
+            this._meshTimer = null;
+        }
+        
         if (this._stemRelayRefreshTimer) {
             clearInterval(this._stemRelayRefreshTimer);
             this._stemRelayRefreshTimer = null;
@@ -1930,6 +2038,20 @@ async loadOrCreatePeerId() {
                     const multiaddrs = p.addrs.map(a => multiaddr(a));
                     // <--- FIXED: Ensure PeerID object is used for address book
                     const peerId = peerIdFromString(p.id);
+                    
+                    // Check if we already know this peer before triggering events
+                    let isKnown = false;
+                    try {
+                        const existing = await this.node.peerStore.get(peerId);
+                        if (existing) isKnown = true;
+                    } catch {} // get() throws if not found in some versions
+
+                    if (isKnown) {
+                        // Just update addresses silently if needed, don't trigger discovery logic
+                        await this._addToAddressBookCompat(peerId, multiaddrs);
+                        continue; 
+                    }
+                                        
                     await this._addToAddressBookCompat(peerId, multiaddrs);
                     
                     this.node.dispatchEvent(new CustomEvent('peer:discovery', { 

@@ -88,7 +88,12 @@ fn main(mut cx: ModuleContext) -> NeonResult<()> {
     cx.export_function("commit_staged_reorg", db::commit_staged_reorg)?;
     cx.export_function("saveBlockWithHash", db::save_block_with_hash)?; // Also used by worker.js
     cx.export_function("loadBlockByHash", db::load_block_by_hash)?; // Also used by worker.js
-
+    cx.export_function("save_channel", db::save_channel)?;
+    cx.export_function("load_channel", db::load_channel)?;
+    cx.export_function("save_atomic_swap", db::save_atomic_swap)?;
+    cx.export_function("load_atomic_swap", db::load_atomic_swap)?;
+    cx.export_function("clear_all_coinbase_indexes", db::clear_all_coinbase_indexes)?;
+    
     // --- Functions for JS (worker.js) ---
     // Note: Some of these are duplicates of the above, just with the
     // camelCase names that worker.js expects.
@@ -109,6 +114,11 @@ fn main(mut cx: ModuleContext) -> NeonResult<()> {
     cx.export_function("loadTotalWork", db::load_total_work)?;
     cx.export_function("deleteCanonicalBlock", db::delete_canonical_block)?;
     cx.export_function("setTipMetadata", db::set_tip_metadata)?;
+    cx.export_function("saveChannel", db::save_channel)?;
+    cx.export_function("loadChannel", db::load_channel)?;
+    cx.export_function("saveAtomicSwap", db::save_atomic_swap)?;
+    cx.export_function("loadAtomicSwap", db::load_atomic_swap)?;
+    cx.export_function("clearAllCoinbaseIndexes", db::clear_all_coinbase_indexes)?;
 
     Ok(())
 }

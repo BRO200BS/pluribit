@@ -99,8 +99,8 @@ pub fn decrypt_stealth_output(
     data: &[u8],
 ) -> Option<(u64, Scalar)> {
     // --- ADD LOGGING ---
-    let r_hex = hex::encode(R.compress().to_bytes());
-    log(&format!("[DECRYPT] Entered. R={}, data_len={}", &r_hex[..8], data.len()));
+    //let r_hex = hex::encode(R.compress().to_bytes());
+    //log(&format!("[DECRYPT] Entered. R={}, data_len={}", &r_hex[..8], data.len()));
     // --- END LOGGING ---
 
     if data.len() < 24 {
@@ -115,7 +115,7 @@ pub fn decrypt_stealth_output(
     let apr = (R * scan_priv).compress().to_bytes();
     let s = hash_to_scalar(b"Stealth", &apr);
     // --- ADD LOGGING ---
-    log(&format!("[DECRYPT] Calculated shared secret s': {}", hex::encode(s.to_bytes())));
+    //log(&format!("[DECRYPT] Calculated shared secret s': {}", hex::encode(s.to_bytes())));
     // --- END LOGGING ---
 
     // Derive key
@@ -125,12 +125,12 @@ pub fn decrypt_stealth_output(
 
     // Decrypt
     // --- ADD LOGGING ---
-    log("[DECRYPT] Attempting cipher.decrypt...");
+    //log("[DECRYPT] Attempting cipher.decrypt...");
     // --- END LOGGING ---
     let pt = match cipher.decrypt(nonce, ct) {
         Ok(plaintext) => {
             // --- ADD LOGGING ---
-            log(&format!("[DECRYPT] Decryption successful. Plaintext len={}", plaintext.len()));
+            //log(&format!("[DECRYPT] Decryption successful. Plaintext len={}", plaintext.len()));
             // --- END LOGGING ---
             plaintext
         },
@@ -158,15 +158,15 @@ pub fn decrypt_stealth_output(
     blind_bytes.copy_from_slice(&pt[8..40]);
 
     // --- ADD LOGGING ---
-    log(&format!("[DECRYPT] Parsed value: {}", value));
-    log(&format!("[DECRYPT] Parsed blinding bytes: {}", hex::encode(blind_bytes)));
-    log("[DECRYPT] Checking if blinding bytes are canonical scalar...");
+    //log(&format!("[DECRYPT] Parsed value: {}", value));
+    //log(&format!("[DECRYPT] Parsed blinding bytes: {}", hex::encode(blind_bytes)));
+    //log("[DECRYPT] Checking if blinding bytes are canonical scalar...");
     // --- END LOGGING ---
 
     // Use canonical scalar representation only
     let blinding = if let Some(scalar) = Scalar::from_canonical_bytes(blind_bytes).into() {
         // --- ADD LOGGING ---
-        log("[DECRYPT] Blinding bytes ARE canonical.");
+        //log("[DECRYPT] Blinding bytes ARE canonical.");
         // --- END LOGGING ---
         scalar
     } else {
@@ -179,7 +179,7 @@ pub fn decrypt_stealth_output(
     // Verification that the reconstructed commitment matches the on-chain one
     // must be performed by the calling function.
     // --- ADD LOGGING ---
-    log("[DECRYPT] Returning Some((value, blinding)).");
+    //log("[DECRYPT] Returning Some((value, blinding)).");
     // --- END LOGGING ---
     Some((value, blinding))
 }

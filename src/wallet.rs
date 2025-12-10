@@ -4,11 +4,11 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use curve25519_dalek::scalar::Scalar;
 use bulletproofs::RangeProof;
 use curve25519_dalek::ristretto::{RistrettoPoint, CompressedRistretto};
+use crate::blockchain::{BLOCKCHAIN, UTXO_SET, COINBASE_INDEX};
 use rand::{rngs::OsRng, RngCore};
 use crate::merkle;
 use lazy_static::lazy_static;
 use std::sync::Mutex;
-use crate::blockchain::COINBASE_INDEX; 
 use crate::constants::COINBASE_MATURITY; 
 use crate::WasmU64;
 use std::collections::HashMap;
@@ -19,6 +19,7 @@ use crate::error::PluribitError;
 use crate::error::PluribitResult;
 lazy_static! {
    pub static ref PENDING_UTXOS: Mutex<HashSet<Vec<u8>>> = Mutex::new(HashSet::new());
+   pub static ref WALLET_SESSIONS: Mutex<HashMap<String, Wallet>> = Mutex::new(HashMap::new());
 }
 // CRITICAL FIX #7: Custom serialization for Scalar to enforce canonical form
 mod scalar_serde {
@@ -230,10 +231,10 @@ impl Wallet {
   // In src/wallet.rs
 
  pub fn scan_block(&mut self, block: &Block) {
-     log(&format!("[RUST SCAN_BLOCK] Block #{}, Coinbase Output 0 view_tag: {:?}",
-            block.height,
-            block.transactions.get(0).and_then(|tx| tx.outputs.get(0)).map(|out| out.view_tag.as_ref().and_then(|v| v.first().cloned())) // Adjusted logging slightly for Vec<u8>
-        )); // <-- Log line updated
+   //  log(&format!("[RUST SCAN_BLOCK] Block #{}, Coinbase Output 0 view_tag: {:?}",
+   //         block.height,
+    //        block.transactions.get(0).and_then(|tx| tx.outputs.get(0)).map(|out| out.view_tag.as_ref().and_then(|v| v.first().cloned())) // Adjusted logging slightly for Vec<u8>
+    //   )); // <-- Log line updated
      // STEP 1: Remove spent inputs ONCE at the start
      for tx in &block.transactions {
          for input in &tx.inputs {
@@ -249,7 +250,7 @@ impl Wallet {
      for (tx_idx, tx) in block.transactions.iter().enumerate() {
          for (out_idx, output) in tx.outputs.iter().enumerate() {
              let out_commitment_hex = hex::encode(&output.commitment[..8]);
-             log(&format!("[SCAN_BLOCK] Tx #{}, Output #{}: Checking output {}", tx_idx, out_idx, out_commitment_hex));
+        //     log(&format!("[SCAN_BLOCK] Tx #{}, Output #{}: Checking output {}", tx_idx, out_idx, out_commitment_hex));
 
              // Check if all necessary fields are present for stealth check
              // CORRECTED if let pattern: binds Option<Vec<u8>>
@@ -260,7 +261,7 @@ impl Wallet {
                  if let Some(&output_view_tag) = view_tag_bytes.first() {
                      // Now 'output_view_tag' is the u8 value we need
 
-                     log(&format!("[SCAN_BLOCK] Output {}: Has ephemeral_key, payload, and view_tag ({})", out_commitment_hex, output_view_tag));
+                //     log(&format!("[SCAN_BLOCK] Output {}: Has ephemeral_key, payload, and view_tag ({})", out_commitment_hex, output_view_tag));
 
                      if let Ok(compressed_point) = CompressedRistretto::from_slice(r_bytes) {
                          if let Some(r_point) = compressed_point.decompress() {
@@ -273,35 +274,35 @@ impl Wallet {
                              let expected_view_tag = stealth::derive_view_tag(&s_prime);
 
                              // Use the extracted u8 tag for comparison
-                             log(&format!("[SCAN_BLOCK] Output {}: Comparing tags - Expected={}, Output={}", out_commitment_hex, expected_view_tag, output_view_tag));
+                      //       log(&format!("[SCAN_BLOCK] Output {}: Comparing tags - Expected={}, Output={}", out_commitment_hex, expected_view_tag, output_view_tag));
 
                              // Use the extracted u8 tag for comparison
                              if expected_view_tag == output_view_tag {
-                                 log(&format!("[SCAN_BLOCK] Output {}: View tag MATCH! Attempting decryption...", out_commitment_hex));
+                             //    log(&format!("[SCAN_BLOCK] Output {}: View tag MATCH! Attempting decryption...", out_commitment_hex));
                                  // TAG MATCH! Now attempt full decryption
                                  if let Some((value, blinding)) = stealth::decrypt_stealth_output(&self.scan_priv, &r_point, payload) {
-                                     log(&format!("[SCAN_BLOCK] Output {}: Decryption SUCCESS! Value={}, Blinding={}", out_commitment_hex, value, hex::encode(blinding.to_bytes())));
+//                                     log(&format!("[SCAN_BLOCK] Output {}: Decryption SUCCESS! Value={}, Blinding={}", out_commitment_hex, value, hex::encode(blinding.to_bytes())));
                                      // Verify commitment matches
                                      let commitment = mimblewimble::commit(value, &blinding).unwrap();
                                      let commitment_bytes = commitment.compress().to_bytes().to_vec();
 
-                                     log(&format!("[SCAN_BLOCK] Output {}: Comparing commitments - Recalculated={}, Stored={}",
-                                         out_commitment_hex,
-                                         hex::encode(&commitment_bytes[..8]),
-                                         hex::encode(&output.commitment[..8])));
+                             //        log(&format!("[SCAN_BLOCK] Output {}: Comparing commitments - Recalculated={}, Stored={}",
+                               //          out_commitment_hex,
+                                 //        hex::encode(&commitment_bytes[..8]),
+                                   //      hex::encode(&output.commitment[..8])));
 
                                      if commitment_bytes != output.commitment {
                                          log(&format!("[SCAN_BLOCK] Output {}: View tag matched but commitment mismatch!", out_commitment_hex));
                                          continue;
                                      }
-                                     log(&format!("[SCAN_BLOCK] Output {}: Commitment MATCH!", out_commitment_hex)); 
+                                 //    log(&format!("[SCAN_BLOCK] Output {}: Commitment MATCH!", out_commitment_hex)); 
 
                                      // ✅ SIMPLIFIED: Just check if we don't already have it
                                      let already_owned = self.owned_utxos.iter().any(|u| u.commitment.to_bytes() == commitment_bytes.as_slice());
-                                     log(&format!("[SCAN_BLOCK] Output {}: Already owned? {}", out_commitment_hex, already_owned));
+                                 //    log(&format!("[SCAN_BLOCK] Output {}: Already owned? {}", out_commitment_hex, already_owned));
 
                                      if !already_owned {
-                                         log(&format!("[SCAN_BLOCK] Found incoming UTXO! Adding: Value={}, Commitment={}", value, out_commitment_hex));
+                                   //      log(&format!("[SCAN_BLOCK] Found incoming UTXO! Adding: Value={}, Commitment={}", value, out_commitment_hex));
                                          self.owned_utxos.push(WalletUtxo {
                                              value,
                                              blinding,
@@ -314,7 +315,7 @@ impl Wallet {
                                       log(&format!("[SCAN_BLOCK] Output {}: View tag matched but decryption FAILED.", out_commitment_hex));
                                  }
                              } else { // View tag mismatch
-                                 log(&format!("[SCAN_BLOCK] Output {}: View tag MISMATCH.", out_commitment_hex));
+                            //     log(&format!("[SCAN_BLOCK] Output {}: View tag MISMATCH.", out_commitment_hex));
                              }
                          } else {
                               log(&format!("[SCAN_BLOCK] Output {}: Failed to decompress ephemeral key R point.", out_commitment_hex));
@@ -338,7 +339,7 @@ impl Wallet {
          }
      }
      self.synced_height = *block.height;
-     log(&format!("[SCAN_BLOCK] Finished block #{}. Owned UTXOs: {}", block.height, self.owned_utxos.len()));
+  //   log(&format!("[SCAN_BLOCK] Finished block #{}. Owned UTXOs: {}", block.height, self.owned_utxos.len()));
  }
 
     
@@ -352,12 +353,12 @@ impl Wallet {
          fee: u64,
          recipient_scan_pub: &RistrettoPoint,
      ) -> PluribitResult<Transaction> {
-         log("=== CREATE_TRANSACTION DEBUG ===");
+     //    log("=== CREATE_TRANSACTION DEBUG ===");
          let total_needed = amount.checked_add(fee).ok_or_else(|| PluribitError::ValidationError("Amount plus fee overflowed".to_string()))?;
-         log(&format!("[WALLET] Amount={}, Fee={}", amount, fee));
-         log(&format!("[WALLET] Selecting UTXOs to cover {}...", total_needed));
-         log(&format!("[WALLET] Available UTXOs before selection: {}", self.owned_utxos.len()));
-
+     //    log(&format!("[WALLET] Amount={}, Fee={}", amount, fee));
+     //    log(&format!("[WALLET] Selecting UTXOs to cover {}...", total_needed));
+     //    log(&format!("[WALLET] Available UTXOs before selection: {}", self.owned_utxos.len()));
+//
          // --- START: ATOMIC COIN SELECTION WITH LOCK ORDERING ---
 
         // 1. Acquire necessary snapshots BEFORE locking PENDING_UTXOS
@@ -423,7 +424,7 @@ impl Wallet {
                      ));
                      return true; // Keep UTXO, it's immature
                  }
-                 log(&format!("[WALLET] Coinbase UTXO {} is mature.", hex::encode(&commitment_bytes[..8])));
+              //   log(&format!("[WALLET] Coinbase UTXO {} is mature.", hex::encode(&commitment_bytes[..8])));
              }
 
 
@@ -516,10 +517,10 @@ impl Wallet {
         
         let kernel_blinding = input_blinding_sum - output_blinding_sum;
         
-        log(&format!("[WALLET] Transaction blinding factors:"));
-        log(&format!("  blinding_sum_in: {}", hex::encode(input_blinding_sum.to_bytes())));
-        log(&format!("  blinding_sum_out: {}", hex::encode(output_blinding_sum.to_bytes())));
-        log(&format!("  kernel_blinding: {}", hex::encode(kernel_blinding.to_bytes())));
+  //      log(&format!("[WALLET] Transaction blinding factors:"));
+  //      log(&format!("  blinding_sum_in: {}", hex::encode(input_blinding_sum.to_bytes())));
+   //     log(&format!("  blinding_sum_out: {}", hex::encode(output_blinding_sum.to_bytes())));
+   //     log(&format!("  kernel_blinding: {}", hex::encode(kernel_blinding.to_bytes())));
 
         let kernel = TransactionKernel::new(kernel_blinding, fee, current_tip_height, timestamp)
                 .map_err(|e| {

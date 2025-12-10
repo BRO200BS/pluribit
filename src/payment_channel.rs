@@ -1375,31 +1375,40 @@ impl PaymentChannel {
     /// 2. Retrieve the encrypted blinding factor
     /// 3. Decrypt using the wallet's master key
     /// 4. Return the blindings for transaction construction
-    ///
-    /// For now, this is simulated with random blindings as a placeholder.
     fn retrieve_input_blindings_secure(
         &self,
         inputs: &[TransactionInput],
     ) -> PluribitResult<Vec<Scalar>> {
-        // PRODUCTION IMPLEMENTATION:
-        // let mut blindings = Vec::new();
-        // for input in inputs {
-        //     let utxo = self.wallet.get_utxo(&input.commitment)?;
-        //     let blinding = self.wallet.decrypt_blinding(&utxo.encrypted_blinding)?;
-        //     blindings.push(blinding);
-        // }
-        // Ok(blindings)
+        crate::log(&format!("[SECURITY] Looking up blindings for {} inputs", inputs.len()));
         
-        // SIMULATION (for compilation):
-        log(&format!("[SECURITY] Retrieving blindings for {} inputs from secure store", inputs.len()));
-        let mut rng = thread_rng();
-        let blindings: Vec<Scalar> = (0..inputs.len())
-            .map(|_| Scalar::random(&mut rng))
-            .collect();
+        // Lock the wallet session to find the UTXOs
+        let sessions = crate::wallet::WALLET_SESSIONS.lock().unwrap();
         
-        log("[SECURITY] ⚠️ Using simulated blindings - production must use actual UTXO blindings");
-        
-        Ok(blindings)
+        // Find the wallet that owns these inputs. 
+        // In a real app, the PaymentChannel struct should store the owner's wallet_id.
+        // For now, we search all active sessions.
+        for wallet in sessions.values() {
+            let mut blindings = Vec::new();
+            let mut all_found = true;
+
+            for input in inputs {
+                // Find UTXO matching this commitment
+                if let Some(utxo) = wallet.owned_utxos.iter().find(|u| u.commitment.to_bytes()[..] == input.commitment[..]) {
+                    blindings.push(utxo.blinding);
+                } else {
+                    all_found = false;
+                    break;
+                }
+            }
+
+            if all_found {
+                crate::log("[SECURITY] ✓ Found all input blindings in wallet");
+                return Ok(blindings);
+            }
+        }
+
+        crate::log("[SECURITY] ❌ Could not find wallet owning these inputs!");
+        Err(PluribitError::ValidationError("Inputs do not belong to any loaded wallet".into()))
     }
     
     /// Get funding blinding as bytes array for wide conversion
@@ -1949,80 +1958,60 @@ impl PaymentChannel {
     // ========================================================================
     
     /// Save channel state to persistent storage
-    ///
-    /// EXTERNAL INTERACTION: This calls into the JS bridge layer to persist
-    /// the channel state to LevelDB.
-    ///
-    /// In production, this would be an async call to js_bridge:
-    /// ```javascript
-    /// await db.put(`channel:${channelId}`, channelState);
-    /// ```
-    ///
-    /// For now, this is a synchronous placeholder that logs the save operation.
     fn save_channel_state(&self) -> PluribitResult<()> {
-        log(&format!("[PERSIST] Saving channel state: id={}, seq={}, state={:?}", 
-            hex::encode(&self.channel_id[..8]),
-            self.sequence_number,
-            self.state));
+        crate::log(&format!("[PERSIST] Saving channel state: id={}", hex::encode(&self.channel_id[..8])));
+
+        // Define the external JS function
+        #[cfg(target_arch = "wasm32")]
+        #[wasm_bindgen::prelude::wasm_bindgen]
+        extern "C" {
+            #[wasm_bindgen(js_name = save_channel)]
+            fn save_channel_raw(id: &str, data: &str) -> js_sys::Promise;
+        }
+
+        let serialized = serde_json::to_string(&self)
+            .map_err(|e| PluribitError::SerializationError(e.to_string()))?;
         
-        // PRODUCTION IMPLEMENTATION:
-        // #[cfg(target_arch = "wasm32")]
-        // {
-        //     use wasm_bindgen::prelude::*;
-        //     #[wasm_bindgen(module = "/js_bridge.cjs")]
-        //     extern "C" {
-        //         #[wasm_bindgen(catch)]
-        //         async fn save_channel(channel_id: &[u8], data: &JsValue) -> Result<JsValue, JsValue>;
-        //     }
-        //     
-        //     let serialized = serde_json::to_string(&self)
-        //         .map_err(|e| PluribitError::SerializationError(e.to_string()))?;
-        //     let js_value = JsValue::from_str(&serialized);
-        //     
-        //     wasm_bindgen_futures::spawn_local(async move {
-        //         match save_channel(&self.channel_id, &js_value).await {
-        //             Ok(_) => log("[PERSIST] ✓ Channel state saved"),
-        //             Err(e) => log(&format!("[PERSIST] ✗ Failed to save: {:?}", e)),
-        //         }
-        //     });
-        // }
-        
-        // SIMULATION (for compilation):
-        log(&format!("[PERSIST] ✓ Channel state saved (simulated) - key: channel:{}", 
-            hex::encode(&self.channel_id)));
-        
-        // In production, also save:
-        // - Individual commitment states: channel:{id}:commitment:{seq}
-        // - Revocation data: channel:{id}:revocation:{seq}
-        // - Channel index: Add to channel_index set
-        
+        let id_hex = hex::encode(&self.channel_id);
+
+        #[cfg(target_arch = "wasm32")]
+        wasm_bindgen_futures::spawn_local(async move {
+            let _ = wasm_bindgen_futures::JsFuture::from(save_channel_raw(&id_hex, &serialized)).await;
+        });
+
         Ok(())
     }
     
     /// Load channel state from persistent storage
     ///
-    /// EXTERNAL INTERACTION: Loads from LevelDB via JS bridge
-    ///
-    /// In production:
-    /// ```javascript
-    /// const state = await db.get(`channel:${channelId}`);
-    /// ```
-    pub fn load_channel_state(channel_id: &[u8; 32]) -> PluribitResult<Self> {
-        log(&format!("[PERSIST] Loading channel state for id={}", hex::encode(channel_id)));
+    pub async fn load_channel_state(channel_id: &[u8; 32]) -> PluribitResult<Self> {
+        let id_hex = hex::encode(channel_id);
         
-        // PRODUCTION IMPLEMENTATION:
-        // #[cfg(target_arch = "wasm32")]
-        // {
-        //     let js_value = load_channel(channel_id).await?;
-        //     let json_str = js_value.as_string()
-        //         .ok_or_else(|| PluribitError::DeserializationError("Invalid JS value".into()))?;
-        //     let channel: PaymentChannel = serde_json::from_str(&json_str)
-        //         .map_err(|e| PluribitError::DeserializationError(e.to_string()))?;
-        //     Ok(channel)
-        // }
-        
-        // SIMULATION:
-        Err(PluribitError::StateError("Channel state loading not implemented in simulation".into()))
+        #[cfg(target_arch = "wasm32")]
+        #[wasm_bindgen::prelude::wasm_bindgen]
+        extern "C" {
+            #[wasm_bindgen(js_name = load_channel)]
+            fn load_channel_raw(id: &str) -> js_sys::Promise;
+        }
+
+        #[cfg(target_arch = "wasm32")]
+        {
+            let result = wasm_bindgen_futures::JsFuture::from(load_channel_raw(&id_hex)).await
+                .map_err(|e| PluribitError::StateError(format!("{:?}", e)))?;
+            
+            if result.is_null() || result.is_undefined() {
+                return Err(PluribitError::StateError("Channel not found".into()));
+            }
+            
+            let json_str = result.as_string().unwrap_or_default();
+            let channel: PaymentChannel = serde_json::from_str(&json_str)
+                .map_err(|e| PluribitError::DeserializationError(e.to_string()))?;
+            
+            Ok(channel)
+        }
+
+        #[cfg(not(target_arch = "wasm32"))]
+        Err(PluribitError::NotSupported("Native load not impl".into()))
     }
     
     /// Broadcast a commitment transaction (unilateral close)

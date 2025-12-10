@@ -11,6 +11,7 @@ const { p2p } = pkg;
 // --- Setup ---
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+let isVerbose = false;
 
 const rl = readline.createInterface({
   input: process.stdin,
@@ -26,7 +27,9 @@ let isStaking = false;
 let isNetworkOnline = false;
 
 // --- Worker Setup ---
-const worker = new Worker(new URL('./worker.js', import.meta.url));
+const worker = new Worker(new URL('./worker.js', import.meta.url), {
+    env: process.env // Explicitly pass environment variables to worker
+});
 
 /**
  * Formats atomic bits into the Pluribit Binary Topology.
@@ -66,21 +69,53 @@ worker.on('message', (event) => {
 
     switch (type) {
         case 'log':
-            // Hide debug-level messages to reduce console noise
-            if (payload.level === 'debug' && payload.message.startsWith('[P2P]')) break;
+            const { level, message } = payload;
+
+            // 1. HARD FILTERS: Always ignore these unless we are deep debugging
+            // These are low-value spam from libraries or heartbeats
+            if (
+                message.includes('DHT') || 
+                message.includes('Tags') ||
+                message.includes('dial') && !message.includes('failed') || // Ignore dial attempts, keep failures
+                message.includes('Tried') // Mining nonces
+            ) {
+                if (!isVerbose) break;
+            }
+
+            // 2. REPETITIVE NOISE FILTER
+            // Hide routine sync messages even if they are marked INFO, unless verbose
+            const NOISY_PATTERNS = [
+                '[SYNC] No better chains found',
+                '[SYNC] Starting consensus check',
+                '[SYNC] Evaluated',
+                'Broadcasting tip',
+                'Peer verified' 
+            ];
+
+            if (!isVerbose && NOISY_PATTERNS.some(pattern => message.includes(pattern))) {
+                break;
+            }
+
+            // 3. LEVEL FILTER
+            // By default, hide DEBUG. Show everything else.
+            if (!isVerbose && level === 'debug') break;
 
             /** @type {Record<string, typeof chalk>} */
             const levelColor = {
+                debug: chalk.gray, // Make debug gray so it's less intrusive
                 info: chalk.blue,
                 success: chalk.green,
                 warn: chalk.yellow,
                 error: chalk.red,
             };
-            const colorFn = levelColor[payload.level] || chalk.white;
-            // Clear the current line, print the log, then redraw the prompt
+            
+            const colorFn = levelColor[level] || chalk.white;
+            const prefix = `[${colorFn(level.toUpperCase())}]`;
+
+            // Clear current line (prompt), print log, redraw prompt
             readline.clearLine(process.stdout, 0);
             readline.cursorTo(process.stdout, 0);
-            console.log(`[${colorFn(payload.level.toUpperCase())}] ${payload.message}`);
+            console.log(`${prefix} ${message}`);
             rl.prompt(true);
             break;
 
@@ -125,27 +160,35 @@ worker.on('message', (event) => {
             rl.prompt();
             break;
             
-         case 'peerList':
+        case 'peerList':
             console.log(chalk.cyan.bold('\nConnected Peers:'));
             if (payload.length === 0) {
                 console.log('  (None)');
             } else {
-                payload.forEach((/** @type {any} */ peer) => console.log(`  - ${peer.id}`));
+                // FIX: payload is an array of strings, so we log the item directly
+                payload.forEach((peerId) => console.log(`  - ${peerId}`));
             }
             rl.prompt(true);
-            break;        
+            break;     
                
         case 'walletLoaded':
             loadedWalletId = payload.walletId;
             console.log(chalk.green(`\nWallet '${payload.walletId}' loaded successfully.`));
-            console.log(chalk.yellow(`Balance: ${payload.balance} | Address: ${payload.address}`));
+            // --- FIX START: Use formatPluribit for consistency ---
+            const loadedBalanceBigInt = BigInt(payload.balance);
+            console.log(chalk.yellow(`Balance: ${formatPluribit(loadedBalanceBigInt)} | Address: ${payload.address}`));
+            // --- FIX END ---
             rl.prompt(true);
             break;
             
         case 'walletBalance':
-            // payload.balance is a string representation of u64 from Rust
+            // payload now has: wallet_id, balance, address
             const balBigInt = BigInt(payload.balance);
-            console.log(chalk.yellow(`\nBalance updated for ${payload.wallet_id}: ${formatPluribit(balBigInt)}`));
+            const addrStr = payload.address || "Unknown";
+            
+            console.log(chalk.cyan(`\nWallet: ${payload.wallet_id}`));
+            console.log(chalk.white(`Address: ${addrStr}`));
+            console.log(chalk.yellow(`Balance: ${formatPluribit(balBigInt)}`));
             rl.prompt(true);
             break;
         
@@ -214,12 +257,21 @@ async function handleCommand(command, args) {
             
             console.log(chalk.bold('\n--- Node & Chain ---'));
             console.log('  mine                          - Toggle mining on/off');
+            console.log(chalk.gray('  (Mining details are logged to ./pluribit-data/mining.log)'));
             console.log('  status                        - Show current chain status');
             console.log('  supply                        - Audit the total circulating supply');
             console.log('  peers                         - List connected P2P peers');
             console.log('  connect <multiaddr>           - Manually connect to a peer');
             console.log('  retry_sync                    - Manually force a sync');
             console.log('  exit                          - Shutdown the node');
+
+            console.log(chalk.bold('\n--- Payment Channels (L2) ---'));
+            console.log('  channel_open <pubkey> <my_amt> <their_amt> - Open a payment channel');
+            console.log('  channel_list                  - List all channels');
+            console.log('  channel_accept <proposal_id>  - Accept a channel proposal');
+            console.log('  channel_fund <channel_id>     - Fund an accepted channel');
+            console.log('  channel_pay <channel_id> <amt> - Make a payment in channel');
+            console.log('  channel_close <channel_id>    - Close and settle channel');
 
             console.log(chalk.bold('\n--- Atomic Swaps (L2) ---'));
             console.log('  swap_initiate <pubkey> <plb_amt> <btc_sats> <blocks> - Propose a swap');
@@ -230,9 +282,16 @@ async function handleCommand(command, args) {
            
             console.log(chalk.bold('\n--- Debug & Audit ---'));
             console.log('  inspect <height>              - Show full details of a block');
-            console.log('  audit                         - Run a detailed audit');
-            console.log('  verify                        - Verify total supply');
+            console.log('  audit                         - Run a detailed UTXO/supply audit');
+            console.log('  verify                        - Verify coinbase index consistency');
+            console.log('  purge_side                    - Purge orphaned side blocks');
+            console.log('  clear_side                    - Clear side block cache');
             console.log('\n');
+            break;
+
+        case 'verbose':
+            isVerbose = !isVerbose;
+            console.log(chalk.yellow(`Verbose logging: ${isVerbose ? 'ON' : 'OFF'}`));
             break;
 
         case 'audit':
@@ -322,18 +381,23 @@ async function handleCommand(command, args) {
             } else if (loadedWalletId === null) {
                 console.log(chalk.red('Error: No wallet loaded.'));
             } else {
-                const amt = Number(args[1]);
-                if (!Number.isFinite(amt) || amt <= 0) {
-                  console.log(chalk.red('Error: amount must be a positive finite number.'));
-                  break;
+                try {
+                    // FIX: Parse as BigInt to support full 64-bit range
+                    const amt = BigInt(args[1]);
+                    if (amt <= 0n) {
+                         console.log(chalk.red('Error: amount must be positive.'));
+                         break;
+                    }
+                    worker.postMessage({
+                        action: 'createTransaction',
+                        from: loadedWalletId,
+                        to: args[0],
+                        amount: amt, // Pass BigInt to worker
+                        fee: 1n      // Pass BigInt to worker
+                    });
+                } catch (e) {
+                    console.log(chalk.red('Error: Invalid amount format.'));
                 }
-                worker.postMessage({
-                    action: 'createTransaction',
-                    from: loadedWalletId,
-                    to: args[0],
-                    amount: amt,
-                    fee: 1
-                });
             }
             break;
 
@@ -362,7 +426,7 @@ async function handleCommand(command, args) {
             } else {
                 // 1. Create the Protobuf request object
                 const request = p2p.JSToRust_Command.create({
-                    balanceRequest: { walletId: loadedWalletId }
+                    getBalance: { walletId: loadedWalletId }
                 });
                 
                 // 2. Encode to Uint8Array
@@ -370,7 +434,7 @@ async function handleCommand(command, args) {
 
                 // 3. Send the RAW BYTES to the worker
                 worker.postMessage({
-                    action: 'handle_command', // A new, single action type
+                    action: 'handle_command',
                     payload: requestBytes 
                 });
             }

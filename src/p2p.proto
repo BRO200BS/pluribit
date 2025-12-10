@@ -112,6 +112,7 @@ message HashesResponse {
   repeated string hashes = 1;
   string request_id = 2;
   bool final_chunk = 3;
+  string target_peer = 4; 
 }
 
 // NEW: An empty message for tip requests. The presence of the message is the request.
@@ -129,6 +130,8 @@ message SyncMessage {
   oneof payload {
     TipRequest tip_request = 1;
     TipResponse tip_response = 2;
+    GetHashesRequest hashes_request = 3;
+    HashesResponse hashes_response = 4;
   }
 }
 
@@ -319,7 +322,7 @@ message P2pMessage {
 // RUST-LED ARCHITECTURE ADDITIONS
 //
 // These messages define the new, unified API bridge between the
-// JavaScript I/O layer (Node.js) and the Rust Wasm core (the "brain").
+// JavaScript I/O layer (Node.js) and the Rust Wasm core.
 //
 // ===================================================================
 
@@ -367,6 +370,15 @@ message JSToRust_Command {
     ChannelFundRequest channel_fund = 21;
     ChannelPayRequest channel_pay = 22;
     ChannelCloseRequest channel_close = 23;
+    
+    SubmitMiningCandidate submit_candidate = 24;
+    EvaluateConsensusRequest evaluate_consensus = 25;
+    InspectBlockRequest inspect_block = 26;
+    PurgeSideBlocksRequest purge_side_blocks = 27;
+    ClearSideBlocksRequest clear_side_blocks = 28;
+    
+    VerifySupplyRequest verify_supply = 29;
+    AuditDetailedRequest audit_detailed = 30;
   }
 }
 
@@ -419,7 +431,8 @@ message RustCommand {
     PublishP2pMessage p2p_publish = 2;
     SendDirectP2pMessage p2p_send_direct = 3;
     HangUpPeer p2p_hang_up = 4;
-
+    DialPeer dial_peer = 13;
+    
     // UI Updates
     UpdateUiBalance update_ui_balance = 5;
     UpdateUiMinerStatus update_ui_miner_status = 6;
@@ -431,7 +444,9 @@ message RustCommand {
     ControlMining control_mining = 12; 
   }
 }
-
+message DialPeer {
+  string multiaddr = 1;
+}
 // ===================================================================
 //
 // INNER MESSAGE DEFINITIONS
@@ -441,7 +456,8 @@ message RustCommand {
 // --- Definitions for JSToRust_Command ---
 
 message InitializeRequest {
-  // Empty - just signals the command
+    string network = 1;
+    string our_peer_id = 2;  // Our node's peer ID
 }
 
 message CreateWalletRequest {
@@ -601,6 +617,7 @@ message HangUpPeer {
 message UpdateUiBalance {
   string wallet_id = 1;
   string balance_string = 2; // Use string for u64 safety
+  string address = 3;
 }
 
 message UpdateUiMinerStatus {
@@ -629,4 +646,75 @@ message UiPeerList {
 
 message UiTotalSupply {
   string supply_string = 1;
+}
+
+// =============================================================================
+// BRIDGE MESSAGES (JS <-> RUST)
+// =============================================================================
+
+message SubmitMiningCandidate {
+  uint64 nonce = 1;
+  VrfProofData vrf_proof = 2;
+  VdfProofData vdf_proof = 3;
+  uint64 height = 4;
+  string prev_hash = 5;
+  bytes miner_pubkey = 6;
+  bytes vrf_threshold = 7;
+  uint64 vdf_iterations = 8;
+  uint64 job_id = 9;
+}
+
+message VrfProofData {
+  bytes gamma = 1;
+  bytes c = 2;
+  bytes s = 3;
+  bytes output = 4;
+}
+
+message VdfProofData {
+  bytes y = 1;
+  bytes pi = 2;
+  bytes l = 3;
+  bytes r = 4;
+  uint64 iterations = 5;
+}
+
+message EvaluateConsensusRequest {
+    // Empty
+}
+
+message UiSwapProposal {
+  string proposal_id = 1;
+  string from_peer = 2;
+  uint64 plb_amount = 3;
+  uint64 btc_amount = 4;
+}
+
+message UiChannelProposal {
+  string proposal_id = 1;
+  string from_peer = 2;
+  uint64 their_amount = 3;
+  uint64 my_amount = 4;
+}
+
+message MiningCandidate {
+    // Just a wrapper if needed, but SubmitMiningCandidate is likely enough
+}
+message InspectBlockRequest {
+  uint64 height = 1;
+}
+
+message PurgeSideBlocksRequest {
+  // Empty
+}
+
+message ClearSideBlocksRequest {
+  // Empty
+}
+message VerifySupplyRequest {
+  // Empty - triggers the verification logic
+}
+
+message AuditDetailedRequest {
+  // Empty - triggers the detailed audit logic
 }

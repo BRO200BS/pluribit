@@ -26,6 +26,12 @@ use crate::block::Block;
 use crate::constants::MAX_TX_POOL_SIZE;
 use crate::wasm_types::WasmU64;
 
+pub mod state;
+pub mod command_handlers;
+
+use state::{GLOBAL_STATE, GlobalState};
+use command_handlers::*;
+
 pub mod constants;
 pub mod wasm_types;
 
@@ -45,6 +51,12 @@ pub mod vrf;
 pub mod adaptor;
 pub mod payment_channel;
 pub mod atomic_swap;
+pub mod side_blocks;
+
+use crate::blockchain::{BLOCKCHAIN, UTXO_SET, COINBASE_INDEX};
+use crate::side_blocks::{SIDE_BLOCKS, SIDE_BLOCKS_LRU};
+use crate::transaction::TX_POOL;
+use crate::wallet::WALLET_SESSIONS;
 
 // RATIONALE: Prevent DoS via extremely deep reorgs
 const MAX_REORG_DEPTH: u64 = 1000000000; 
@@ -57,11 +69,7 @@ pub struct UTXO {
     pub index: u32,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct TransactionPool {
-    pub pending: Vec<transaction::Transaction>,
-    pub fee_total: u64,
-}
+
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UTXOSnapshot {
@@ -107,11 +115,7 @@ const MAX_SIDE_BLOCKS: usize = 10000;
 const MAX_UTXO_CACHE: usize = 10000;
 
 lazy_static! {
-    static ref BLOCKCHAIN: Mutex<blockchain::Blockchain> = Mutex::new(blockchain::Blockchain::new());
-    static ref TX_POOL: Mutex<TransactionPool> = Mutex::new(TransactionPool {
-        pending: Vec::new(),
-        fee_total: 0,
-    });
+
     static ref POW_TICKET_CACHE: Mutex<HashMap<[u8; 32], Vec<PoWTicket>>> =
         Mutex::new(HashMap::new());
     static ref MINING_METRICS: Mutex<MiningMetrics> =
@@ -125,13 +129,6 @@ lazy_static! {
         Mutex::new(HashMap::new());
     static ref UTXO_CACHE_LRU: Mutex<VecDeque<Vec<u8>>> = Mutex::new(VecDeque::new());
 
-    /// Side blocks that are not on the current canonical chain (by hash)
-    static ref SIDE_BLOCKS: Mutex<HashMap<String, Block>> = Mutex::new(HashMap::new());
-    static ref SIDE_BLOCKS_LRU: Mutex<VecDeque<String>> = Mutex::new(VecDeque::new());
-
-    // in-process wallet sessions (Rust owns keys/state)
-    static ref WALLET_SESSIONS: Mutex<HashMap<String, wallet::Wallet>> =
-        Mutex::new(HashMap::new());
 }
 
 
@@ -216,8 +213,8 @@ extern "C" {
     fn delete_canonical_block_raw(height: u64) -> js_sys::Promise;
     
     #[wasm_bindgen(js_name = setTipMetadata)]
-    fn set_tip_metadata_raw(height: u64, hash: &str) -> js_sys::Promise;
-
+    fn set_tip_metadata_raw(height: u64, hash: &str) -> js_sys::Promise;    
+   
     #[wasm_bindgen(js_name = save_reorg_marker)]
     fn save_reorg_marker_raw(marker: JsValue) -> js_sys::Promise;
     #[wasm_bindgen(js_name = clear_reorg_marker)]
@@ -229,7 +226,8 @@ extern "C" {
 
     #[wasm_bindgen(js_name = "save_coinbase_index")]
     fn save_coinbase_index_raw(commitment_hex: &str, height: u64) -> js_sys::Promise;
-
+    #[wasm_bindgen(js_name = "clear_all_coinbase_indexes")]
+    fn clear_all_coinbase_indexes_raw() -> js_sys::Promise;
     #[wasm_bindgen(js_name = "delete_coinbase_index")]
     fn delete_coinbase_index_raw(commitment_hex: &str) -> js_sys::Promise;
 
@@ -259,129 +257,351 @@ fn post_rust_commands(response: p2p::RustToJsCommandBatch) {
         log("FATAL: Failed to encode async RustToJs_CommandBatch");
     }
 }
-
+async fn clear_all_coinbase_indexes_from_db() -> Result<(), JsValue> {
+    let promise = clear_all_coinbase_indexes_raw();
+    wasm_bindgen_futures::JsFuture::from(promise).await?;
+    Ok(())
+}
 #[wasm_bindgen]
-pub fn handle_command(request_bytes: Vec<u8>) -> Vec<u8> {
-    // 1. Decode the command from JavaScript
-    let cmd_result = p2p::JsToRustCommand::decode(request_bytes.as_slice());
+pub fn handle_command(command_bytes: &[u8]) -> Vec<u8> {
+    // Decode the incoming Protobuf command from JS
+    let cmd = match p2p::JsToRustCommand::decode(command_bytes) {
+        Ok(c) => c,
+        Err(e) => {
+            crate::log(&format!("Failed to decode command: {:?}", e));
+            // Return empty response on failure (JS will ignore)
+            return Vec::new();
+        }
+    };
 
-    // 2. Create a response batch
     let mut response = p2p::RustToJsCommandBatch::default();
 
-    // 3. Match on the command
-    match cmd_result {
-        Ok(cmd) => {
-            match cmd.command {
-                // --- Wallet Management ---
-                Some(p2p::js_to_rust_command::Command::CreateWallet(req)) => {
-                    handle_create_wallet_internal(&mut response, req);
-                }
-                Some(p2p::js_to_rust_command::Command::RestoreWallet(req)) => {
-                    handle_restore_wallet_internal(&mut response, req);
-                }
-                Some(p2p::js_to_rust_command::Command::LoadWallet(req)) => {
-                    // This is async, so we spawn a future
-                    wasm_bindgen_futures::spawn_local(handle_load_wallet_internal(req));
-                    // Log that the command was *received*
-                    // The async task will send the real response later.
-                    add_log_command(&mut response, "info", "Wallet load started...");
-                }
-                Some(p2p::js_to_rust_command::Command::GetBalance(req)) => {
-                    handle_get_balance_internal(&mut response, req);
-                }
-                Some(p2p::js_to_rust_command::Command::CreateTransaction(req)) => {
-                    // This is async (wallet state must be exported)
-                    wasm_bindgen_futures::spawn_local(handle_create_transaction_internal(req));
-                    add_log_command(&mut response, "info", "Transaction creation initiated...");
-                }
+    // Dispatch to specific handler in command_handlers.rs
+    match cmd.command {
+        // Wallet Commands
+        Some(p2p::js_to_rust_command::Command::CreateWallet(req)) => {
+            wasm_bindgen_futures::spawn_local(async move { handle_create_wallet_internal(req).await; });
+        },
+        Some(p2p::js_to_rust_command::Command::RestoreWallet(req)) => {
+            wasm_bindgen_futures::spawn_local(async move { handle_restore_wallet_internal(req).await; });
+        },
+        Some(p2p::js_to_rust_command::Command::Initialize(req)) => {
+            handle_initialize_internal(req, &mut response);
+        },
+        Some(p2p::js_to_rust_command::Command::LoadWallet(req)) => {
+             wasm_bindgen_futures::spawn_local(async move { handle_load_wallet_internal(req).await; });
+        },
+        Some(p2p::js_to_rust_command::Command::GetBalance(req)) => handle_get_balance_internal(&mut response, req),
+        Some(p2p::js_to_rust_command::Command::CreateTransaction(req)) => {
+            wasm_bindgen_futures::spawn_local(async move { handle_create_transaction_internal(req).await; });
+        },
+        
+        // Miner Commands
+        Some(p2p::js_to_rust_command::Command::ToggleMiner(req)) => {
+            wasm_bindgen_futures::spawn_local(async move { handle_toggle_miner_internal(req).await; });
+        },
+        Some(p2p::js_to_rust_command::Command::SubmitCandidate(req)) => {
+            wasm_bindgen_futures::spawn_local(async move { handle_submit_mining_candidate_internal(req).await; });
+        },
 
-                // --- Node & Chain ---
-                Some(p2p::js_to_rust_command::Command::ToggleMiner(req)) => {
-                    // This is async (needs to get keys, start worker)
-                    wasm_bindgen_futures::spawn_local(handle_toggle_miner_internal(req));
-                }
-                Some(p2p::js_to_rust_command::Command::GetStatus(_)) => {
-                    handle_get_status_internal(&mut response);
-                }
-                Some(p2p::js_to_rust_command::Command::GetSupply(_)) => {
-                    // This is async
-                    wasm_bindgen_futures::spawn_local(handle_get_supply_internal());
-                }
-                Some(p2p::js_to_rust_command::Command::GetPeers(_)) => {
-                    handle_get_peers_internal(&mut response);
-                }
-                Some(p2p::js_to_rust_command::Command::ConnectPeer(req)) => {
-                    handle_connect_peer_internal(&mut response, req);
-                }
+        // Node/Sync Commands
+        Some(p2p::js_to_rust_command::Command::GetStatus(_)) => handle_get_status_internal(&mut response),
+        Some(p2p::js_to_rust_command::Command::GetSupply(_)) => {
+             wasm_bindgen_futures::spawn_local(async move { handle_get_supply_internal().await; });
+        },
+        Some(p2p::js_to_rust_command::Command::GetPeers(_)) => handle_get_peers_internal(&mut response),
+        Some(p2p::js_to_rust_command::Command::ConnectPeer(req)) => handle_connect_peer_internal(&mut response, req),
+        Some(p2p::js_to_rust_command::Command::SyncTick(req)) => {
+             wasm_bindgen_futures::spawn_local(async move { handle_sync_tick_internal(req).await; });
+        },
+        Some(p2p::js_to_rust_command::Command::EvaluateConsensus(_)) => {
+             wasm_bindgen_futures::spawn_local(async move { handle_evaluate_consensus().await; });
+        },
+        Some(p2p::js_to_rust_command::Command::InspectBlock(req)) => {
+             wasm_bindgen_futures::spawn_local(async move { handle_inspect_block_internal(req).await; });
+        },
+        Some(p2p::js_to_rust_command::Command::PurgeSideBlocks(_)) => {
+             handle_purge_side_blocks_internal(&mut response);
+        },
+        Some(p2p::js_to_rust_command::Command::ClearSideBlocks(_)) => {
+             handle_clear_side_blocks_internal(&mut response);
+        },
+        Some(p2p::js_to_rust_command::Command::VerifySupply(_)) => {
+             wasm_bindgen_futures::spawn_local(async move { handle_verify_supply_internal().await; });
+        },
+        Some(p2p::js_to_rust_command::Command::AuditDetailed(_)) => {
+             wasm_bindgen_futures::spawn_local(async move { handle_audit_detailed_internal().await; });
+        },
+        // Atomic Swaps
+        Some(p2p::js_to_rust_command::Command::SwapInitiate(req)) => {
+             wasm_bindgen_futures::spawn_local(async move { handle_swap_initiate_internal(req).await; });
+        },
+        Some(p2p::js_to_rust_command::Command::SwapList(_)) => handle_swap_list_internal(&mut response),
+        Some(p2p::js_to_rust_command::Command::SwapRespond(req)) => {
+             wasm_bindgen_futures::spawn_local(async move { handle_swap_respond_internal(req).await; });
+        },
+        Some(p2p::js_to_rust_command::Command::SwapClaim(req)) => {
+             wasm_bindgen_futures::spawn_local(async move { handle_swap_claim_internal(req).await; });
+        },
+        Some(p2p::js_to_rust_command::Command::SwapRefund(req)) => {
+             wasm_bindgen_futures::spawn_local(async move { handle_swap_refund_internal(req).await; });
+        },
 
-                // --- System Ticks ---
-                Some(p2p::js_to_rust_command::Command::SyncTick(req)) => {
-                    // This is async
-                    wasm_bindgen_futures::spawn_local(handle_sync_tick_internal(req));
-                }
+        // Payment Channels
+        Some(p2p::js_to_rust_command::Command::ChannelOpen(req)) => {
+             wasm_bindgen_futures::spawn_local(async move { handle_channel_open_internal(req).await; });
+        },
+        Some(p2p::js_to_rust_command::Command::ChannelList(_)) => handle_channel_list_internal(&mut response),
+        Some(p2p::js_to_rust_command::Command::ChannelAccept(req)) => {
+             wasm_bindgen_futures::spawn_local(async move { handle_channel_accept_internal(req).await; });
+        },
+        Some(p2p::js_to_rust_command::Command::ChannelFund(req)) => {
+             wasm_bindgen_futures::spawn_local(async move { handle_channel_fund_internal(req).await; });
+        },
+        Some(p2p::js_to_rust_command::Command::ChannelPay(req)) => {
+             wasm_bindgen_futures::spawn_local(async move { handle_channel_pay_internal(req).await; });
+        },
+        Some(p2p::js_to_rust_command::Command::ChannelClose(req)) => {
+             wasm_bindgen_futures::spawn_local(async move { handle_channel_close_internal(req).await; });
+        },
+        None => {},
+    }
 
-                // --- Atomic Swaps ---
-                Some(p2p::js_to_rust_command::Command::SwapInitiate(req)) => {
-                    wasm_bindgen_futures::spawn_local(handle_swap_initiate_internal(req));
-                }
-                Some(p2p::js_to_rust_command::Command::SwapList(_)) => {
-                    handle_swap_list_internal(&mut response);
-                }
-                Some(p2p::js_to_rust_command::Command::SwapRespond(req)) => {
-                    wasm_bindgen_futures::spawn_local(handle_swap_respond_internal(req));
-                }
-                Some(p2p::js_to_rust_command::Command::SwapClaim(req)) => {
-                    wasm_bindgen_futures::spawn_local(handle_swap_claim_internal(req));
-                }
-                Some(p2p::js_to_rust_command::Command::SwapRefund(req)) => {
-                    wasm_bindgen_futures::spawn_local(handle_swap_refund_internal(req));
-                }
+    response.encode_to_vec()
+}
 
-                // --- Payment Channels (Stubs) ---
-                Some(p2p::js_to_rust_command::Command::ChannelOpen(req)) => {
-                     wasm_bindgen_futures::spawn_local(handle_channel_open_internal(req));
-                }
-                Some(p2p::js_to_rust_command::Command::ChannelList(_)) => {
-                    handle_channel_list_internal(&mut response);
-                }
-                Some(p2p::js_to_rust_command::Command::ChannelAccept(req)) => {
-                    wasm_bindgen_futures::spawn_local(handle_channel_accept_internal(req));
-                }
-                Some(p2p::js_to_rust_command::Command::ChannelFund(req)) => {
-                    wasm_bindgen_futures::spawn_local(handle_channel_fund_internal(req));
-                }
-                Some(p2p::js_to_rust_command::Command::ChannelPay(req)) => {
-                    wasm_bindgen_futures::spawn_local(handle_channel_pay_internal(req));
-                }
-                Some(p2p::js_to_rust_command::Command::ChannelClose(req)) => {
-                    wasm_bindgen_futures::spawn_local(handle_channel_close_internal(req));
-                }
+// =============================================================================
+// PATCH FOR lib.rs: Replace the handle_p2p_message_internal function
+// Location: Around line 374
+// =============================================================================
 
-                // --- Catch-all ---
-                None | Some(_) => {
-                    add_log_command(&mut response, "error", "Received unknown or unimplemented command");
+async fn handle_p2p_message_internal(topic: String, data: Vec<u8>, from_peer: String) {
+    use prost::Message;
+    
+    let mut response = p2p::RustToJsCommandBatch::default();
+    
+    // Decode the P2P message
+    match p2p::P2pMessage::decode(data.as_slice()) {
+        Ok(msg) => {
+            if let Some(payload) = msg.payload {
+                match payload {
+                    // ===== BLOCKS =====
+                    p2p::p2p_message::Payload::Block(block) => {
+                        let from = from_peer.clone();
+                        wasm_bindgen_futures::spawn_local(async move {
+                            command_handlers::handle_block_received(block, Some(from)).await;
+                        });
+                    }
+                    
+                    // ===== BLOCK ANNOUNCEMENTS =====
+                    p2p::p2p_message::Payload::BlockAnnouncement(ann) => {
+                        let from = from_peer.clone();
+                        wasm_bindgen_futures::spawn_local(async move {
+                            command_handlers::handle_block_announcement(&from, ann).await;
+                        });
+                    }
+                    
+                    // ===== BLOCK REQUESTS =====
+                    p2p::p2p_message::Payload::BlockRequest(req) => {
+                        let from = from_peer.clone();
+                        wasm_bindgen_futures::spawn_local(async move {
+                            command_handlers::handle_block_request_received(&from, req).await;
+                        });
+                    }
+                    
+                    // ===== TRANSACTIONS =====
+                    p2p::p2p_message::Payload::Transaction(tx) => {
+                        wasm_bindgen_futures::spawn_local(async move {
+                            command_handlers::handle_transaction_received(tx).await;
+                        });
+                    }
+                    
+                    // ===== SYNC MESSAGES =====
+                    p2p::p2p_message::Payload::SyncMessage(sync_msg) => {
+                        if let Some(sync_payload) = sync_msg.payload {
+                            match sync_payload {
+                                p2p::sync_message::Payload::TipRequest(_) => {
+                                    command_handlers::handle_tip_request(&from_peer, &mut response);
+                                }
+                                p2p::sync_message::Payload::TipResponse(tip) => {
+                                    command_handlers::handle_tip_response(&from_peer, tip).await;
+                                }
+                                p2p::sync_message::Payload::HashesRequest(req) => {
+                                    let peer = from_peer.clone();
+                                    wasm_bindgen_futures::spawn_local(async move {
+                                        command_handlers::handle_hashes_request(peer, req).await;
+                                    });
+                                }
+                                p2p::sync_message::Payload::HashesResponse(resp) => {
+                                    let from = from_peer.clone();
+                                    wasm_bindgen_futures::spawn_local(async move {
+                                        command_handlers::handle_hash_response(&from, resp).await;
+                                    });
+                                }
+                            }
+                        }
+                    }
+                    
+                    // ===== DANDELION STEM =====
+                    p2p::p2p_message::Payload::DandelionStem(stem) => {
+                        // Extract transaction and handle
+                        if let Some(tx) = stem.transaction {
+                            wasm_bindgen_futures::spawn_local(async move {
+                                command_handlers::handle_transaction_received(tx).await;
+                            });
+                        }
+                    }
+                    
+                    // ===== L2: ATOMIC SWAPS =====
+                    p2p::p2p_message::Payload::SwapPropose(swap) => {
+                        let from = from_peer.clone();
+                        wasm_bindgen_futures::spawn_local(async move {
+                            command_handlers::handle_swap_proposal_received(&from, swap).await;
+                        });
+                    }
+                    p2p::p2p_message::Payload::SwapRespond(swap) => {
+                        let from = from_peer.clone();
+                        wasm_bindgen_futures::spawn_local(async move {
+                            command_handlers::handle_swap_response_received(&from, swap).await;
+                        });
+                    }
+                    p2p::p2p_message::Payload::SwapAliceAdaptorSig(sig) => {
+                        wasm_bindgen_futures::spawn_local(async move {
+                            command_handlers::handle_swap_adaptor_sig_received(sig).await;
+                        });
+                    }
+                    
+                    // ===== L2: PAYMENT CHANNELS =====
+                    p2p::p2p_message::Payload::ChannelPropose(proposal) => {
+                        let from = from_peer.clone();
+                        wasm_bindgen_futures::spawn_local(async move {
+                            command_handlers::handle_channel_proposal_received(&from, proposal).await;
+                        });
+                    }
+                    p2p::p2p_message::Payload::ChannelAccept(acc) => {
+                        wasm_bindgen_futures::spawn_local(async move {
+                            command_handlers::handle_channel_acceptance_received(acc).await;
+                        });
+                    }
+                    p2p::p2p_message::Payload::ChannelFundNonce(nonce) => {
+                        wasm_bindgen_futures::spawn_local(async move {
+                            command_handlers::handle_channel_fund_nonce_received(nonce).await;
+                        });
+                    }
+                    p2p::p2p_message::Payload::ChannelFundSig(sig) => {
+                        wasm_bindgen_futures::spawn_local(async move {
+                            command_handlers::handle_channel_fund_sig_received(sig).await;
+                        });
+                    }
+                    p2p::p2p_message::Payload::ChannelPayPropose(pay) => {
+                        wasm_bindgen_futures::spawn_local(async move {
+                            command_handlers::handle_channel_pay_proposal_received(pay).await;
+                        });
+                    }
+                    p2p::p2p_message::Payload::ChannelPayAccept(acc) => {
+                        wasm_bindgen_futures::spawn_local(async move {
+                            command_handlers::handle_channel_pay_acceptance_received(acc).await;
+                        });
+                    }
+                    p2p::p2p_message::Payload::ChannelCloseNonce(nonce) => {
+                        wasm_bindgen_futures::spawn_local(async move {
+                            command_handlers::handle_channel_close_nonce_received(nonce).await;
+                        });
+                    }
+                    p2p::p2p_message::Payload::ChannelCloseSig(sig) => {
+                        wasm_bindgen_futures::spawn_local(async move {
+                            command_handlers::handle_channel_close_sig_received(sig).await;
+                        });
+                    }
+                    
+                    // ===== BLOCK FILTERS (Light Client Support) =====
+                    p2p::p2p_message::Payload::GetBlockFilters(req) => {
+                        let from = from_peer.clone();
+                        wasm_bindgen_futures::spawn_local(async move {
+                            command_handlers::handle_block_filters_request(&from, req).await;
+                        });
+                    }
+                    p2p::p2p_message::Payload::BlockFiltersResponse(resp) => {
+                        wasm_bindgen_futures::spawn_local(async move {
+                            command_handlers::handle_block_filters_response(resp).await;
+                        });
+                    }
+                    
+                    // Catch-all for hash requests/responses (may come outside SyncMessage)
+                    p2p::p2p_message::Payload::GetHashesRequest(req) => {
+                        let peer = from_peer.clone();
+                        wasm_bindgen_futures::spawn_local(async move {
+                            command_handlers::handle_hashes_request(peer, req).await;
+                        });
+                    }
+                    p2p::p2p_message::Payload::HashesResponse(resp) => {
+                        let from = from_peer.clone();
+                        wasm_bindgen_futures::spawn_local(async move {
+                            command_handlers::handle_hash_response(&from, resp).await;
+                        });
+                    }
                 }
             }
-        },
-        Err(e) => {
-            add_log_command(&mut response, "error", &format!("Failed to decode JSToRust_Command: {}", e));
         }
+        Err(e) => {
+            command_handlers::add_log_command(&mut response, "warn",
+                &format!("Failed to decode P2P message from {}: {}", 
+                    &from_peer[from_peer.len().saturating_sub(8)..], e));
+        }
+    }
+    
+    if !response.commands.is_empty() {
+        command_handlers::post_async_response(response);
+    }
+}
+/// Creates a wallet session by restoring from JSON (stored in DB)
+#[wasm_bindgen]
+pub fn wallet_session_restore_from_json(wallet_id: &str, wallet_json: &str) -> Result<(), JsValue> {
+    let mut map = WALLET_SESSIONS.lock().map_err(|e| JsValue::from_str(&e.to_string()))?;
+    if map.contains_key(wallet_id) {
+        return Err(JsValue::from_str("Wallet session already exists for this ID"));
+    }
+    let w: wallet::Wallet = serde_json::from_str(wallet_json)
+        .map_err(|e| JsValue::from_str(&format!("Failed to deserialize wallet: {}", e)))?;
+    
+    map.insert(wallet_id.to_string(), w);
+    Ok(())
+}
+
+#[wasm_bindgen]
+pub fn handle_network_event(event_bytes: &[u8]) -> Vec<u8> {
+    let event = match p2p::JsToRustNetworkEvent::decode(event_bytes) {
+        Ok(e) => e,
+        Err(e) => {
+            crate::log(&format!("Failed to decode network event: {:?}", e));
+            return Vec::new();
+        }
+    };
+
+    let mut response = p2p::RustToJsCommandBatch::default();
+
+    match event.event {
+        Some(p2p::js_to_rust_network_event::Event::P2pMessage(msg)) => {
+            let topic = msg.topic.clone();
+            let data = msg.data.clone();
+            let from_peer = msg.from_peer_id.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                handle_p2p_message_internal(topic, data, from_peer).await;
+            });
+        },
+        Some(p2p::js_to_rust_network_event::Event::PeerConnected(peer)) => {
+            handle_peer_connected(&mut response, &peer.peer_id);
+        },
+        Some(p2p::js_to_rust_network_event::Event::PeerDisconnected(peer)) => {
+            handle_peer_disconnected(&mut response, &peer.peer_id);
+        },
+        Some(p2p::js_to_rust_network_event::Event::PeerVerified(peer)) => {
+            handle_peer_verified(&mut response, &peer.peer_id);
+        },
+        None => {},
     }
 
-    // 4. Encode the response batch and return it
-    let mut response_bytes = Vec::new();
-    match response.encode(&mut response_bytes) {
-        Ok(_) => {
-            // Success, response_bytes is now populated
-            response_bytes
-        }
-        Err(e) => {
-            // Fallback if response encoding fails
-            log(&format!("FATAL: Failed to encode RustToJs_CommandBatch: {}", e));
-            // Return an empty (but valid) encoded batch
-            p2p::RustToJsCommandBatch::default().encode_to_vec()
-        }
-    }
+    response.encode_to_vec()
 }
 
 // ===================================================================
@@ -417,38 +637,167 @@ fn wallet_session_get_balance_internal(wallet_id: &str) -> Result<u64, PluribitE
     Ok(w.balance())
 }
 
-fn handle_create_wallet_internal(response: &mut p2p::RustToJsCommandBatch, req: p2p::CreateWalletRequest) {
-    // This is synchronous, so we can just call the internal logic from src/lib.rs
+async fn handle_create_wallet_internal(req: p2p::CreateWalletRequest) {
+    let mut response = p2p::RustToJsCommandBatch::default();
+    
     match wallet_session_create_with_mnemonic(&req.wallet_id) {
         Ok(phrase) => {
-            add_log_command(response, "success", &format!("Wallet '{}' created.", req.wallet_id));
-            add_log_command(response, "warn", "IMPORTANT: Write down your 12-word mnemonic phrase:");
-            add_log_command(response, "info", &phrase);
-            add_log_command(response, "warn", "This phrase is required to restore your wallet.");
-            // TODO: We also need to tell JS to save the wallet blob
-            // let blob = wallet_session_export(&req.wallet_id).unwrap();
-            // add_save_wallet_command(response, req.wallet_id, blob);
+            // Mark wallet as active
+            {
+                let mut state = GLOBAL_STATE.lock().unwrap();
+                state.worker_flags.active_wallet_ids.insert(req.wallet_id.clone());
+            }
+            
+            add_log_command(&mut response, "success", &format!("Wallet '{}' created.", req.wallet_id));
+            add_log_command(&mut response, "warn", "IMPORTANT: Write down your 12-word mnemonic phrase:");
+            add_log_command(&mut response, "info", &phrase);
+            add_log_command(&mut response, "warn", "This phrase is required to restore your wallet.");
+            
+            // Save wallet to DB
+            let wallet_json = {
+                let sessions = WALLET_SESSIONS.lock().unwrap();
+                if let Some(wallet) = sessions.get(&req.wallet_id) {
+                    serde_json::to_string(wallet).ok()
+                } else {
+                    None
+                }
+            };
+            
+            if let Some(json) = wallet_json {
+                match save_wallet_to_db(&req.wallet_id, &json).await {
+                    Ok(_) => {
+                        add_log_command(&mut response, "debug", "Wallet saved to database.");
+                    }
+                    Err(e) => {
+                        add_log_command(&mut response, "error", &format!("Failed to save wallet to DB: {:?}", e));
+                    }
+                }
+            } else {
+                add_log_command(&mut response, "error", "Failed to serialize wallet for DB.");
+            }
+            
+            // Get balance and address
+            match get_wallet_balance(&req.wallet_id) {
+                Ok(balance) => {
+                    match get_wallet_address(&req.wallet_id) {
+                        Ok(address) => {
+                            add_ui_wallet_loaded_command(&mut response, &req.wallet_id, &balance.to_string(), &address);
+                        }
+                        Err(e) => {
+                            add_log_command(&mut response, "error", &format!("Failed to get wallet address: {}", e));
+                        }
+                    }
+                }
+                Err(e) => {
+                    add_log_command(&mut response, "error", &format!("Failed to get wallet balance: {}", e));
+                }
+            }
         }
         Err(e) => {
-            add_log_command(response, "error", &format!("Failed to create wallet: {:?}", e));
+            add_log_command(&mut response, "error", &format!("Failed to create wallet: {:?}", e));
         }
     }
+    
+    post_async_response(response);
 }
 
-fn handle_restore_wallet_internal(response: &mut p2p::RustToJsCommandBatch, req: p2p::RestoreWalletRequest) {
+
+fn add_ui_wallet_loaded_command(response: &mut p2p::RustToJsCommandBatch, wallet_id: &str, balance: &str, address: &str) {
+    response.commands.push(p2p::RustCommand {
+        command: Some(p2p::rust_command::Command::UiWalletLoaded(p2p::UiWalletLoaded {
+            wallet_id: wallet_id.to_string(),
+            balance: balance.to_string(),
+            address: address.to_string(),
+        })),
+    });
+}
+
+fn post_async_response(response: p2p::RustToJsCommandBatch) {
+    let response_bytes = response.encode_to_vec();
+    
+    #[wasm_bindgen]
+    extern "C" {
+        #[wasm_bindgen(js_name = postRustCommands)]
+        fn post_rust_commands_raw(bytes: &[u8]);
+    }
+    
+    post_rust_commands_raw(&response_bytes);
+}
+
+fn get_wallet_balance(wallet_id: &str) -> Result<u64, String> {
+    let map = WALLET_SESSIONS.lock().unwrap();
+    let w = map.get(wallet_id).ok_or("Wallet not loaded")?;
+    Ok(w.balance())
+}
+
+fn get_wallet_address(wallet_id: &str) -> Result<String, String> {
+    let map = WALLET_SESSIONS.lock().unwrap();
+    let w = map.get(wallet_id).ok_or("Wallet not loaded")?;
+    let scan_pub_bytes = w.scan_pub.compress().to_bytes();
+    address::encode_stealth_address(&scan_pub_bytes)
+        .map_err(|e| e.to_string())
+}
+
+async fn handle_restore_wallet_internal(req: p2p::RestoreWalletRequest) {
+    let mut response = p2p::RustToJsCommandBatch::default();
+    
     match wallet_session_restore_from_mnemonic(&req.wallet_id, &req.phrase) {
         Ok(_) => {
-            add_log_command(response, "success", &format!("Wallet '{}' restored successfully.", req.wallet_id));
-             // TODO: We also need to tell JS to save the wallet blob
-            // let blob = wallet_session_export(&req.wallet_id).unwrap();
-            // add_save_wallet_command(response, req.wallet_id, blob);
+            {
+                let mut state = GLOBAL_STATE.lock().unwrap();
+                state.worker_flags.active_wallet_ids.insert(req.wallet_id.clone());
+            }
+            
+            add_log_command(&mut response, "success", &format!("Wallet '{}' restored successfully.", req.wallet_id));
+            
+            // Save wallet to DB
+            let wallet_json = {
+                let sessions = WALLET_SESSIONS.lock().unwrap();
+                if let Some(wallet) = sessions.get(&req.wallet_id) {
+                    serde_json::to_string(wallet).ok()
+                } else {
+                    None
+                }
+            };
+            
+            if let Some(json) = wallet_json {
+                match save_wallet_to_db(&req.wallet_id, &json).await {
+                    Ok(_) => {
+                        add_log_command(&mut response, "debug", "Wallet saved to database.");
+                    }
+                    Err(e) => {
+                        add_log_command(&mut response, "error", &format!("Failed to save wallet to DB: {:?}", e));
+                    }
+                }
+            } else {
+                add_log_command(&mut response, "error", "Failed to serialize wallet for DB.");
+            }
+            
+            // Get balance and address
+            match get_wallet_balance(&req.wallet_id) {
+                Ok(balance) => {
+                    match get_wallet_address(&req.wallet_id) {
+                        Ok(address) => {
+                            add_ui_wallet_loaded_command(&mut response, &req.wallet_id, &balance.to_string(), &address);
+                        }
+                        Err(e) => {
+                            add_log_command(&mut response, "error", &format!("Failed to get wallet address: {}", e));
+                        }
+                    }
+                }
+                Err(e) => {
+                    add_log_command(&mut response, "error", &format!("Failed to get wallet balance: {}", e));
+                }
+            }
         }
         Err(e) => {
-             add_log_command(response, "error", &format!("Failed to restore wallet: {:?}", e));
+            add_log_command(&mut response, "error", &format!("Failed to restore wallet: {:?}", e));
         }
     }
+    
+    post_async_response(response);
 }
-
+/*
 async fn handle_load_wallet_internal(req: p2p::LoadWalletRequest) {
     let wallet_id = req.wallet_id;
     let mut response = p2p::RustToJsCommandBatch::default();
@@ -550,6 +899,8 @@ async fn handle_load_wallet_internal(req: p2p::LoadWalletRequest) {
     // 9. Send the complete batch of commands back to JS
     post_rust_commands(response);
 }
+*/
+
 
 // --- ADD these new/modified helper functions to src/lib.rs ---
 
@@ -596,137 +947,6 @@ fn wallet_session_get_address_internal(wallet_id: &str) -> Result<String, Plurib
         .map_err(|e| PluribitError::ValidationError(e.to_string()))
 }
 
-fn handle_get_balance_internal(response: &mut p2p::RustToJsCommandBatch, req: p2p::GetBalanceRequest) {
-    // This is the function we already refactored
-    match wallet_session_get_balance_internal(&req.wallet_id) {
-        Ok(balance) => {
-            response.commands.push(p2p::RustCommand {
-                command: Some(p2p::rust_command::Command::UpdateUiBalance(p2p::UpdateUiBalance {
-                    wallet_id: req.wallet_id,
-                    balance_string: balance.to_string(),
-                })),
-            });
-        }
-        Err(e) => {
-            add_log_command(response, "error", &format!("Failed to get balance: {}", e.to_string()));
-        }
-    }
-}
-
-async fn handle_create_transaction_internal(req: p2p::CreateTransactionRequest) {
-    log("TODO: Implement handle_create_transaction_internal");
-    // 1. Call wallet_session_send_to_stealth_internal
-    // 2. If OK, get the transaction bytes
-    // 3. Create a P2pMessage wrapper
-    // 4. Create a RustToJs_CommandBatch
-    // 5. Add a p2p_publish command to the batch
-    // 6. Send the batch back to JS
-}
-
-// --- Node & Chain Helpers ---
-
-async fn handle_toggle_miner_internal(req: p2p::ToggleMinerRequest) {
-    log("TODO: Implement handle_toggle_miner_internal");
-    // This is complex. It needs to:
-    // 1. Lock a new `GlobalState.miner_state`
-    // 2. If starting, get keys with `wallet_session_get_spend_privkey`
-    // 3. Create a `StartMining` command for JS to spin up the mining *worker*
-    // 4. If stopping, create a `StopMining` command
-}
-
-fn handle_get_status_internal(response: &mut p2p::RustToJsCommandBatch) {
-    log("TODO: Implement handle_get_status_internal");
-    // 1. Lock BLOCKCHAIN
-    // 2. Get height, work, etc.
-    // 3. Add LogMessage commands to response
-}
-
-async fn handle_get_supply_internal() {
-    log("TODO: Implement handle_get_supply_internal");
-    // 1. Call audit_total_supply
-    // 2. Create RustToJs_CommandBatch
-    // 3. Add UiTotalSupply command
-    // 4. Send batch back to JS
-}
-
-fn handle_get_peers_internal(response: &mut p2p::RustToJsCommandBatch) {
-    log("TODO: Implement handle_get_peers_internal");
-    // 1. This state is in JS (workerState.p2p.getConnectedPeers)
-    // 2. This command should be *removed* from Rust.
-    // 3. The JS 'peers' command in main.js should just call worker.postMessage({ action: 'getPeers' })
-    // 4. worker.js should handle it directly without calling Rust.
-    add_log_command(response, "warn", "GetPeers logic should be handled in worker.js, not Rust.");
-}
-
-fn handle_connect_peer_internal(response: &mut p2p::RustToJsCommandBatch, req: p2p::ConnectPeerRequest) {
-    log("TODO: Implement handle_connect_peer_internal");
-    // 1. This is an I/O command.
-    // 2. This command should be *removed* from Rust.
-    // 3. The JS 'connect' command in main.js should just call worker.postMessage({ action: 'connectPeer', ... })
-    // 4. worker.js should handle it directly without calling Rust.
-    add_log_command(response, "warn", "ConnectPeer logic should be handled in worker.js, not Rust.");
-}
-
-// --- System Tick Helpers ---
-
-async fn handle_sync_tick_internal(_req: p2p::SyncTickRequest) {
-    log("TODO: Implement handle_sync_tick_internal");
-    // This will replace the logic in worker.js `bootstrapSync`
-    // 1. Lock STATE
-    // 2. Check sync_state.status
-    // 3. If "IDLE", change to "CONSENSUS"
-    // 4. Create P2P message for TipRequest
-    // 5. Create RustToJs_CommandBatch
-    // 6. Add p2p_publish command
-    // 7. Send batch back to JS
-}
-
-// --- L2 Helpers (Stubs) ---
-
-async fn handle_swap_initiate_internal(req: p2p::SwapInitiateRequest) {
-    log("TODO: Implement handle_swap_initiate_internal");
-}
-
-fn handle_swap_list_internal(response: &mut p2p::RustToJsCommandBatch) {
-    log("TODO: Implement handle_swap_list_internal");
-}
-
-async fn handle_swap_respond_internal(req: p2p::SwapRespondRequest) {
-    log("TODO: Implement handle_swap_respond_internal");
-}
-
-async fn handle_swap_claim_internal(req: p2p::SwapClaimRequest) {
-    log("TODO: Implement handle_swap_claim_internal");
-}
-
-async fn handle_swap_refund_internal(req: p2p::SwapRefundRequest) {
-    log("TODO: Implement handle_swap_refund_internal");
-}
-
-async fn handle_channel_open_internal(req: p2p::ChannelOpenRequest) {
-    log("TODO: Implement handle_channel_open_internal");
-}
-
-fn handle_channel_list_internal(response: &mut p2p::RustToJsCommandBatch) {
-    log("TODO: Implement handle_channel_list_internal");
-}
-
-async fn handle_channel_accept_internal(req: p2p::ChannelAcceptRequest) {
-    log("TODO: Implement handle_channel_accept_internal");
-}
-
-async fn handle_channel_fund_internal(req: p2p::ChannelFundRequest) {
-    log("TODO: Implement handle_channel_fund_internal");
-}
-
-async fn handle_channel_pay_internal(req: p2p::ChannelPayRequest) {
-    log("TODO: Implement handle_channel_pay_internal");
-}
-
-async fn handle_channel_close_internal(req: p2p::ChannelCloseRequest) {
-    log("TODO: Implement handle_channel_close_internal");
-}
-
 
 
 
@@ -737,7 +957,7 @@ async fn save_coinbase_index_to_db(commitment: &[u8], height: u64) -> Result<(),
     Ok(())
 }
 
-async fn delete_coinbase_index_from_db(commitment: &[u8]) -> Result<(), JsValue> {
+pub async fn delete_coinbase_index_from_db(commitment: &[u8]) -> Result<(), JsValue> {
     let hex = hex::encode(commitment);
     wasm_bindgen_futures::JsFuture::from(delete_coinbase_index_raw(&hex)).await?;
     Ok(())
@@ -1016,8 +1236,7 @@ pub async fn force_reset_to_height(height: u64, hash: String) -> Result<(), JsVa
 
     // === ADDITION: Clear DB state before rebuilding ===
     clear_all_utxos_from_db().await?; 
-    // We assume you will add a `clear_all_coinbase_indexes_from_db()` to worker.js
-    // For now, we proceed, overwriting entries.
+    clear_all_coinbase_indexes_from_db().await?;
     log("[RECOVERY] Cleared old DB state.");
 
 
@@ -1132,7 +1351,7 @@ async fn load_block_from_db(height: u64) -> Result<Option<Block>, JsValue> {
     }
 }
 
-async fn load_blocks_from_db(start: u64, end: u64) -> Result<Vec<Block>, JsValue> {
+pub async fn load_blocks_from_db(start: u64, end: u64) -> Result<Vec<Block>, JsValue> {
     let promise = load_blocks_from_db_raw(start, end);
     let result_js = wasm_bindgen_futures::JsFuture::from(promise).await?;
     if result_js.is_null() || result_js.is_undefined() {
@@ -1163,656 +1382,10 @@ async fn get_tip_height_from_db() -> Result<u64, JsValue> {
     Ok(*wasm_u64) 
 }
 
-// Add these wasm_bindgen wrapper functions to your src/lib.rs file
-// These expose atomic swaps and payment channels to the JavaScript client
 
 
 
 
-
-// =============================================================================
-// ATOMIC SWAP BINDINGS
-// =============================================================================
-
-/// Initiate an atomic swap (Alice's side)
-/// 
-/// # Parameters
-/// - alice_secret_bytes: 32-byte secret key
-/// - alice_amount: Amount Alice is trading (in PLB)
-/// - bob_pubkey_bytes: Bob's public key (32 bytes)
-/// - bob_amount: Amount Bob is trading (e.g., in satoshis)
-/// - timeout_blocks: Number of blocks before timeout
-///
-/// # Returns
-/// Serialized AtomicSwap object
-#[wasm_bindgen]
-pub fn atomic_swap_initiate(
-    alice_secret_bytes: Vec<u8>,
-    alice_amount: u64,
-    bob_pubkey_bytes: Vec<u8>,
-    bob_amount: u64,
-    timeout_blocks: u64,
-) -> Result<JsValue, JsValue> {
-    if alice_secret_bytes.len() != 32 {
-        return Err(JsValue::from_str("Alice secret must be 32 bytes"));
-    }
-    
-    let mut alice_secret_arr = [0u8; 32];
-    alice_secret_arr.copy_from_slice(&alice_secret_bytes);
-    let alice_secret = Scalar::from_bytes_mod_order(alice_secret_arr);
-    
-    let swap = AtomicSwap::initiate(
-        &alice_secret,
-        alice_amount,
-        bob_pubkey_bytes,
-        bob_amount,
-        timeout_blocks,
-    ).map_err(|e| JsValue::from_str(&e.to_string()))?;
-    
-    serde_wasm_bindgen::to_value(&swap).map_err(|e| e.into())
-}
-
-/// Bob responds to an atomic swap offer
-///
-/// # Parameters
-/// - swap_json: Serialized AtomicSwap from initiate
-/// - bob_secret_bytes: 32-byte secret key
-/// - bob_btc_address: The P2WSH address of the HTLC
-/// - bob_btc_txid: The transaction ID that funded the HTLC
-/// - bob_btc_vout: The vout index of the HTLC
-/// - bob_adaptor_sig_bytes: Bob's adaptor signature (if needed by protocol)
-/// - bob_timeout_height: Bob's timeout block height
-///
-/// # Returns
-/// Updated AtomicSwap object
-#[wasm_bindgen]
-pub fn atomic_swap_respond(
-    swap_json: JsValue,
-    bob_secret_bytes: Vec<u8>,
-    bob_btc_address: String,      // FIX: Was bob_btc_commitment
-    bob_btc_txid: String,         // FIX: Added
-    bob_btc_vout: u32,            // FIX: Added
-    bob_adaptor_sig_bytes: Vec<u8>, // FIX: Renamed from bob_adaptor_sig
-    bob_timeout_height: u64,
-) -> Result<JsValue, JsValue> {
-    if bob_secret_bytes.len() != 32 {
-        return Err(JsValue::from_str("Bob secret must be 32 bytes"));
-    }
-    
-    let mut bob_secret_arr = [0u8; 32];
-    bob_secret_arr.copy_from_slice(&bob_secret_bytes);
-    let bob_secret = Scalar::from_bytes_mod_order(bob_secret_arr);
-    
-    let mut swap: AtomicSwap = serde_wasm_bindgen::from_value(swap_json)?;
-    
-    // FIX: Pass the correct arguments to the implementation [cite: 647]
-    swap.respond(
-        &bob_secret,
-        bob_btc_address,
-        bob_btc_txid,
-        bob_btc_vout,
-        bob_adaptor_sig_bytes,
-        bob_timeout_height,
-    ).map_err(|e| JsValue::from_str(&e.to_string()))?;
-    
-    serde_wasm_bindgen::to_value(&swap).map_err(|e| e.into())
-}
-
-/// Alice creates an adaptor signature for the swap
-///
-/// # Parameters
-/// - swap_json: Serialized AtomicSwap
-/// - alice_secret_bytes: 32-byte secret key
-///
-/// # Returns
-/// Updated AtomicSwap with adaptor signature
-#[wasm_bindgen]
-pub fn atomic_swap_alice_create_adaptor_sig(
-    swap_json: JsValue,
-    alice_secret_bytes: Vec<u8>,
-) -> Result<JsValue, JsValue> {
-    if alice_secret_bytes.len() != 32 {
-        return Err(JsValue::from_str("Alice secret must be 32 bytes"));
-    }
-    
-    let mut alice_secret_arr = [0u8; 32];
-    alice_secret_arr.copy_from_slice(&alice_secret_bytes);
-    let alice_secret = Scalar::from_bytes_mod_order(alice_secret_arr);
-    
-    let mut swap: AtomicSwap = serde_wasm_bindgen::from_value(swap_json)?;
-    
-    swap.alice_create_adaptor_signature(&alice_secret)
-        .map_err(|e| JsValue::from_str(&e.to_string()))?;
-    
-    serde_wasm_bindgen::to_value(&swap).map_err(|e| e.into())
-}
-
-/// Bob claims the swap (creates the claim transaction)
-///
-/// # Parameters
-/// - swap_json: Serialized AtomicSwap
-/// - bob_secret_bytes: Bob's secret key (32 bytes)
-/// - adaptor_secret_bytes: The adaptor secret (32 bytes)
-/// - bob_receive_address_bytes: Bob's receive address (32 bytes compressed Ristretto point)
-///
-/// # Returns
-/// The claim transaction that Bob can broadcast
-#[wasm_bindgen]
-pub fn atomic_swap_bob_claim(
-    swap_json: JsValue,
-    bob_secret_bytes: Vec<u8>,
-    adaptor_secret_bytes: Vec<u8>,
-    bob_receive_address_bytes: Vec<u8>,
-) -> Result<JsValue, JsValue> {
-    if bob_secret_bytes.len() != 32 {
-        return Err(JsValue::from_str("Bob secret must be 32 bytes"));
-    }
-    if adaptor_secret_bytes.len() != 32 {
-        return Err(JsValue::from_str("Adaptor secret must be 32 bytes"));
-    }
-    if bob_receive_address_bytes.len() != 32 {
-        return Err(JsValue::from_str("Receive address must be 32 bytes"));
-    }
-    
-    let mut bob_secret_arr = [0u8; 32];
-    bob_secret_arr.copy_from_slice(&bob_secret_bytes);
-    let bob_secret = Scalar::from_bytes_mod_order(bob_secret_arr);
-    
-    let mut adaptor_secret_arr = [0u8; 32];
-    adaptor_secret_arr.copy_from_slice(&adaptor_secret_bytes);
-    let adaptor_secret = Scalar::from_bytes_mod_order(adaptor_secret_arr);
-    
-    let bob_receive = CompressedRistretto::from_slice(&bob_receive_address_bytes)
-        .map_err(|_| JsValue::from_str("Invalid receive address"))?
-        .decompress()
-        .ok_or_else(|| JsValue::from_str("Failed to decompress receive address"))?;
-    
-    let swap: AtomicSwap = serde_wasm_bindgen::from_value(swap_json)?;
-    
-    let claim_tx = swap.bob_claim(&bob_secret, &adaptor_secret, &bob_receive)
-        .map_err(|e| JsValue::from_str(&e.to_string()))?;
-    
-    serde_wasm_bindgen::to_value(&claim_tx).map_err(|e| e.into())
-}
-
-/// Alice extracts the secret from Bob's completed signature
-///
-/// # Parameters
-/// - swap_json: Serialized AtomicSwap
-/// - bob_completed_signature_bytes: Bob's completed signature (32 bytes scalar)
-///
-/// # Returns
-/// Updated AtomicSwap with extracted secret
-#[wasm_bindgen]
-pub fn atomic_swap_alice_extract_secret(
-    swap_json: JsValue,
-    bob_completed_signature_bytes: Vec<u8>,
-) -> Result<JsValue, JsValue> {
-    if bob_completed_signature_bytes.len() != 32 {
-        return Err(JsValue::from_str("Signature must be 32 bytes"));
-    }
-    
-    let mut sig_arr = [0u8; 32];
-    sig_arr.copy_from_slice(&bob_completed_signature_bytes);
-    let bob_sig = Scalar::from_bytes_mod_order(sig_arr);
-    
-    let mut swap: AtomicSwap = serde_wasm_bindgen::from_value(swap_json)?;
-    
-    let _secret = swap.alice_extract_and_claim(&bob_sig)
-        .map_err(|e| JsValue::from_str(&e.to_string()))?;
-    
-    serde_wasm_bindgen::to_value(&swap).map_err(|e| e.into())
-}
-
-/// Alice creates a refund transaction (if timeout reached)
-///
-/// # Parameters
-/// - swap_json: Serialized AtomicSwap
-/// - alice_secret_bytes: Alice's secret key (32 bytes)
-/// - alice_receive_address_bytes: Alice's refund address (32 bytes compressed point)
-/// - current_height: Current blockchain height
-///
-/// # Returns
-/// Refund transaction
-#[wasm_bindgen]
-pub fn atomic_swap_refund_alice(
-    swap_json: JsValue,
-    alice_secret_bytes: Vec<u8>,
-    alice_receive_address_bytes: Vec<u8>,
-    current_height: u64,
-) -> Result<JsValue, JsValue> {
-    if alice_secret_bytes.len() != 32 {
-        return Err(JsValue::from_str("Alice secret must be 32 bytes"));
-    }
-    if alice_receive_address_bytes.len() != 32 {
-        return Err(JsValue::from_str("Receive address must be 32 bytes"));
-    }
-    
-    let mut alice_secret_arr = [0u8; 32];
-    alice_secret_arr.copy_from_slice(&alice_secret_bytes);
-    let alice_secret = Scalar::from_bytes_mod_order(alice_secret_arr);
-    
-    let alice_receive = CompressedRistretto::from_slice(&alice_receive_address_bytes)
-        .map_err(|_| JsValue::from_str("Invalid receive address"))?
-        .decompress()
-        .ok_or_else(|| JsValue::from_str("Failed to decompress receive address"))?;
-    
-    let swap: AtomicSwap = serde_wasm_bindgen::from_value(swap_json)?;
-    
-    let refund_tx = swap.refund_alice(&alice_secret, &alice_receive, current_height)
-        .map_err(|e| JsValue::from_str(&e.to_string()))?;
-    
-    serde_wasm_bindgen::to_value(&refund_tx).map_err(|e| e.into())
-}
-
-/// Get the current state of an atomic swap
-#[wasm_bindgen]
-pub fn atomic_swap_get_state(swap_json: JsValue) -> Result<String, JsValue> {
-    let swap: AtomicSwap = serde_wasm_bindgen::from_value(swap_json)?;
-    let state_str = match swap.state {
-        SwapState::Negotiating => "Negotiating",
-        SwapState::Committed => "Committed",
-        SwapState::Claimed => "Claimed",
-        SwapState::Refunded => "Refunded",
-        SwapState::Completed => "Completed",
-    };
-    Ok(state_str.to_string())
-}
-
-// =============================================================================
-// PAYMENT CHANNEL BINDINGS
-// =============================================================================
-
-/// Open a new payment channel (Party A initiates)
-///
-/// # Parameters
-/// - party_a_secret_bytes: Party A's secret key (32 bytes)
-/// - party_a_amount: Amount Party A contributes
-/// - party_b_pubkey_bytes: Party B's public key (32 bytes compressed point)
-/// - party_b_amount: Amount Party B contributes
-/// - dispute_period_blocks: Dispute resolution period in blocks
-///
-/// # Returns
-/// Serialized PaymentChannel object
-#[wasm_bindgen]
-pub fn payment_channel_open(
-    party_a_secret_bytes: Vec<u8>,
-    party_a_amount: u64,
-    party_b_pubkey_bytes: Vec<u8>,
-    party_b_amount: u64,
-    dispute_period_blocks: u64,
-) -> Result<JsValue, JsValue> {
-    if party_a_secret_bytes.len() != 32 {
-        return Err(JsValue::from_str("Party A secret must be 32 bytes"));
-    }
-    if party_b_pubkey_bytes.len() != 32 {
-        return Err(JsValue::from_str("Party B pubkey must be 32 bytes"));
-    }
-    
-    let mut party_a_secret_arr = [0u8; 32];
-    party_a_secret_arr.copy_from_slice(&party_a_secret_bytes);
-    let party_a_secret = Scalar::from_bytes_mod_order(party_a_secret_arr);
-    
-    let party_b_pubkey = CompressedRistretto::from_slice(&party_b_pubkey_bytes)
-        .map_err(|_| JsValue::from_str("Invalid Party B pubkey"))?
-        .decompress()
-        .ok_or_else(|| JsValue::from_str("Failed to decompress Party B pubkey"))?;
-    
-    // FIX (Error 1): The method is `propose`, not `open` 
-    // This also returns a proposal which must be sent to Party B.
-    let (channel, proposal) = PaymentChannel::propose(
-        &party_a_secret,
-        party_a_amount,
-        &party_b_pubkey,
-        party_b_amount,
-        dispute_period_blocks,
-    ).map_err(|e| JsValue::from_str(&e.to_string()))?;
-
-    // We must return both the channel state (for us) and the proposal (for them)
-    #[derive(Serialize)]
-    struct OpenResult {
-        channel: PaymentChannel,
-        proposal: crate::payment_channel::ChannelProposal,
-    }
-
-    let result = OpenResult { channel, proposal };
-    serde_wasm_bindgen::to_value(&result).map_err(|e| e.into())
-}
-
-/// Fund a payment channel (create on-chain funding transaction)
-///
-/// NOTE: This binding is now from ONE party's perspective. It requires
-/// arguments for the MuSig2 protocol.
-///
-/// # Parameters
-/// - channel_json: Serialized PaymentChannel
-/// - my_secret_bytes: This party's secret key (32 bytes)
-/// - my_party_str: "A" or "B"
-/// - my_nonce_bytes: This party's 32-byte secret nonce (r_i)
-/// - my_nonce_point_bytes: This party's 32-byte public nonce (R_i = r_i*G)
-/// - counterparty_nonce_point_bytes: The counterparty's 32-byte public nonce (R_j)
-/// - counterparty_pubkey_bytes: The counterparty's 32-byte public key (P_j)
-/// - my_funding_inputs_json: This party's inputs (serialized Vec<TransactionInput>)
-/// - current_height: Current blockchain height
-///
-/// # Returns
-/// Updated channel and MuSigKernelMetadata (which includes the partial signature)
-#[wasm_bindgen]
-pub fn payment_channel_fund(
-    channel_json: JsValue,
-    my_secret_bytes: Vec<u8>,
-    my_party_str: String,
-    my_nonce_bytes: Vec<u8>,
-    my_nonce_point_bytes: Vec<u8>,
-    counterparty_nonce_point_bytes: Vec<u8>,
-    counterparty_pubkey_bytes: Vec<u8>,
-    my_funding_inputs_json: JsValue,
-    current_height: u64,
-) -> Result<JsValue, JsValue> {
-    // FIX (Error 2): This function was completely refactored to support MuSig2.
-
-    // --- 1. Deserialize all arguments ---
-    let mut channel: PaymentChannel = serde_wasm_bindgen::from_value(channel_json)?;
-    let my_party = match my_party_str.as_str() {
-        "A" => Party::A,
-        "B" => Party::B,
-        _ => return Err(JsValue::from_str("my_party must be 'A' or 'B'")),
-    };
-
-    let my_secret = Scalar::from_bytes_mod_order(my_secret_bytes.try_into().map_err(|_| JsValue::from_str("my_secret must be 32 bytes"))?);
-    let my_nonce = Scalar::from_bytes_mod_order(my_nonce_bytes.try_into().map_err(|_| JsValue::from_str("my_nonce must be 32 bytes"))?);
-    
-    let my_nonce_point = CompressedRistretto::from_slice(&my_nonce_point_bytes)
-        .map_err(|_| JsValue::from_str("Invalid my_nonce_point"))?
-        .decompress().ok_or_else(|| JsValue::from_str("Failed to decompress my_nonce_point"))?;
-
-    let counterparty_nonce_point = CompressedRistretto::from_slice(&counterparty_nonce_point_bytes)
-        .map_err(|_| JsValue::from_str("Invalid counterparty_nonce_point"))?
-        .decompress().ok_or_else(|| JsValue::from_str("Failed to decompress counterparty_nonce_point"))?;
-
-    let counterparty_pubkey = CompressedRistretto::from_slice(&counterparty_pubkey_bytes)
-        .map_err(|_| JsValue::from_str("Invalid counterparty_pubkey"))?
-        .decompress().ok_or_else(|| JsValue::from_str("Failed to decompress counterparty_pubkey"))?;
-    
-    let my_funding_inputs = serde_wasm_bindgen::from_value(my_funding_inputs_json)?;
-
-    // --- 2. Call the correct implementation method ---
-    let (funding_tx, metadata) = channel.create_funding_transaction(
-        &my_secret,
-        my_party,
-        &my_nonce,
-        &my_nonce_point,
-        &counterparty_nonce_point,
-        &counterparty_pubkey,
-        my_funding_inputs,
-        current_height,
-    ).map_err(|e| JsValue::from_str(&e.to_string()))?;
-    
-    #[derive(serde::Serialize)]
-    struct FundResult {
-        channel: PaymentChannel,
-        funding_tx: crate::transaction::Transaction,
-        metadata: crate::payment_channel::MuSigKernelMetadata,
-    }
-    
-    let result = FundResult {
-        channel,
-        funding_tx,
-        metadata,
-    };
-    
-    serde_wasm_bindgen::to_value(&result).map_err(|e| e.into())
-}
-
-/// Make a payment within the channel (off-chain!)
-///
-/// # Parameters
-/// - channel_json: Serialized PaymentChannel
-/// - sender_str: "A" or "B"
-/// - sender_secret_bytes: Sender's 32-byte secret key
-/// - amount: Amount to send
-/// - current_height: Current blockchain height
-///
-/// # Returns
-/// PaymentProposal object to send to the counterparty
-#[wasm_bindgen]
-pub fn payment_channel_make_payment(
-    channel_json: JsValue,
-    sender_str: String,
-    sender_secret_bytes: Vec<u8>,
-    amount: u64,
-    current_height: u64,
-) -> Result<JsValue, JsValue> {
-    // FIX (Error 3): Renamed to `initiate_payment` and added missing args.
-    let mut channel: PaymentChannel = serde_wasm_bindgen::from_value(channel_json)?;
-    
-    let party = match sender_str.as_str() {
-        "A" => Party::A,
-        "B" => Party::B,
-        _ => return Err(JsValue::from_str("Sender must be 'A' or 'B'")),
-    };
-
-    let sender_secret = Scalar::from_bytes_mod_order(sender_secret_bytes.try_into().map_err(|_| JsValue::from_str("sender_secret must be 32 bytes"))?);
-
-    let proposal = channel.initiate_payment(party, &sender_secret, amount, current_height)
-        .map_err(|e| JsValue::from_str(&e.to_string()))?;
-    
-    // Return the proposal, not the channel
-    serde_wasm_bindgen::to_value(&proposal).map_err(|e| e.into())
-}
-
-/// Close a channel cooperatively
-///
-/// # Parameters
-/// - (See `payment_channel_fund` for MuSig2 parameter descriptions)
-///
-/// # Returns
-/// (Settlement transaction with placeholder kernel, MuSig metadata)
-#[wasm_bindgen]
-pub fn payment_channel_close_cooperative(
-    channel_json: JsValue,
-    my_secret_bytes: Vec<u8>,
-    my_party_str: String,
-    my_nonce_bytes: Vec<u8>,
-    my_nonce_point_bytes: Vec<u8>,
-    counterparty_nonce_point_bytes: Vec<u8>,
-    counterparty_pubkey_bytes: Vec<u8>,
-    current_height: u64,
-) -> Result<JsValue, JsValue> {
-    // FIX (Error 4): This function was completely refactored to support MuSig2.
-    
-    // --- 1. Deserialize all arguments ---
-    let mut channel: PaymentChannel = serde_wasm_bindgen::from_value(channel_json)?;
-    let my_party = match my_party_str.as_str() {
-        "A" => Party::A,
-        "B" => Party::B,
-        _ => return Err(JsValue::from_str("my_party must be 'A' or 'B'")),
-    };
-
-    let my_secret = Scalar::from_bytes_mod_order(my_secret_bytes.try_into().map_err(|_| JsValue::from_str("my_secret must be 32 bytes"))?);
-    let my_nonce = Scalar::from_bytes_mod_order(my_nonce_bytes.try_into().map_err(|_| JsValue::from_str("my_nonce must be 32 bytes"))?);
-    
-    let my_nonce_point = CompressedRistretto::from_slice(&my_nonce_point_bytes)
-        .map_err(|_| JsValue::from_str("Invalid my_nonce_point"))?
-        .decompress().ok_or_else(|| JsValue::from_str("Failed to decompress my_nonce_point"))?;
-
-    let counterparty_nonce_point = CompressedRistretto::from_slice(&counterparty_nonce_point_bytes)
-        .map_err(|_| JsValue::from_str("Invalid counterparty_nonce_point"))?
-        .decompress().ok_or_else(|| JsValue::from_str("Failed to decompress counterparty_nonce_point"))?;
-
-    let counterparty_pubkey = CompressedRistretto::from_slice(&counterparty_pubkey_bytes)
-        .map_err(|_| JsValue::from_str("Invalid counterparty_pubkey"))?
-        .decompress().ok_or_else(|| JsValue::from_str("Failed to decompress counterparty_pubkey"))?;
-
-    // --- 2. Call the correct implementation method ---
-    let (settlement_tx, metadata) = channel.close_cooperative(
-        &my_secret,
-        my_party,
-        &my_nonce,
-        &my_nonce_point,
-        &counterparty_nonce_point,
-        &counterparty_pubkey,
-        current_height,
-    ).map_err(|e| JsValue::from_str(&e.to_string()))?;
-    
-    #[derive(serde::Serialize)]
-    struct CloseResult {
-        channel: PaymentChannel,
-        settlement_tx: crate::transaction::Transaction,
-        metadata: crate::payment_channel::MuSigKernelMetadata,
-    }
-    
-    let result = CloseResult {
-        channel,
-        settlement_tx,
-        metadata,
-    };
-    
-    serde_wasm_bindgen::to_value(&result).map_err(|e| e.into())
-}
-
-/// Close a channel unilaterally (if other party disappears)
-///
-/// # Parameters
-/// - channel_json: Serialized PaymentChannel
-/// - party_str: "A" or "B" - which party is closing
-/// - my_kernel_blinding_bytes: 32-byte blinding scalar for *our* commitment tx
-/// - current_height: Current blockchain height
-///
-/// # Returns
-/// Commitment transaction to broadcast
-#[wasm_bindgen]
-pub fn payment_channel_close_unilateral(
-    channel_json: JsValue,
-    party_str: String,
-    my_kernel_blinding_bytes: Vec<u8>,
-    current_height: u64,
-) -> Result<JsValue, JsValue> {
-    // FIX (Error 5): Added missing arguments
-    let mut channel: PaymentChannel = serde_wasm_bindgen::from_value(channel_json)?;
-    
-    let party_enum = match party_str.as_str() {
-        "A" => Party::A,
-        "B" => Party::B,
-        _ => return Err(JsValue::from_str("Party must be 'A' or 'B'")),
-    };
-
-    let my_kernel_blinding = Scalar::from_bytes_mod_order(my_kernel_blinding_bytes.try_into().map_err(|_| JsValue::from_str("my_kernel_blinding must be 32 bytes"))?);
-    
-    let commitment_tx = channel.close_unilateral(
-        party_enum,
-        &my_kernel_blinding,
-        current_height
-    ).map_err(|e| JsValue::from_str(&e.to_string()))?;
-    
-    serde_wasm_bindgen::to_value(&commitment_tx).map_err(|e| e.into())
-}
-
-/// Claim penalty if other party cheated (published old state)
-///
-/// # Parameters
-/// - channel_json: Serialized PaymentChannel
-/// - cheater_commitment_json: The `CommitmentState` they published
-/// - my_secret_bytes: Our 32-byte secret key
-/// - my_party_str: "A" or "B"
-/// - current_height: Current blockchain height
-///
-/// # Returns
-/// Penalty transaction that claims all funds
-#[wasm_bindgen]
-pub fn payment_channel_claim_penalty(
-    channel_json: JsValue,
-    cheater_commitment_json: JsValue,
-    my_secret_bytes: Vec<u8>,
-    my_party_str: String,
-    current_height: u64,
-) -> Result<JsValue, JsValue> {
-    // FIX (Error 6): This binding had completely wrong arguments.
-    
-    let mut channel: PaymentChannel = serde_wasm_bindgen::from_value(channel_json)?;
-    let cheater_commitment: crate::payment_channel::CommitmentState = serde_wasm_bindgen::from_value(cheater_commitment_json)?;
-    
-    let my_secret = Scalar::from_bytes_mod_order(my_secret_bytes.try_into().map_err(|_| JsValue::from_str("my_secret must be 32 bytes"))?);
-    
-    let my_party = match my_party_str.as_str() {
-        "A" => Party::A,
-        "B" => Party::B,
-        _ => return Err(JsValue::from_str("my_party must be 'A' or 'B'")),
-    };
-    
-    let penalty_tx = channel.claim_penalty(
-        &cheater_commitment,
-        &my_secret,
-        my_party,
-        current_height
-    ).map_err(|e| JsValue::from_str(&e.to_string()))?;
-    
-    serde_wasm_bindgen::to_value(&penalty_tx).map_err(|e| e.into())
-}
-
-/// Get channel statistics
-///
-/// # Parameters
-/// - channel_json: Serialized PaymentChannel
-///
-/// # Returns
-/// ChannelStats object with current state info
-#[wasm_bindgen]
-pub fn payment_channel_get_stats(channel_json: JsValue) -> Result<JsValue, JsValue> {
-    let channel: PaymentChannel = serde_wasm_bindgen::from_value(channel_json)?;
-    let stats = channel.stats();
-    serde_wasm_bindgen::to_value(&stats).map_err(|e| e.into())
-}
-
-/// Get the current state of a payment channel
-#[wasm_bindgen]
-pub fn payment_channel_get_state(channel_json: JsValue) -> Result<String, JsValue> {
-    let channel: PaymentChannel = serde_wasm_bindgen::from_value(channel_json)?;
-    let state_str = match channel.state {
-        // FIX: Renamed from Opening
-        ChannelState::Negotiating => "Negotiating", 
-        // FIX: Added missing variant
-        ChannelState::ReadyToFund => "ReadyToFund", 
-        // FIX: Destructure struct variant
-        ChannelState::PendingOpen { .. } => "PendingOpen", 
-        ChannelState::Open => "Open",
-        ChannelState::Closing => "Closing",
-        // FIX: Destructure struct variant
-        ChannelState::Disputed { .. } => "Disputed", 
-        // FIX: Destructure struct variant
-        ChannelState::Closed { .. } => "Closed", 
-    };
-    Ok(state_str.to_string())
-}
-
-/// Get channel balances
-///
-/// # Parameters
-/// - channel_json: Serialized PaymentChannel
-///
-/// # Returns
-/// Object with party_a_balance and party_b_balance
-#[wasm_bindgen]
-pub fn payment_channel_get_balances(channel_json: JsValue) -> Result<JsValue, JsValue> {
-    let channel: PaymentChannel = serde_wasm_bindgen::from_value(channel_json)?;
-    
-    #[derive(serde::Serialize)]
-    struct Balances {
-        party_a_balance: u64,
-        party_b_balance: u64,
-        total_capacity: u64,
-        sequence_number: u64,
-    }
-    
-    let balances = Balances {
-        party_a_balance: channel.party_a_balance,
-        party_b_balance: channel.party_b_balance,
-        total_capacity: channel.total_capacity,
-        sequence_number: channel.sequence_number,
-    };
-    
-    serde_wasm_bindgen::to_value(&balances).map_err(|e| e.into())
-}
 
 
 
@@ -1897,67 +1470,6 @@ pub async fn wallet_session_scan_chain(wallet_id: &str) -> Result<(), JsValue> {
     wallet_session_scan_range(wallet_id, 0, tip_height).await
 }
 
-#[wasm_bindgen]
-pub async fn calculate_next_difficulty_params(current_height_js: JsValue) -> Result<JsValue, JsValue> {
-    let current_height_wasm: WasmU64 = serde_wasm_bindgen::from_value(current_height_js)?;
-    let current_height = *current_height_wasm;
-    let next_height = current_height + 1;
-
-    // Fetch current parameters as a fallback or if no adjustment is needed
-    let (current_vrf_threshold, current_vdf_iterations) = {
-        if let Some(tip_block) = load_block_from_db(current_height).await? {
-            (tip_block.vrf_threshold, tip_block.vdf_iterations)
-        } else if current_height == 0 {
-            // Special case for genesis
-            let genesis = Block::genesis();
-            (genesis.vrf_threshold, genesis.vdf_iterations)
-        } else {
-            // Fallback if tip block is missing (should ideally not happen)
-            log(&format!("[WARN] Could not load tip block {} to get current difficulty params", current_height));
-            // FIX: Actually return an error instead of using potentially wrong defaults
-            return Err(JsValue::from_str(&format!(
-                "Cannot calculate difficulty: tip block at height {} not found", 
-                current_height
-            )));
-        }
-    };
-
-    let (next_vrf_threshold, next_vdf_iterations) = if next_height > 0 && next_height % DIFFICULTY_ADJUSTMENT_INTERVAL == 0 {
-        log(&format!("[DIFFICULTY] Calculating adjustment for upcoming block #{}", next_height));
-        // Adjustment needed for the *next* block
-        let start_height = next_height.saturating_sub(DIFFICULTY_ADJUSTMENT_INTERVAL); // Start of the interval just completed
-        let end_height = next_height - 1; // End of the interval (the current tip)
-
-        let start_block = load_block_from_db(start_height).await?
-            .ok_or_else(|| JsValue::from_str(&format!("Missing start block {} for difficulty adjustment", start_height)))?;
-        let end_block = load_block_from_db(end_height).await?
-             .ok_or_else(|| JsValue::from_str(&format!("Missing end block {} for difficulty adjustment", end_height)))?; // Should be the current tip block
-
-        // Use the pure calculation function
-        Blockchain::calculate_next_difficulty(
-            &end_block,
-            &start_block,
-            current_vrf_threshold, // Pass the params used during the interval
-            current_vdf_iterations
-        )
-    } else {
-        // No adjustment needed, use current parameters
-        (current_vrf_threshold, current_vdf_iterations)
-    };
-
-    #[derive(Serialize)]
-    struct NextParams {
-        vrf_threshold: Vec<u8>,
-        vdf_iterations: u64,
-    }
-
-    let params = NextParams {
-        vrf_threshold: next_vrf_threshold.to_vec(),
-        vdf_iterations: *next_vdf_iterations,
-    };
-
-    serde_wasm_bindgen::to_value(&params).map_err(|e| e.into())
-}
 
 /// Create a tx from a session wallet to a stealth address, update session state, return tx.
 #[wasm_bindgen]
@@ -2225,9 +1737,9 @@ pub async fn init_blockchain_from_db() -> Result<JsValue, JsValue> {
     
     // 1. Clear all in-memory state
     { 
-        blockchain::UTXO_SET.lock().unwrap().clear();
-        blockchain::COINBASE_INDEX.lock().unwrap().clear();
-        let mut tx_pool = TX_POOL.lock().unwrap();
+        blockchain::UTXO_SET.lock().unwrap_or_else(|p| p.into_inner()).clear();
+        blockchain::COINBASE_INDEX.lock().unwrap_or_else(|p| p.into_inner()).clear();
+        let mut tx_pool = TX_POOL.lock().unwrap_or_else(|p| p.into_inner());
         tx_pool.pending.clear();
         tx_pool.fee_total = 0;
     }
@@ -2237,7 +1749,7 @@ pub async fn init_blockchain_from_db() -> Result<JsValue, JsValue> {
     let utxo_map_native: HashMap<String, TransactionOutput> = serde_wasm_bindgen::from_value(utxo_map_js)?;
     
     { // Scope for lock
-        let mut utxo_set = blockchain::UTXO_SET.lock().unwrap();
+        let mut utxo_set = blockchain::UTXO_SET.lock().unwrap_or_else(|p| p.into_inner());
         for (hex_key, output) in utxo_map_native {
              let commitment_bytes = hex::decode(hex_key)
                 .map_err(|e| JsValue::from_str(&format!("Invalid hex in UTXO key: {}", e)))?;
@@ -2249,7 +1761,7 @@ pub async fn init_blockchain_from_db() -> Result<JsValue, JsValue> {
     // 3. Load COINBASE_INDEX from DB (using new JS bridge function)
     let coinbase_map_native = load_all_coinbase_indexes_from_db().await?;
     { // Scope for lock
-        let mut coinbase_index = blockchain::COINBASE_INDEX.lock().unwrap();
+        let mut coinbase_index = blockchain::COINBASE_INDEX.lock().unwrap_or_else(|p| p.into_inner());
         *coinbase_index = coinbase_map_native;
         log(&format!("[RUST] Rebuilt Coinbase Index from DB, size: {}", coinbase_index.len()));
     }
@@ -2297,6 +1809,7 @@ pub struct ReorgPlan {
     pub new_tip_hash: String,
     pub new_height: u64,
     pub requests: Vec<String>,     // missing parent hashes we still need
+    pub should_switch: bool,       
 }
 
 fn mempool_hygiene_after_block(block: &Block) {
@@ -2309,7 +1822,7 @@ fn mempool_hygiene_after_block(block: &Block) {
         .collect();
     pool.pending.retain(|t| !t.kernels.iter().any(|k| mined_excesses.contains(&k.excess)));
 
-    let utxos = blockchain::UTXO_SET.lock().unwrap();
+    let utxos = blockchain::UTXO_SET.lock().unwrap_or_else(|p| p.into_inner());
     pool.pending.retain(|t| t.inputs.iter().all(|inp| utxos.contains_key(&inp.commitment)));
     pool.fee_total = pool.pending.iter().map(|t| t.total_fee()).sum();
 }
@@ -2317,14 +1830,14 @@ fn mempool_hygiene_after_block(block: &Block) {
 fn have_block(hash: &str) -> bool {
     let (tip_hash, _) = tip_hash_and_height();
     if tip_hash == hash { return true; } // Quick check for tip
-    let side = SIDE_BLOCKS.lock().unwrap();
+    let side = SIDE_BLOCKS.lock().unwrap_or_else(|p| p.into_inner());
     side.contains_key(hash)
 }
 
 
 fn store_side_block(hash: String, block: Block) {
-    let mut blocks = SIDE_BLOCKS.lock().unwrap();
-    let mut lru = SIDE_BLOCKS_LRU.lock().unwrap();
+    let mut blocks = SIDE_BLOCKS.lock().unwrap_or_else(|p| p.into_inner());
+    let mut lru = SIDE_BLOCKS_LRU.lock().unwrap_or_else(|p| p.into_inner());
 
     // RATIONALE: If at capacity, remove least recently used block
     // This is now just a cache - the DB is the source of truth
@@ -2351,7 +1864,7 @@ fn store_side_block(hash: String, block: Block) {
 
 async fn get_block_any_async(hash: &str) -> Result<Option<Block>, JsValue> {
     // Check memory cache first
-    if let Some(block) = SIDE_BLOCKS.lock().unwrap().get(hash).cloned() {
+    if let Some(block) = SIDE_BLOCKS.lock().unwrap_or_else(|p| p.into_inner()).get(hash).cloned() {
         return Ok(Some(block));
     }
     
@@ -2361,11 +1874,11 @@ async fn get_block_any_async(hash: &str) -> Result<Option<Block>, JsValue> {
 
 // Keep the sync version for compatibility but it only checks memory
 fn get_block_any(hash: &str) -> Option<Block> {
-    SIDE_BLOCKS.lock().unwrap().get(hash).cloned()
+    SIDE_BLOCKS.lock().unwrap_or_else(|p| p.into_inner()).get(hash).cloned()
 }
 
  fn tip_hash_and_height() -> (String, u64) {
-     let chain = BLOCKCHAIN.lock().unwrap();
+     let chain = BLOCKCHAIN.lock().unwrap_or_else(|p| p.into_inner());
     (chain.tip_hash.clone(), *chain.current_height)
  }
 
@@ -2486,103 +1999,194 @@ async fn validate_side_or_orphan(
 #[wasm_bindgen(js_name = "ingest_block_bytes")]
 pub async fn ingest_block_bytes(block_bytes: Vec<u8>) -> Result<JsValue, JsValue> {
     
-    // 1. Decode and compute hash
-    let p2p_block = p2p::Block::decode(&block_bytes[..])
-        .map_err(|e| JsValue::from_str(&format!("bad block proto: {e}")))?;
+    // -------------------------------------------------------------------------
+    // PHASE 1: PREPARATION & PARSING (No Locks)
+    // -------------------------------------------------------------------------
+    
+    // 1. Decode the raw bytes from P2P
+    let p2p_block = match p2p::Block::decode(&block_bytes[..]) {
+        Ok(b) => b,
+        Err(e) => return Ok(serde_wasm_bindgen::to_value(&IngestResult::Invalid { 
+            reason: format!("bad block proto: {}", e) 
+        }).unwrap()),
+    };
+    
+    // 2. Convert to internal struct and compute hash
     let mut block: Block = Block::from(p2p_block);
     block.hash = block.compute_hash();
+    
+    let block_height = *block.height;
 
-    // 2. Fast validation (synchronous, no DB)
-    let (tip_hash, tip_height) = tip_hash_and_height();
-    let decision = validate_block_for_ingestion(&block, &tip_hash, tip_height)
+    // 3. Get current tip snapshot (Locks briefly, then releases)
+    let (current_tip_hash, current_tip_height) = tip_hash_and_height();
+
+    // -------------------------------------------------------------------------
+    // PHASE 2: ASYNC PRE-CALCULATION (DB Reads - NO LOCKS HELD)
+    // -------------------------------------------------------------------------
+    // Rationale: We MUST load data for difficulty and MTP checks before acquiring
+    // the blockchain lock. Doing async DB calls while holding a Mutex panics in WASM.
+
+    // A. Pre-load blocks for Difficulty Adjustment if needed
+    let difficulty_data = if block_height > 0 && block_height % DIFFICULTY_ADJUSTMENT_INTERVAL == 0 {
+        let start_height = block_height.saturating_sub(DIFFICULTY_ADJUSTMENT_INTERVAL);
+        let end_height = block_height - 1;
+
+        let start_block = load_block_from_db(start_height).await?
+            .ok_or_else(|| JsValue::from_str(&format!("Missing start block {} for retarget", start_height)))?;
+        let end_block = load_block_from_db(end_height).await?
+            .ok_or_else(|| JsValue::from_str(&format!("Missing end block {} for retarget", end_height)))?;
+            
+        Some((start_block, end_block))
+    } else {
+        None
+    };
+
+    // B. Pre-load timestamps for MTP (Median Time Past) check
+    let mtp_timestamp = if block_height > crate::constants::MTP_WINDOW as u64 {
+        let mut timestamps = Vec::new();
+        let start = block_height - crate::constants::MTP_WINDOW as u64;
+        let end = block_height;
+        
+        // We can use the load_blocks_from_db helper to fetch a range efficiently
+        let blocks = load_blocks_from_db(start, end).await?;
+        for b in blocks {
+            timestamps.push(b.timestamp);
+        }
+        
+        if !timestamps.is_empty() {
+            timestamps.sort_unstable();
+            Some(timestamps[timestamps.len() / 2])
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    // 4. Initial Validation Decision (Pure Logic)
+    let decision = validate_block_for_ingestion(&block, &current_tip_hash, current_tip_height)
         .map_err(|e| JsValue::from_str(&e))?;
 
-    // 3. Handle decision
+    // -------------------------------------------------------------------------
+    // PHASE 3: EXECUTION (Match Decision)
+    // -------------------------------------------------------------------------
+
     match decision {
-        ValidationDecision::ExtendCanonical { expected_params } => {
-            // Apply block to chain
-            {
-                let mut chain = BLOCKCHAIN.lock().unwrap();
+        ValidationDecision::ExtendCanonical { expected_params: _ignored_initial } => {
+            
+            // A. PERSISTENCE FIRST (Optimistic Write)
+            // Save block to DB immediately so it's available. If memory update fails, 
+            // the DB might have an extra block but it won't be in the chain tip index.
+            save_block_to_db(block.clone()).await?;
 
-                // Re-calculate difficulty if needed
-                let (vrf_threshold, vdf_iterations) = if *block.height > 0 
-                    && *block.height % DIFFICULTY_ADJUSTMENT_INTERVAL == 0 
-                {
-                    let start_height = block.height.saturating_sub(DIFFICULTY_ADJUSTMENT_INTERVAL);
-                    let end_height = *block.height - 1;
+            // B. STATE UPDATE (Critical Section - LOCKS HELD)
+            let res = {
+                // !! ACQUIRE BLOCKCHAIN LOCK !!
+                let mut chain = BLOCKCHAIN.lock().unwrap_or_else(|p| p.into_inner());
 
-                    let start_block = load_block_from_db(start_height).await?
-                        .ok_or_else(|| JsValue::from_str(&format!("Missing start block {}", start_height)))?;
-                    let end_block = load_block_from_db(end_height).await?
-                        .ok_or_else(|| JsValue::from_str(&format!("Missing end block {}", end_height)))?;
-
-                    let params_at_interval_end = (end_block.vrf_threshold, end_block.vdf_iterations);
+                // 1. Determine consensus parameters (VRF/VDF) using pre-loaded data
+                let (required_vrf, required_vdf) = if let Some((start_b, end_b)) = difficulty_data {
+                    // Use the `calculate_next_difficulty` helper which is pure math
                     Blockchain::calculate_next_difficulty(
-                        &end_block,
-                        &start_block,
-                        params_at_interval_end.0,
-                        params_at_interval_end.1
+                        &end_b,
+                        &start_b,
+                        chain.current_vrf_threshold, // Use current chain state params
+                        wasm_types::WasmU64(*chain.current_vdf_iterations)
                     )
                 } else {
-                    (expected_params.vrf_threshold, WasmU64::from(expected_params.vdf_iterations))
+                    // No adjustment, carry forward current params
+                    (chain.current_vrf_threshold, wasm_types::WasmU64(*chain.current_vdf_iterations))
                 };
 
-                // MTP check
-                if *block.height > constants::MTP_WINDOW as u64 {
-                    let mut timestamps = Vec::new();
-                    for i in (*block.height - constants::MTP_WINDOW as u64)..*block.height {
-                        if let Some(b) = load_block_from_db(i).await? {
-                            timestamps.push(b.timestamp);
-                        }
-                    }
-                    timestamps.sort_unstable();
-                    let mtp = timestamps[timestamps.len() / 2];
-                    if *block.timestamp < *mtp {
-                        let res = IngestResult::Invalid { reason: "Timestamp < MTP".to_string() };
-                        return serde_wasm_bindgen::to_value(&res).map_err(|e| e.into());
+                // 2. Validate Block Header against Calculated Params
+                if block.vrf_threshold != required_vrf {
+                    return Ok(serde_wasm_bindgen::to_value(&IngestResult::Invalid { 
+                        reason: format!("Invalid VRF threshold. Expected {:?}, got {:?}", required_vrf, block.vrf_threshold) 
+                    }).unwrap());
+                }
+                if required_vdf != *block.vdf_iterations { // WasmU64 comparison
+                    return Ok(serde_wasm_bindgen::to_value(&IngestResult::Invalid { 
+                        reason: format!("Invalid VDF iterations. Expected {}, got {}", required_vdf, block.vdf_iterations) 
+                    }).unwrap());
+                }
+
+                // 3. Validate MTP
+                if let Some(median_time) = mtp_timestamp {
+                    if block.timestamp < median_time {
+                        return Ok(serde_wasm_bindgen::to_value(&IngestResult::Invalid { 
+                            reason: "Block timestamp is older than Median Time Past".into() 
+                        }).unwrap());
                     }
                 }
 
-                chain.add_block(block.clone(), vrf_threshold, vdf_iterations).await
-                    .map_err(|e| JsValue::from_str(&format!("Failed to add block: {e}")))?;
-                
-                block.total_work = chain.total_work;
-                chain.current_vrf_threshold = vrf_threshold;
-                chain.current_vdf_iterations = vdf_iterations;
-            }
+                // 4. Validate Transactions & UTXOs (In-Memory)
+                // 4a. Apply cut-through
+                if let Err(e) = block.apply_cut_through() {
+                    return Ok(serde_wasm_bindgen::to_value(&IngestResult::Invalid { 
+                        reason: format!("Cut-through failed: {}", e) 
+                    }).unwrap());
+                }
 
-            save_block_to_db(block.clone()).await?;
-            save_total_work_to_db(*BLOCKCHAIN.lock().unwrap().total_work).await?;
+                // 4b. Verify Transactions and Update UTXO Set
+                match chain.add_block(block.clone(), required_vrf, WasmU64::from(required_vdf)).await {
+                    Ok(_) => {
+                        // Success! Update chain metadata
+                        chain.tip_hash = block.hash.clone();
+                        
+                        // --- CRITICAL FIX START ---
+                        // Update the chain's expected parameters so the NEXT block
+                        // validates against the correct difficulty.
+                        chain.current_vrf_threshold = required_vrf;
+                        chain.current_vdf_iterations = WasmU64::from(required_vdf);
+                        // --- CRITICAL FIX END ---
+                    },
+                    Err(e) => {
+                        return Ok(serde_wasm_bindgen::to_value(&IngestResult::Invalid { 
+                            reason: format!("Validation failed: {}", e) 
+                        }).unwrap());
+                    }
+                }
+
+                IngestResult::AcceptedAndExtended
+            }; // !! RELEASE BLOCKCHAIN LOCK !!
+
+            // C. POST-PROCESSING (Async / Cleanup)
+            
+            // Persist the total work calculated during add_block
+            let total_work = {
+                let chain = BLOCKCHAIN.lock().unwrap_or_else(|p| p.into_inner());
+                *chain.total_work
+            };
+            save_total_work_to_db(total_work).await?;
+
+            // Clean mempool
             mempool_hygiene_after_block(&block);
 
-            let res = IngestResult::AcceptedAndExtended;
             serde_wasm_bindgen::to_value(&res).map_err(|e| e.into())
         }
-        
+
         ValidationDecision::StoreSideBlock { tip_hash, height } => {
-            // Need async validation
+            // Need async validation for side blocks (check parents in DB)
             let async_decision = validate_side_or_orphan(&block).await?;
             
-            match async_decision {
+            let res = match async_decision {
                 ValidationDecision::StoreSideBlock { tip_hash, height } => {
                     store_side_block(block.hash(), block.clone());
-                    let res = IngestResult::StoredOnSide { tip_hash, height };
-                    serde_wasm_bindgen::to_value(&res).map_err(|e| e.into())
+                    IngestResult::StoredOnSide { tip_hash, height }
                 }
                 ValidationDecision::RequestParent { hash } => {
                     store_side_block(block.hash(), block.clone());
-                    let res = IngestResult::NeedParent {
+                    IngestResult::NeedParent {
                         hash,
                         reason: "Parent block not found".to_string(),
-                    };
-                    serde_wasm_bindgen::to_value(&res).map_err(|e| e.into())
+                    }
                 }
                 ValidationDecision::Reject { reason } => {
-                    let res = IngestResult::Invalid { reason };
-                    serde_wasm_bindgen::to_value(&res).map_err(|e| e.into())
+                    IngestResult::Invalid { reason }
                 }
-                _ => unreachable!(),
-            }
+                _ => IngestResult::Invalid { reason: "Unexpected validation state".to_string() },
+            };
+            serde_wasm_bindgen::to_value(&res).map_err(|e| e.into())
         }
         
         ValidationDecision::RequestParent { hash } => {
@@ -2602,25 +2206,7 @@ pub async fn ingest_block_bytes(block_bytes: Vec<u8>) -> Result<JsValue, JsValue
 }
 
 
-#[wasm_bindgen]
-pub fn get_side_blocks_info() -> Result<JsValue, JsValue> {
-    let side = SIDE_BLOCKS.lock().unwrap();
-    
-    #[derive(Serialize)]
-    struct SideBlockInfo {
-        hash: String,
-        height: u64,
-    }
-    
-    let info: Vec<SideBlockInfo> = side.iter()
-        .map(|(hash, block)| SideBlockInfo {
-            hash: hash.clone(),
-            height: *block.height,
-        })
-        .collect();
-    
-    serde_wasm_bindgen::to_value(&info).map_err(|e| e.into())
-}
+
 
 /// Recursively calculates the GHOST weight for a given block hash.
 /// RATIONALE: This is the core of the GHOST protocol. The "weight" is not a simple
@@ -2628,38 +2214,60 @@ pub fn get_side_blocks_info() -> Result<JsValue, JsValue> {
 /// its descendants. This ensures that the protocol selects the chain with the most
 /// total computational effort behind it, providing security against selfish mining
 /// without regressing to a simple (and insecure) block-counting scheme.
+// src/lib.rs
+
+/// Iteratively calculates the GHOST weight to prevent stack overflow.
 fn calculate_ghost_weight(
-    block_hash: &str,
+    start_hash: &str,
     block_map: &HashMap<String, Block>,
     children_map: &HashMap<String, Vec<String>>,
     memo: &mut HashMap<String, u64>,
 ) -> u64 {
-    // RATIONALE (Performance): Use memoization to avoid re-calculating the weight
-    // of the same sub-trees, making the process efficient and DoS-resistant.
-    if let Some(&weight) = memo.get(block_hash) {
-        return weight;
-    }
-
-    // The weight of a block is its own work plus the weight of all its children's subtrees.
-    let self_work = match block_map.get(block_hash) {
-        Some(b) => Blockchain::get_chain_work(&[b.clone()]),
-        None => return 0, // Should not happen if block_map is complete.
-    };
-
-    let mut total_weight = self_work;
-    if let Some(children) = children_map.get(block_hash) {
-        for child_hash in children {
-            total_weight = total_weight.saturating_add(calculate_ghost_weight(
-                child_hash,
-                block_map,
-                children_map,
-                memo,
-            ));
+    // 1. Build a processing order (Topological sort)
+    let mut stack = vec![start_hash.to_string()];
+    let mut visit_order = Vec::new();
+    let mut visited = HashSet::new();
+    
+    while let Some(current) = stack.pop() {
+        if visited.contains(&current) {
+            continue;
+        }
+        visited.insert(current.clone());
+        visit_order.push(current.clone());
+        
+        if let Some(children) = children_map.get(&current) {
+            for child in children {
+                // Prevent cycles: only add if not visited
+                if !visited.contains(child) {
+                    stack.push(child.clone());
+                }
+            }
         }
     }
+    
+    // 2. Process in reverse order (children first)
+    for hash in visit_order.iter().rev() {
+        // Calculate own work
+        let self_work = match block_map.get(hash) {
+            Some(b) => Blockchain::get_chain_work(&[b.clone()]),
+            None => 0,
+        };
 
-    memo.insert(block_hash.to_string(), total_weight);
-    total_weight
+        // Sum weight of children
+        // FIX: Explicitly type this as u64 so saturating_add works
+        let mut children_weight: u64 = 0; 
+        
+        if let Some(children) = children_map.get(hash) {
+            for child in children {
+                children_weight = children_weight.saturating_add(*memo.get(child).unwrap_or(&0));
+            }
+        }
+
+        let total = self_work.saturating_add(children_weight);
+        memo.insert(hash.clone(), total);
+    }
+
+    *memo.get(start_hash).unwrap_or(&0)
 }
 
 /// Create a deterministic reorg plan from a candidate tip.
@@ -2671,6 +2279,7 @@ pub async fn plan_reorg_for_tip(tip_hash: String) -> Result<JsValue, JsValue> {
     if tip_hash == canon_tip_hash {
         let plan = ReorgPlan {
             detach: vec![], attach: vec![], new_tip_hash: canon_tip_hash, new_height: canon_tip_height, requests: vec![],
+            should_switch: false, 
         };
         return serde_wasm_bindgen::to_value(&plan).map_err(|e| e.into());
     }
@@ -2694,6 +2303,7 @@ pub async fn plan_reorg_for_tip(tip_hash: String) -> Result<JsValue, JsValue> {
             new_tip_hash: canon_tip_hash,
             new_height: canon_tip_height,
             requests: vec![tip_hash],
+            should_switch: false,
         };
         return serde_wasm_bindgen::to_value(&plan).map_err(|e| e.into());
     }
@@ -2713,6 +2323,7 @@ pub async fn plan_reorg_for_tip(tip_hash: String) -> Result<JsValue, JsValue> {
                 new_tip_hash: canon_tip_hash.clone(),
                 new_height: canon_tip_height,
                 requests: vec![canon_tip_hash], // Request the tip itself
+                should_switch: false,
             };
             return serde_wasm_bindgen::to_value(&plan).map_err(|e| e.into());
         }
@@ -2765,6 +2376,7 @@ pub async fn plan_reorg_for_tip(tip_hash: String) -> Result<JsValue, JsValue> {
             new_tip_hash: canon_tip_hash,
             new_height: canon_tip_height,
             requests: missing_blocks,
+            should_switch: false,
         };
         return serde_wasm_bindgen::to_value(&plan).map_err(|e| e.into());
     }
@@ -2860,6 +2472,7 @@ pub async fn plan_reorg_for_tip(tip_hash: String) -> Result<JsValue, JsValue> {
             new_tip_hash: canon_tip_hash,
             new_height: canon_tip_height,
             requests: missing_parents,
+            should_switch: false,
         };
         return serde_wasm_bindgen::to_value(&plan).map_err(|e| e.into());
     }
@@ -2878,38 +2491,45 @@ pub async fn plan_reorg_for_tip(tip_hash: String) -> Result<JsValue, JsValue> {
         }
     }
 
-    let ancestor_h = match common_height {
+let ancestor_h = match common_height {
         Some(h) => h,
         None => {
             log(&format!("[REORG] Could not find common ancestor for fork {}", &tip_hash[..12]));
             log(&format!("[REORG] Fork path length: {}, Canon history size: {}", 
                 fork_path.len(), canon_history.len()));
             
-            // Check if fork path is empty - this shouldn't happen
+            // FIX: Strictly check if fork_path is empty before accessing last()
             if fork_path.is_empty() {
-                log("[REORG] Fork path is empty, aborting reorg");
+                log("[REORG] Fork path is empty, aborting reorg to prevent panic");
                 let plan = ReorgPlan {
                     detach: vec![],
                     attach: vec![],
                     new_tip_hash: canon_tip_hash,
                     new_height: canon_tip_height,
-                    requests: vec![],
+                    requests: vec![], // Don't request empty hash
+                    should_switch: false,
                 };
                 return serde_wasm_bindgen::to_value(&plan).map_err(|e| e.into());
             }
             
-            // If we walked back to genesis without finding a match
-            if fork_path.last().unwrap().height == 0 {  // Safe now - we checked !is_empty above
+            // Safe now - we checked !is_empty above
+            if fork_path.last().unwrap().height == 0 {  
                 log("[REORG] Using genesis as common ancestor");
                 0
             } else {
                 log("[REORG] Missing parent blocks, aborting reorg");
+                
+                // Add the missing parent to requests
+                // We know fork_path is not empty, so unwrap is safe
+                let missing_parent = fork_path.last().unwrap().prev_hash.clone();
+                
                 let plan = ReorgPlan {
                     detach: vec![],
                     attach: vec![],
                     new_tip_hash: canon_tip_hash,
                     new_height: canon_tip_height,
-                    requests: missing_parents,
+                    requests: vec![missing_parent], // Explicitly request the missing parent
+                    should_switch: false,
                 };
                 return serde_wasm_bindgen::to_value(&plan).map_err(|e| e.into());
             }
@@ -3010,6 +2630,7 @@ pub async fn plan_reorg_for_tip(tip_hash: String) -> Result<JsValue, JsValue> {
             new_tip_hash: canon_tip_hash,
             new_height: canon_tip_height,
             requests: vec![],
+            should_switch: false,
         };
         return serde_wasm_bindgen::to_value(&plan).map_err(|e| e.into());
     }
@@ -3473,8 +3094,12 @@ pub async fn atomic_reorg(plan_js: JsValue) -> Result<(), JsValue> {
                     }
                 }
                 WalletUpdate::ScanBlock(block) => {
-                    for wallet in wallet_sessions.values_mut() {
+                    for (id, wallet) in wallet_sessions.iter_mut() {
                         wallet.scan_block(block);
+                        // We must save the wallet immediately because reorgs are critical state changes
+                        if let Ok(json) = serde_json::to_string(wallet) {
+                            let _ = save_wallet_to_db(id, &json).await;
+                        }
                     }
                 }
             }
@@ -3617,19 +3242,6 @@ pub async fn atomic_reorg(plan_js: JsValue) -> Result<(), JsValue> {
     Ok(())
 }
 
-
-#[wasm_bindgen]
-pub fn get_blockchain_state() -> Result<JsValue, JsValue> {
-    let chain = BLOCKCHAIN.lock().unwrap();
-    serde_wasm_bindgen::to_value(&*chain)
-        .map_err(|e| JsValue::from_str(&e.to_string()))
-}
-
-#[wasm_bindgen]
-pub fn get_latest_block_hash() -> Result<String, JsValue> {
-    let (tip_hash, _) = tip_hash_and_height();
-    Ok(tip_hash)
-}
 
 #[wasm_bindgen]
 pub async fn get_block_by_hash(hash: String) -> Result<JsValue, JsValue> {
@@ -3850,7 +3462,6 @@ pub fn wallet_session_clear_all() -> Result<(), JsValue> {
     Ok(())
 }
 
-#[wasm_bindgen]
 pub async fn audit_total_supply() -> Result<String, JsValue> {
     // The total supply is the sum of the base block rewards for all blocks
     // in the canonical chain. Transaction fees represent a transfer of existing
@@ -4200,10 +3811,6 @@ pub fn get_transaction_hash(tx_json: JsValue) -> Result<String, JsValue> {
     Ok(tx.hash())
 }
 
-#[wasm_bindgen]
-pub fn get_utxo_set_size() -> usize {
-    blockchain::UTXO_SET.lock().unwrap().len()
-}
 
 #[wasm_bindgen]
 pub fn wallet_get_data(wallet_json: &str) -> Result<JsValue, JsValue> {
@@ -4227,28 +3834,7 @@ pub fn wallet_get_data(wallet_json: &str) -> Result<JsValue, JsValue> {
 }
 
 
-#[wasm_bindgen]
-pub fn get_chain_storage_size() -> Result<JsValue, JsValue> {
-    let _chain = BLOCKCHAIN.lock().unwrap();
-    let utxo_set = blockchain::UTXO_SET.lock().unwrap();
 
-    // This is a very rough estimate and should be improved if precise metrics are needed.
-    let utxo_size = utxo_set.len() * (32 + 675); // commitment + range proof average
-
-    #[derive(Serialize)]
-    struct StorageInfo {
-        utxo_count: usize,
-        utxo_size_bytes: usize,
-    }
-
-    let info = StorageInfo {
-        utxo_count: utxo_set.len(),
-        utxo_size_bytes: utxo_size,
-    };
-
-    serde_wasm_bindgen::to_value(&info)
-        .map_err(|e| JsValue::from_str(&e.to_string()))
-}
 
 #[wasm_bindgen]
 pub fn get_genesis_timestamp() -> u64 {
@@ -4358,206 +3944,11 @@ pub fn wallet_session_scan_block(wallet_id: &str, block_bytes: Vec<u8>) -> Resul
     Ok(())
 }
 
-#[wasm_bindgen]
-pub async fn get_canonical_hashes_after(start_height: u64) -> Result<JsValue, JsValue> {
-    let tip_height = get_tip_height_from_db().await?;
-    let mut hashes = Vec::new();
-    
-    let start = start_height;
-    
-    // Iterate from the block after the requester's tip to our current tip
-    for height in (start + 1)..=tip_height {
-        if let Some(block) = load_block_from_db(height).await? {
-            hashes.push(block.hash());
-        } else {
-            return Err(JsValue::from_str(&format!("Could not load canonical block at height {}", height)));
-        }
-    }
-    
-    serde_wasm_bindgen::to_value(&hashes).map_err(|e| e.into())
-}
 
-#[wasm_bindgen]
-pub async fn rewind_block(block_js: JsValue) -> Result<(), JsValue> {
-    let block: Block = serde_wasm_bindgen::from_value(block_js)?;
-    let mut chain = BLOCKCHAIN.lock().unwrap();
 
-    // Verify this is the tip of the chain before rewinding
-    if *chain.current_height != *block.height {
-        return Err(JsValue::from_str(&format!(
-            "Can only rewind from tip. Current height: {}, block height: {}",
-            chain.current_height, block.height
-        )));
-    }
 
-    // --- State Manipulation ---
-    {
-        let mut utxo_set = blockchain::UTXO_SET.lock().unwrap();
-        let cache = RECENT_UTXO_CACHE.lock().unwrap();
-        for tx in &block.transactions {
-            // Restore spent inputs by finding their original output in the cache
-            if !tx.inputs.is_empty() {
-                for input in &tx.inputs {
-                    if let Some((_height, output)) = cache.get(&input.commitment) {
-                        utxo_set.insert(input.commitment.clone(), output.clone());
-                    } else {
-                        log(&format!(
-                            "[RUST] Reorg Warning: Could not find source for input in cache {:?}",
-                            hex::encode(&input.commitment[..8])
-                        ));
-                    }
-                }
-            }
-            // Remove outputs created in this block
-            for output in &tx.outputs {
-                utxo_set.remove(&output.commitment);
-                let mut cb = crate::blockchain::COINBASE_INDEX.lock().unwrap();
-                cb.remove(&output.commitment);
-            }
-        }
-    }
 
-    // Return the block's non-coinbase transactions to the mempool
-    {
-        let mut tx_pool = TX_POOL.lock().unwrap();
-        let utxo_set = blockchain::UTXO_SET.lock().unwrap();
-        for tx in block.transactions.iter().filter(|t| !t.inputs.is_empty()) {
-            if tx.verify(None, Some(&utxo_set)).is_ok() {
-                tx_pool.pending.push(tx.clone());
-                tx_pool.fee_total += tx.total_fee();
-            }
-        }
-    }
 
-    // Update the chain's metadata
-    chain.current_height -= 1;
-    
-    // Asynchronously load the new tip to restore its consensus parameters
-    if let Some(parent_block) = load_block_from_db(*chain.current_height).await? {
-        chain.tip_hash = parent_block.hash();
-        chain.current_vrf_threshold = parent_block.vrf_threshold;
-        chain.current_vdf_iterations = parent_block.vdf_iterations;
-    } else if chain.current_height == 0 {
-        // If we rewound to genesis, reset to genesis state
-        let genesis = Block::genesis();
-        chain.tip_hash = genesis.hash();
-        chain.current_vrf_threshold = genesis.vrf_threshold;
-        chain.current_vdf_iterations = genesis.vdf_iterations;
-    } else {
-        return Err(JsValue::from_str("Failed to load new tip block during rewind."));
-    }
-    
-    log(&format!("[RUST] Successfully rewound block at height {}", block.height));
-    Ok(())
-}
-
-/// Generates a secret nonce (scalar) and public nonce (point) for MuSig2.
-#[wasm_bindgen]
-pub fn generate_musig_nonces() -> Result<JsValue, JsValue> {
-    let mut rng = thread_rng();
-    let secret_nonce = Scalar::random(&mut rng);
-    // Use B_blinding for the public point to match kernel excess logic
-    let public_nonce_point = &secret_nonce * &crate::mimblewimble::PC_GENS.B_blinding;
-
-    #[derive(Serialize)]
-    struct NonceResult {
-        secret_nonce: Vec<u8>,
-        public_nonce_point: Vec<u8>,
-    }
-
-    let result = NonceResult {
-        secret_nonce: secret_nonce.to_bytes().to_vec(),
-        public_nonce_point: public_nonce_point.compress().to_bytes().to_vec(),
-    };
-
-    serde_wasm_bindgen::to_value(&result).map_err(|e| e.into())
-}
-
-/// Finalizes a 2-of-2 funding transaction after exchanging partial signatures.
-#[wasm_bindgen]
-pub fn finalize_funding_transaction(
-    channel_json: JsValue,
-    incomplete_tx_js: JsValue,
-    metadata_js: JsValue,
-    counterparty_partial_sig_bytes: Vec<u8>,
-    party_a_pubkey_bytes: Vec<u8>,
-    party_b_pubkey_bytes: Vec<u8>,
-) -> Result<JsValue, JsValue> {
-    let mut channel: PaymentChannel = serde_wasm_bindgen::from_value(channel_json)?;
-    let incomplete_tx: Transaction = serde_wasm_bindgen::from_value(incomplete_tx_js)?;
-    let metadata: MuSigKernelMetadata = serde_wasm_bindgen::from_value(metadata_js)?;
-    
-    let counterparty_sig_arr: [u8; 32] = counterparty_partial_sig_bytes.try_into()
-        .map_err(|_| JsValue::from_str("Partial sig must be 32 bytes"))?;
-    
-    let party_a_pubkey = CompressedRistretto::from_slice(&party_a_pubkey_bytes)
-        .map_err(|_| JsValue::from_str("Invalid Party A pubkey"))?
-        .decompress().ok_or_else(|| JsValue::from_str("Failed to decompress Party A pubkey"))?;
-        
-    let party_b_pubkey = CompressedRistretto::from_slice(&party_b_pubkey_bytes)
-        .map_err(|_| JsValue::from_str("Invalid Party B pubkey"))?
-        .decompress().ok_or_else(|| JsValue::from_str("Failed to decompress Party B pubkey"))?;
-
-    let final_tx = channel.finalize_funding_transaction(
-        incomplete_tx,
-        &metadata,
-        &counterparty_sig_arr,
-        &party_a_pubkey,
-        &party_b_pubkey
-    ).map_err(|e| JsValue::from_str(&e.to_string()))?;
-    
-    #[derive(Serialize)]
-    struct FinalizeResult {
-        updated_channel: PaymentChannel,
-        final_tx: Transaction,
-    }
-    
-    let result = FinalizeResult { updated_channel: channel, final_tx };
-    serde_wasm_bindgen::to_value(&result).map_err(|e| e.into())
-}
-
-/// Finalizes a 2-of-2 cooperative close transaction.
-#[wasm_bindgen]
-pub fn finalize_cooperative_close(
-    channel_json: JsValue,
-    incomplete_tx_js: JsValue,
-    metadata_js: JsValue,
-    counterparty_partial_sig_bytes: Vec<u8>,
-    party_a_pubkey_bytes: Vec<u8>,
-    party_b_pubkey_bytes: Vec<u8>,
-) -> Result<JsValue, JsValue> {
-    let mut channel: PaymentChannel = serde_wasm_bindgen::from_value(channel_json)?;
-    let incomplete_tx: Transaction = serde_wasm_bindgen::from_value(incomplete_tx_js)?;
-    let metadata: MuSigKernelMetadata = serde_wasm_bindgen::from_value(metadata_js)?;
-    
-    let counterparty_sig_arr: [u8; 32] = counterparty_partial_sig_bytes.try_into()
-        .map_err(|_| JsValue::from_str("Partial sig must be 32 bytes"))?;
-    
-    let party_a_pubkey = CompressedRistretto::from_slice(&party_a_pubkey_bytes)
-        .map_err(|_| JsValue::from_str("Invalid Party A pubkey"))?
-        .decompress().ok_or_else(|| JsValue::from_str("Failed to decompress Party A pubkey"))?;
-        
-    let party_b_pubkey = CompressedRistretto::from_slice(&party_b_pubkey_bytes)
-        .map_err(|_| JsValue::from_str("Invalid Party B pubkey"))?
-        .decompress().ok_or_else(|| JsValue::from_str("Failed to decompress Party B pubkey"))?;
-
-    let final_tx = channel.finalize_cooperative_close(
-        incomplete_tx,
-        &metadata,
-        &counterparty_sig_arr,
-        &party_a_pubkey,
-        &party_b_pubkey
-    ).map_err(|e| JsValue::from_str(&e.to_string()))?;
-    
-    #[derive(Serialize)]
-    struct FinalizeResult {
-        updated_channel: PaymentChannel,
-        final_tx: Transaction,
-    }
-    
-    let result = FinalizeResult { updated_channel: channel, final_tx };
-    serde_wasm_bindgen::to_value(&result).map_err(|e| e.into())
-}
 
 #[wasm_bindgen]
 pub fn wallet_unscan_block(wallet_json: &str, block_js: JsValue) -> Result<String, JsValue> {

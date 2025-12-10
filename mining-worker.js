@@ -1,4 +1,3 @@
-// mining-worker.js
 import { parentPort } from 'worker_threads';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -9,48 +8,46 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // --- MODULE LOADING (SIMPLIFIED) ---
-// We only need the native module now, as it contains the full mining loop.
 let pluribit;
 
 async function loadModule() {
     try {
         const nativePath = path.join(__dirname, 'native', 'index.node');
         pluribit = require(nativePath);
+        // FIX: Send initialization success to log file, not UI
         parentPort.postMessage({ 
-            type: 'STATUS', 
-            message: 'Using native mining loop (10-50x faster)' // Updated message
+            type: 'MINING_LOG', 
+            message: 'Miner: Native module loaded successfully'
         });
     } catch (e) {
+        // Fatal errors still go to UI
         parentPort.postMessage({ 
             type: 'STATUS', 
-            message: `FATAL: Failed to load native module: ${e.message}` // Updated message
+            message: `FATAL: Failed to load native module: ${e.message}` 
         });
         throw e;
     }
 }
 // --- END SIMPLIFIED LOADING ---
 
-let currentJobId = null; // Use a job ID to manage state and prevent race conditions
+let currentJobId = null;
 
-// --- REWRITTEN MINING FUNCTION ---
-const BATCH_SIZE = 1000n; // Process 1000 nonces in native code per batch
+const BATCH_SIZE = 50n;
 
 async function findMiningCandidate(params) {
   const { jobId, height, minerPubkey, minerSecretKey, prevHash, vrfThreshold, vdfIterations } = params;
   let nonce = 0n;
-  let consecutiveErrors = 0; // ← ADD: Circuit breaker
-  const MAX_CONSECUTIVE_ERRORS = 5; // ← ADD: Halt after 5 bad batches
+  let consecutiveErrors = 0;
+  const MAX_CONSECUTIVE_ERRORS = 5;
    
+    // FIX: "Starting" message goes to UI (info level) so user knows it's working
     parentPort.postMessage({
         type: 'STATUS',
-        message: `Starting mining job #${jobId} for block #${height}`
+        message: `⛏️  Miner active. Hashing for block #${height}... (Logs -> mining.log)`
     });
 
-  // This loop is async, allowing 'STOP' messages to be processed between batches.
   while (currentJobId === jobId) {
         try {
-            // This is a SYNCHRONOUS, BLOCKING call to the native addon.
-            // It blocks the worker's event loop for the duration of the batch.
             const result = pluribit.findMiningCandidateBatch(
                 height,
                 minerPubkey,
@@ -63,17 +60,14 @@ async function findMiningCandidate(params) {
             );
 
             if (result) {
-                consecutiveErrors = 0; // ← ADD: Reset on success
-                // We found a candidate!
+                consecutiveErrors = 0;
                 parentPort.postMessage({
                     type: 'CANDIDATE_FOUND',
                     jobId,
                     candidate: {
-                        // The native code returns the core parts
-                        nonce: BigInt(result.nonce), // Convert string nonce back to BigInt
+                        nonce: BigInt(result.nonce),
                         vdf_proof: result.vdf_proof,
                         vrf_proof: result.vrf_proof,
-                        // We fill in the rest from the job params
                         height,
                         prevHash,
                         miner_pubkey: minerPubkey,
@@ -82,82 +76,66 @@ async function findMiningCandidate(params) {
                     }
                 });
                
+                // FIX: Winning is a high-priority UI event
                 parentPort.postMessage({
                     type: 'STATUS',
-                    message: `Won lottery at nonce ${result.nonce}! VRF: ${Buffer.from(result.vrf_proof.output).toString('hex').substring(0,12)}...`
+                    message: `💎 💰 LOTTERY WON! Nonce ${result.nonce} satisfies VRF threshold!`
                 });
-                return; // Stop mining this block
+                return; 
             }
            
-            // No candidate found in this batch, prepare for the next
             nonce += BATCH_SIZE;
            
-            // Periodic status update (e.g., every 10 batches)
-            if (nonce % (BATCH_SIZE * 10n) === 0n) {
+            // FIX: Periodic updates go to MINING_LOG (File only)
+            if (nonce % (BATCH_SIZE * 50n) === 0n) { // Reduced frequency slightly
                 parentPort.postMessage({
-                    type: 'STATUS',
-                    message: `Mining block #${height}: Tried ${nonce} nonces...`
+                    type: 'MINING_LOG',
+                    message: `[Job ${jobId}] Block #${height}: Checked ${nonce} nonces...`
                 });
             }
            
-            // *** CRITICAL ***
-            // Yield to the event loop to allow `parentPort.on('message')`
-            // to process a potential 'STOP' message.
             await new Promise(resolve => setImmediate(resolve));
            
         } catch (e) {
-            consecutiveErrors++; // ← ADD: Increment counter
+            consecutiveErrors++;
+            // FIX: Errors go to log file to avoid spamming UI, unless fatal
             parentPort.postMessage({
-                type: 'STATUS',
+                type: 'MINING_LOG',
                 message: `Error at nonce ${nonce}: ${e?.message || e}`
             });
-            if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) { // ← ADD: Self-stop if too many
+            if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
                 parentPort.postMessage({ 
-                    type: 'STATUS', 
-                    message: `Too many consecutive errors (${consecutiveErrors}). Stopping job ${jobId}.` 
+                    type: 'STATUS', // Fatal stop goes to UI
+                    message: `🛑 Miner stopped: Too many consecutive errors.` 
                 });
-                currentJobId = null;  // Self-stop
+                currentJobId = null;
                 return;
             }
-            nonce += BATCH_SIZE; // Skip batch on error
-            // Also yield on error
+            nonce += BATCH_SIZE;
             await new Promise(resolve => setImmediate(resolve));
         }
     }
-   
-  // Loop was stopped by a 'STOP' message
-  if (currentJobId !== jobId) {
-    parentPort.postMessage({
-      type: 'STATUS',
-      message: `Mining job #${jobId} stopped.`
-    });
-  }
 }
-// --- END REWRITTEN FUNCTION ---
 
-
-// This ensures the module is loaded *before* we start listening for messages.
 async function main() {
     await loadModule();
 
   parentPort.on('message', async (msg) => {
     if (msg.type === 'STOP') {
-      currentJobId = null; // Atomically stop any running job.
+      currentJobId = null;
+      parentPort.postMessage({ type: 'MINING_LOG', message: 'Mining loop stopped by user.' });
     } else if (msg.type === 'MINE_BLOCK') {
-      currentJobId = msg.jobId; // Atomically set the new active job.
-      // Fire off the mining loop. It will run and yield until
-      // it finds a block or `currentJobId` is set to null.
+      currentJobId = msg.jobId; 
       findMiningCandidate(msg).catch(e => {
                 parentPort.postMessage({ 
                     type: 'STATUS', 
                     message: `Uncaught error in mining task: ${e?.message || e}` 
                 });
-            });
+             });
     }
   });
 }
 
-// Run the main function and catch any initialization errors.
 main().catch(err => {
     parentPort.postMessage({ 
         type: 'STATUS', 

@@ -8,7 +8,7 @@ export const CONFIG = {
   P2P: {
     TCP_PORT: 26658,
     WS_PORT: 26659,
-    MAX_CONNECTIONS: 300, 
+    MAX_CONNECTIONS: 50, 
     MIN_CONNECTIONS: 20,
     RENDEZVOUS_DISCOVERY_INTERVAL_MS: 60000, // 1 minute
     DHT_RANDOM_WALK_INTERVAL_MS: 30000,       
@@ -20,8 +20,8 @@ export const CONFIG = {
       PEERS_TO_PING_PER_TICK: 5,        // Don't ping all peers every tick - stagger them
       PEERS_TO_PEX_PER_TICK: 5,         // How many peers to exchange addresses with per tick
       PEERS_TO_DIAL_PER_TICK: 3,        // Max new connections to attempt per tick
-      MAX_PING_FAILURES: 3,             // Disconnect after N consecutive ping failures
-      PING_TIMEOUT_MS: 10000,           // Timeout for ping health checks (10s)
+      MAX_PING_FAILURES: 15,             // Disconnect after N consecutive ping failures
+      PING_TIMEOUT_MS: 30000,           // Timeout for ping health checks (30s)
       VERIFICATION_GRACE_PERIOD_MS: 5 * 60 * 1000, // Keep verification state for 5min after disconnect
       // Challenge settings
       CHALLENGE_MAX_ATTEMPTS: 3,          // Retry challenge this many times
@@ -59,7 +59,7 @@ export const CONFIG = {
   
   // Sync (IBD) settings
   SYNC: {
-    TIMEOUT_MS: 24 * 60 * 60 * 1000, // 24 hours for IBD
+    TIMEOUT_MS: 24 * 60 * 60 * 1000*7, // 1 week for IBD
     INTER_REQUEST_DELAY_MS: 25,  // Minimal delay for rate limiting
     MAX_FETCH_ATTEMPTS: 15,       // Retries for a single failed block fetch
     PARALLEL_DOWNLOADS: 50,        // Number of concurrent block downloads

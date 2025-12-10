@@ -77,9 +77,9 @@ pub fn commit(
     value: u64,
     blinding: &Scalar,
 ) -> PluribitResult<RistrettoPoint> {
-    log(&format!("[COMMIT] Creating commitment: value={}, blinding={}", value, hex::encode(blinding.to_bytes())));
+//    log(&format!("[COMMIT] Creating commitment: value={}, blinding={}", value, hex::encode(blinding.to_bytes())));
     let commitment = PC_GENS.commit(Scalar::from(value), *blinding);
-    log(&format!("[COMMIT] Result: {}", hex::encode(commitment.compress().to_bytes())));
+//    log(&format!("[COMMIT] Result: {}", hex::encode(commitment.compress().to_bytes())));
     Ok(commitment)
 }
 
@@ -92,10 +92,10 @@ pub fn create_range_proof(
     value: u64,
     blinding: &Scalar,
 ) -> PluribitResult<(RangeProof, CompressedRistretto)> {
-    log(&format!("[MIMBLEWIMBLE] Creating commitment for value: {}", value));
-    log("--- [MIMBLEWIMBLE] Creator's Generator Check ---");
-    log(&format!("G (B)       : {}", hex::encode(PC_GENS.B.compress().to_bytes())));
-    log(&format!("H (B_blinding): {}", hex::encode(PC_GENS.B_blinding.compress().to_bytes())));
+   // log(&format!("[MIMBLEWIMBLE] Creating commitment for value: {}", value));
+   // log("--- [MIMBLEWIMBLE] Creator's Generator Check ---");
+   // log(&format!("G (B)       : {}", hex::encode(PC_GENS.B.compress().to_bytes())));
+  //  log(&format!("H (B_blinding): {}", hex::encode(PC_GENS.B_blinding.compress().to_bytes())));
 
     let bp_gens = BulletproofGens::new(64, 1); // 64-bit values, 1 party
     let mut transcript = Transcript::new(b"Pluribit Range Proof");
@@ -151,7 +151,7 @@ pub fn create_aggregated_range_proof(
         ));
     }
     
-    log(&format!("[AGG_PROOF] Creating AGGREGATED range proof for {} outputs", values.len()));
+  //  log(&format!("[AGG_PROOF] Creating AGGREGATED range proof for {} outputs", values.len()));
 
     
     // Create Bulletproof generators for multiple parties
@@ -164,8 +164,8 @@ pub fn create_aggregated_range_proof(
         .enumerate()
         .map(|(i, (v, b))| {
             let commitment = PC_GENS.commit(Scalar::from(*v), *b);
-            log(&format!("[AGG_PROOF] Output #{}: value={}, commitment={}", 
-                i, v, hex::encode(commitment.compress().to_bytes())));
+          //  log(&format!("[AGG_PROOF] Output #{}: value={}, commitment={}", 
+          //      i, v, hex::encode(commitment.compress().to_bytes())));
             commitment.compress()
         })
         .collect();
@@ -194,10 +194,10 @@ pub fn create_aggregated_range_proof(
         0
     };
     
-    log(&format!("[AGG_PROOF] ✅ Successfully created proof of {} bytes for {} outputs", 
-        proof_size, values.len()));
-    log(&format!("[AGG_PROOF] 💰 Saved {} bytes ({}%) vs individual proofs!", 
-        savings, savings_percent));
+   // log(&format!("[AGG_PROOF] ✅ Successfully created proof of {} bytes for {} outputs", 
+   //     proof_size, values.len()));
+   // log(&format!("[AGG_PROOF] 💰 Saved {} bytes ({}%) vs individual proofs!", 
+    //    savings, savings_percent));
     
     Ok((aggregated_proof, commitments))
 }
@@ -223,7 +223,7 @@ pub fn verify_aggregated_range_proof(
         return false;
     }
     
-    log(&format!("[AGG_VERIFY] Verifying aggregated proof for {} commitments", commitments.len()));
+   // log(&format!("[AGG_VERIFY] Verifying aggregated proof for {} commitments", commitments.len()));
     
     let bp_gens = BulletproofGens::new(64, commitments.len());
     let mut transcript = Transcript::new(b"Pluribit Aggregated Range Proof");
@@ -237,7 +237,7 @@ pub fn verify_aggregated_range_proof(
     ).is_ok();
     
     if result {
-        log(&format!("[AGG_VERIFY] ✅ Aggregated proof VALID for {} commitments", commitments.len()));
+      //  log(&format!("[AGG_VERIFY] ✅ Aggregated proof VALID for {} commitments", commitments.len()));
     } else {
         log(&format!("[AGG_VERIFY] ❌ Aggregated proof INVALID for {} commitments", commitments.len()));
     }
@@ -325,19 +325,19 @@ pub fn generate_secret_key() -> SecretKey {
 
 /// Derive public key from secret key (for wallet/stealth addresses)
 pub fn derive_public_key(secret_key: &SecretKey) -> PublicKey {
-    log(&format!("[DERIVE_PUBKEY] Input secret: {}", hex::encode(secret_key.to_bytes())));
+  //  log(&format!("[DERIVE_PUBKEY] Input secret: {}", hex::encode(secret_key.to_bytes())));
     // Use standard basepoint for wallet keys (stealth addresses use this)
     let pubkey = secret_key * &*RISTRETTO_BASEPOINT_TABLE;
-    log(&format!("[DERIVE_PUBKEY] Result: {}", hex::encode(pubkey.compress().to_bytes())));
+  //  log(&format!("[DERIVE_PUBKEY] Result: {}", hex::encode(pubkey.compress().to_bytes())));
     pubkey
 }
 
 /// Derive public key for kernel signatures (uses blinding generator)
 pub fn derive_kernel_pubkey(secret_key: &SecretKey) -> PublicKey {
-    log(&format!("[DERIVE_KERNEL_PUBKEY] Input secret: {}", hex::encode(secret_key.to_bytes())));
+  //  log(&format!("[DERIVE_KERNEL_PUBKEY] Input secret: {}", hex::encode(secret_key.to_bytes())));
     // Use B_blinding for kernel-related operations
     let pubkey = secret_key * &PC_GENS.B_blinding;
-    log(&format!("[DERIVE_KERNEL_PUBKEY] Result: {}", hex::encode(pubkey.compress().to_bytes())));
+ //   log(&format!("[DERIVE_KERNEL_PUBKEY] Result: {}", hex::encode(pubkey.compress().to_bytes())));
     pubkey
 }
 

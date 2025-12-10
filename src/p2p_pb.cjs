@@ -4292,6 +4292,7 @@ $root.p2p = (function() {
          * @property {Array.<string>|null} [hashes] HashesResponse hashes
          * @property {string|null} [requestId] HashesResponse requestId
          * @property {boolean|null} [finalChunk] HashesResponse finalChunk
+         * @property {string|null} [targetPeer] HashesResponse targetPeer
          */
 
         /**
@@ -4335,6 +4336,14 @@ $root.p2p = (function() {
         HashesResponse.prototype.finalChunk = false;
 
         /**
+         * HashesResponse targetPeer.
+         * @member {string} targetPeer
+         * @memberof p2p.HashesResponse
+         * @instance
+         */
+        HashesResponse.prototype.targetPeer = "";
+
+        /**
          * Creates a new HashesResponse instance using the specified properties.
          * @function create
          * @memberof p2p.HashesResponse
@@ -4365,6 +4374,8 @@ $root.p2p = (function() {
                 writer.uint32(/* id 2, wireType 2 =*/18).string(message.requestId);
             if (message.finalChunk != null && Object.hasOwnProperty.call(message, "finalChunk"))
                 writer.uint32(/* id 3, wireType 0 =*/24).bool(message.finalChunk);
+            if (message.targetPeer != null && Object.hasOwnProperty.call(message, "targetPeer"))
+                writer.uint32(/* id 4, wireType 2 =*/34).string(message.targetPeer);
             return writer;
         };
 
@@ -4415,6 +4426,10 @@ $root.p2p = (function() {
                         message.finalChunk = reader.bool();
                         break;
                     }
+                case 4: {
+                        message.targetPeer = reader.string();
+                        break;
+                    }
                 default:
                     reader.skipType(tag & 7);
                     break;
@@ -4463,6 +4478,9 @@ $root.p2p = (function() {
             if (message.finalChunk != null && message.hasOwnProperty("finalChunk"))
                 if (typeof message.finalChunk !== "boolean")
                     return "finalChunk: boolean expected";
+            if (message.targetPeer != null && message.hasOwnProperty("targetPeer"))
+                if (!$util.isString(message.targetPeer))
+                    return "targetPeer: string expected";
             return null;
         };
 
@@ -4489,6 +4507,8 @@ $root.p2p = (function() {
                 message.requestId = String(object.requestId);
             if (object.finalChunk != null)
                 message.finalChunk = Boolean(object.finalChunk);
+            if (object.targetPeer != null)
+                message.targetPeer = String(object.targetPeer);
             return message;
         };
 
@@ -4510,6 +4530,7 @@ $root.p2p = (function() {
             if (options.defaults) {
                 object.requestId = "";
                 object.finalChunk = false;
+                object.targetPeer = "";
             }
             if (message.hashes && message.hashes.length) {
                 object.hashes = [];
@@ -4520,6 +4541,8 @@ $root.p2p = (function() {
                 object.requestId = message.requestId;
             if (message.finalChunk != null && message.hasOwnProperty("finalChunk"))
                 object.finalChunk = message.finalChunk;
+            if (message.targetPeer != null && message.hasOwnProperty("targetPeer"))
+                object.targetPeer = message.targetPeer;
             return object;
         };
 
@@ -5003,6 +5026,8 @@ $root.p2p = (function() {
          * @interface ISyncMessage
          * @property {p2p.ITipRequest|null} [tipRequest] SyncMessage tipRequest
          * @property {p2p.ITipResponse|null} [tipResponse] SyncMessage tipResponse
+         * @property {p2p.IGetHashesRequest|null} [hashesRequest] SyncMessage hashesRequest
+         * @property {p2p.IHashesResponse|null} [hashesResponse] SyncMessage hashesResponse
          */
 
         /**
@@ -5036,17 +5061,33 @@ $root.p2p = (function() {
          */
         SyncMessage.prototype.tipResponse = null;
 
+        /**
+         * SyncMessage hashesRequest.
+         * @member {p2p.IGetHashesRequest|null|undefined} hashesRequest
+         * @memberof p2p.SyncMessage
+         * @instance
+         */
+        SyncMessage.prototype.hashesRequest = null;
+
+        /**
+         * SyncMessage hashesResponse.
+         * @member {p2p.IHashesResponse|null|undefined} hashesResponse
+         * @memberof p2p.SyncMessage
+         * @instance
+         */
+        SyncMessage.prototype.hashesResponse = null;
+
         // OneOf field names bound to virtual getters and setters
         var $oneOfFields;
 
         /**
          * SyncMessage payload.
-         * @member {"tipRequest"|"tipResponse"|undefined} payload
+         * @member {"tipRequest"|"tipResponse"|"hashesRequest"|"hashesResponse"|undefined} payload
          * @memberof p2p.SyncMessage
          * @instance
          */
         Object.defineProperty(SyncMessage.prototype, "payload", {
-            get: $util.oneOfGetter($oneOfFields = ["tipRequest", "tipResponse"]),
+            get: $util.oneOfGetter($oneOfFields = ["tipRequest", "tipResponse", "hashesRequest", "hashesResponse"]),
             set: $util.oneOfSetter($oneOfFields)
         });
 
@@ -5078,6 +5119,10 @@ $root.p2p = (function() {
                 $root.p2p.TipRequest.encode(message.tipRequest, writer.uint32(/* id 1, wireType 2 =*/10).fork()).ldelim();
             if (message.tipResponse != null && Object.hasOwnProperty.call(message, "tipResponse"))
                 $root.p2p.TipResponse.encode(message.tipResponse, writer.uint32(/* id 2, wireType 2 =*/18).fork()).ldelim();
+            if (message.hashesRequest != null && Object.hasOwnProperty.call(message, "hashesRequest"))
+                $root.p2p.GetHashesRequest.encode(message.hashesRequest, writer.uint32(/* id 3, wireType 2 =*/26).fork()).ldelim();
+            if (message.hashesResponse != null && Object.hasOwnProperty.call(message, "hashesResponse"))
+                $root.p2p.HashesResponse.encode(message.hashesResponse, writer.uint32(/* id 4, wireType 2 =*/34).fork()).ldelim();
             return writer;
         };
 
@@ -5120,6 +5165,14 @@ $root.p2p = (function() {
                     }
                 case 2: {
                         message.tipResponse = $root.p2p.TipResponse.decode(reader, reader.uint32());
+                        break;
+                    }
+                case 3: {
+                        message.hashesRequest = $root.p2p.GetHashesRequest.decode(reader, reader.uint32());
+                        break;
+                    }
+                case 4: {
+                        message.hashesResponse = $root.p2p.HashesResponse.decode(reader, reader.uint32());
                         break;
                     }
                 default:
@@ -5176,6 +5229,26 @@ $root.p2p = (function() {
                         return "tipResponse." + error;
                 }
             }
+            if (message.hashesRequest != null && message.hasOwnProperty("hashesRequest")) {
+                if (properties.payload === 1)
+                    return "payload: multiple values";
+                properties.payload = 1;
+                {
+                    var error = $root.p2p.GetHashesRequest.verify(message.hashesRequest);
+                    if (error)
+                        return "hashesRequest." + error;
+                }
+            }
+            if (message.hashesResponse != null && message.hasOwnProperty("hashesResponse")) {
+                if (properties.payload === 1)
+                    return "payload: multiple values";
+                properties.payload = 1;
+                {
+                    var error = $root.p2p.HashesResponse.verify(message.hashesResponse);
+                    if (error)
+                        return "hashesResponse." + error;
+                }
+            }
             return null;
         };
 
@@ -5200,6 +5273,16 @@ $root.p2p = (function() {
                 if (typeof object.tipResponse !== "object")
                     throw TypeError(".p2p.SyncMessage.tipResponse: object expected");
                 message.tipResponse = $root.p2p.TipResponse.fromObject(object.tipResponse);
+            }
+            if (object.hashesRequest != null) {
+                if (typeof object.hashesRequest !== "object")
+                    throw TypeError(".p2p.SyncMessage.hashesRequest: object expected");
+                message.hashesRequest = $root.p2p.GetHashesRequest.fromObject(object.hashesRequest);
+            }
+            if (object.hashesResponse != null) {
+                if (typeof object.hashesResponse !== "object")
+                    throw TypeError(".p2p.SyncMessage.hashesResponse: object expected");
+                message.hashesResponse = $root.p2p.HashesResponse.fromObject(object.hashesResponse);
             }
             return message;
         };
@@ -5226,6 +5309,16 @@ $root.p2p = (function() {
                 object.tipResponse = $root.p2p.TipResponse.toObject(message.tipResponse, options);
                 if (options.oneofs)
                     object.payload = "tipResponse";
+            }
+            if (message.hashesRequest != null && message.hasOwnProperty("hashesRequest")) {
+                object.hashesRequest = $root.p2p.GetHashesRequest.toObject(message.hashesRequest, options);
+                if (options.oneofs)
+                    object.payload = "hashesRequest";
+            }
+            if (message.hashesResponse != null && message.hasOwnProperty("hashesResponse")) {
+                object.hashesResponse = $root.p2p.HashesResponse.toObject(message.hashesResponse, options);
+                if (options.oneofs)
+                    object.payload = "hashesResponse";
             }
             return object;
         };
@@ -12057,6 +12150,13 @@ $root.p2p = (function() {
          * @property {p2p.IChannelFundRequest|null} [channelFund] JSToRust_Command channelFund
          * @property {p2p.IChannelPayRequest|null} [channelPay] JSToRust_Command channelPay
          * @property {p2p.IChannelCloseRequest|null} [channelClose] JSToRust_Command channelClose
+         * @property {p2p.ISubmitMiningCandidate|null} [submitCandidate] JSToRust_Command submitCandidate
+         * @property {p2p.IEvaluateConsensusRequest|null} [evaluateConsensus] JSToRust_Command evaluateConsensus
+         * @property {p2p.IInspectBlockRequest|null} [inspectBlock] JSToRust_Command inspectBlock
+         * @property {p2p.IPurgeSideBlocksRequest|null} [purgeSideBlocks] JSToRust_Command purgeSideBlocks
+         * @property {p2p.IClearSideBlocksRequest|null} [clearSideBlocks] JSToRust_Command clearSideBlocks
+         * @property {p2p.IVerifySupplyRequest|null} [verifySupply] JSToRust_Command verifySupply
+         * @property {p2p.IAuditDetailedRequest|null} [auditDetailed] JSToRust_Command auditDetailed
          */
 
         /**
@@ -12258,17 +12358,73 @@ $root.p2p = (function() {
          */
         JSToRust_Command.prototype.channelClose = null;
 
+        /**
+         * JSToRust_Command submitCandidate.
+         * @member {p2p.ISubmitMiningCandidate|null|undefined} submitCandidate
+         * @memberof p2p.JSToRust_Command
+         * @instance
+         */
+        JSToRust_Command.prototype.submitCandidate = null;
+
+        /**
+         * JSToRust_Command evaluateConsensus.
+         * @member {p2p.IEvaluateConsensusRequest|null|undefined} evaluateConsensus
+         * @memberof p2p.JSToRust_Command
+         * @instance
+         */
+        JSToRust_Command.prototype.evaluateConsensus = null;
+
+        /**
+         * JSToRust_Command inspectBlock.
+         * @member {p2p.IInspectBlockRequest|null|undefined} inspectBlock
+         * @memberof p2p.JSToRust_Command
+         * @instance
+         */
+        JSToRust_Command.prototype.inspectBlock = null;
+
+        /**
+         * JSToRust_Command purgeSideBlocks.
+         * @member {p2p.IPurgeSideBlocksRequest|null|undefined} purgeSideBlocks
+         * @memberof p2p.JSToRust_Command
+         * @instance
+         */
+        JSToRust_Command.prototype.purgeSideBlocks = null;
+
+        /**
+         * JSToRust_Command clearSideBlocks.
+         * @member {p2p.IClearSideBlocksRequest|null|undefined} clearSideBlocks
+         * @memberof p2p.JSToRust_Command
+         * @instance
+         */
+        JSToRust_Command.prototype.clearSideBlocks = null;
+
+        /**
+         * JSToRust_Command verifySupply.
+         * @member {p2p.IVerifySupplyRequest|null|undefined} verifySupply
+         * @memberof p2p.JSToRust_Command
+         * @instance
+         */
+        JSToRust_Command.prototype.verifySupply = null;
+
+        /**
+         * JSToRust_Command auditDetailed.
+         * @member {p2p.IAuditDetailedRequest|null|undefined} auditDetailed
+         * @memberof p2p.JSToRust_Command
+         * @instance
+         */
+        JSToRust_Command.prototype.auditDetailed = null;
+
         // OneOf field names bound to virtual getters and setters
         var $oneOfFields;
 
         /**
          * JSToRust_Command command.
-         * @member {"initialize"|"createWallet"|"restoreWallet"|"loadWallet"|"getBalance"|"createTransaction"|"toggleMiner"|"getStatus"|"getSupply"|"getPeers"|"connectPeer"|"syncTick"|"swapInitiate"|"swapList"|"swapRespond"|"swapClaim"|"swapRefund"|"channelOpen"|"channelList"|"channelAccept"|"channelFund"|"channelPay"|"channelClose"|undefined} command
+         * @member {"initialize"|"createWallet"|"restoreWallet"|"loadWallet"|"getBalance"|"createTransaction"|"toggleMiner"|"getStatus"|"getSupply"|"getPeers"|"connectPeer"|"syncTick"|"swapInitiate"|"swapList"|"swapRespond"|"swapClaim"|"swapRefund"|"channelOpen"|"channelList"|"channelAccept"|"channelFund"|"channelPay"|"channelClose"|"submitCandidate"|"evaluateConsensus"|"inspectBlock"|"purgeSideBlocks"|"clearSideBlocks"|"verifySupply"|"auditDetailed"|undefined} command
          * @memberof p2p.JSToRust_Command
          * @instance
          */
         Object.defineProperty(JSToRust_Command.prototype, "command", {
-            get: $util.oneOfGetter($oneOfFields = ["initialize", "createWallet", "restoreWallet", "loadWallet", "getBalance", "createTransaction", "toggleMiner", "getStatus", "getSupply", "getPeers", "connectPeer", "syncTick", "swapInitiate", "swapList", "swapRespond", "swapClaim", "swapRefund", "channelOpen", "channelList", "channelAccept", "channelFund", "channelPay", "channelClose"]),
+            get: $util.oneOfGetter($oneOfFields = ["initialize", "createWallet", "restoreWallet", "loadWallet", "getBalance", "createTransaction", "toggleMiner", "getStatus", "getSupply", "getPeers", "connectPeer", "syncTick", "swapInitiate", "swapList", "swapRespond", "swapClaim", "swapRefund", "channelOpen", "channelList", "channelAccept", "channelFund", "channelPay", "channelClose", "submitCandidate", "evaluateConsensus", "inspectBlock", "purgeSideBlocks", "clearSideBlocks", "verifySupply", "auditDetailed"]),
             set: $util.oneOfSetter($oneOfFields)
         });
 
@@ -12342,6 +12498,20 @@ $root.p2p = (function() {
                 $root.p2p.ChannelPayRequest.encode(message.channelPay, writer.uint32(/* id 22, wireType 2 =*/178).fork()).ldelim();
             if (message.channelClose != null && Object.hasOwnProperty.call(message, "channelClose"))
                 $root.p2p.ChannelCloseRequest.encode(message.channelClose, writer.uint32(/* id 23, wireType 2 =*/186).fork()).ldelim();
+            if (message.submitCandidate != null && Object.hasOwnProperty.call(message, "submitCandidate"))
+                $root.p2p.SubmitMiningCandidate.encode(message.submitCandidate, writer.uint32(/* id 24, wireType 2 =*/194).fork()).ldelim();
+            if (message.evaluateConsensus != null && Object.hasOwnProperty.call(message, "evaluateConsensus"))
+                $root.p2p.EvaluateConsensusRequest.encode(message.evaluateConsensus, writer.uint32(/* id 25, wireType 2 =*/202).fork()).ldelim();
+            if (message.inspectBlock != null && Object.hasOwnProperty.call(message, "inspectBlock"))
+                $root.p2p.InspectBlockRequest.encode(message.inspectBlock, writer.uint32(/* id 26, wireType 2 =*/210).fork()).ldelim();
+            if (message.purgeSideBlocks != null && Object.hasOwnProperty.call(message, "purgeSideBlocks"))
+                $root.p2p.PurgeSideBlocksRequest.encode(message.purgeSideBlocks, writer.uint32(/* id 27, wireType 2 =*/218).fork()).ldelim();
+            if (message.clearSideBlocks != null && Object.hasOwnProperty.call(message, "clearSideBlocks"))
+                $root.p2p.ClearSideBlocksRequest.encode(message.clearSideBlocks, writer.uint32(/* id 28, wireType 2 =*/226).fork()).ldelim();
+            if (message.verifySupply != null && Object.hasOwnProperty.call(message, "verifySupply"))
+                $root.p2p.VerifySupplyRequest.encode(message.verifySupply, writer.uint32(/* id 29, wireType 2 =*/234).fork()).ldelim();
+            if (message.auditDetailed != null && Object.hasOwnProperty.call(message, "auditDetailed"))
+                $root.p2p.AuditDetailedRequest.encode(message.auditDetailed, writer.uint32(/* id 30, wireType 2 =*/242).fork()).ldelim();
             return writer;
         };
 
@@ -12468,6 +12638,34 @@ $root.p2p = (function() {
                     }
                 case 23: {
                         message.channelClose = $root.p2p.ChannelCloseRequest.decode(reader, reader.uint32());
+                        break;
+                    }
+                case 24: {
+                        message.submitCandidate = $root.p2p.SubmitMiningCandidate.decode(reader, reader.uint32());
+                        break;
+                    }
+                case 25: {
+                        message.evaluateConsensus = $root.p2p.EvaluateConsensusRequest.decode(reader, reader.uint32());
+                        break;
+                    }
+                case 26: {
+                        message.inspectBlock = $root.p2p.InspectBlockRequest.decode(reader, reader.uint32());
+                        break;
+                    }
+                case 27: {
+                        message.purgeSideBlocks = $root.p2p.PurgeSideBlocksRequest.decode(reader, reader.uint32());
+                        break;
+                    }
+                case 28: {
+                        message.clearSideBlocks = $root.p2p.ClearSideBlocksRequest.decode(reader, reader.uint32());
+                        break;
+                    }
+                case 29: {
+                        message.verifySupply = $root.p2p.VerifySupplyRequest.decode(reader, reader.uint32());
+                        break;
+                    }
+                case 30: {
+                        message.auditDetailed = $root.p2p.AuditDetailedRequest.decode(reader, reader.uint32());
                         break;
                     }
                 default:
@@ -12734,6 +12932,76 @@ $root.p2p = (function() {
                         return "channelClose." + error;
                 }
             }
+            if (message.submitCandidate != null && message.hasOwnProperty("submitCandidate")) {
+                if (properties.command === 1)
+                    return "command: multiple values";
+                properties.command = 1;
+                {
+                    var error = $root.p2p.SubmitMiningCandidate.verify(message.submitCandidate);
+                    if (error)
+                        return "submitCandidate." + error;
+                }
+            }
+            if (message.evaluateConsensus != null && message.hasOwnProperty("evaluateConsensus")) {
+                if (properties.command === 1)
+                    return "command: multiple values";
+                properties.command = 1;
+                {
+                    var error = $root.p2p.EvaluateConsensusRequest.verify(message.evaluateConsensus);
+                    if (error)
+                        return "evaluateConsensus." + error;
+                }
+            }
+            if (message.inspectBlock != null && message.hasOwnProperty("inspectBlock")) {
+                if (properties.command === 1)
+                    return "command: multiple values";
+                properties.command = 1;
+                {
+                    var error = $root.p2p.InspectBlockRequest.verify(message.inspectBlock);
+                    if (error)
+                        return "inspectBlock." + error;
+                }
+            }
+            if (message.purgeSideBlocks != null && message.hasOwnProperty("purgeSideBlocks")) {
+                if (properties.command === 1)
+                    return "command: multiple values";
+                properties.command = 1;
+                {
+                    var error = $root.p2p.PurgeSideBlocksRequest.verify(message.purgeSideBlocks);
+                    if (error)
+                        return "purgeSideBlocks." + error;
+                }
+            }
+            if (message.clearSideBlocks != null && message.hasOwnProperty("clearSideBlocks")) {
+                if (properties.command === 1)
+                    return "command: multiple values";
+                properties.command = 1;
+                {
+                    var error = $root.p2p.ClearSideBlocksRequest.verify(message.clearSideBlocks);
+                    if (error)
+                        return "clearSideBlocks." + error;
+                }
+            }
+            if (message.verifySupply != null && message.hasOwnProperty("verifySupply")) {
+                if (properties.command === 1)
+                    return "command: multiple values";
+                properties.command = 1;
+                {
+                    var error = $root.p2p.VerifySupplyRequest.verify(message.verifySupply);
+                    if (error)
+                        return "verifySupply." + error;
+                }
+            }
+            if (message.auditDetailed != null && message.hasOwnProperty("auditDetailed")) {
+                if (properties.command === 1)
+                    return "command: multiple values";
+                properties.command = 1;
+                {
+                    var error = $root.p2p.AuditDetailedRequest.verify(message.auditDetailed);
+                    if (error)
+                        return "auditDetailed." + error;
+                }
+            }
             return null;
         };
 
@@ -12863,6 +13131,41 @@ $root.p2p = (function() {
                 if (typeof object.channelClose !== "object")
                     throw TypeError(".p2p.JSToRust_Command.channelClose: object expected");
                 message.channelClose = $root.p2p.ChannelCloseRequest.fromObject(object.channelClose);
+            }
+            if (object.submitCandidate != null) {
+                if (typeof object.submitCandidate !== "object")
+                    throw TypeError(".p2p.JSToRust_Command.submitCandidate: object expected");
+                message.submitCandidate = $root.p2p.SubmitMiningCandidate.fromObject(object.submitCandidate);
+            }
+            if (object.evaluateConsensus != null) {
+                if (typeof object.evaluateConsensus !== "object")
+                    throw TypeError(".p2p.JSToRust_Command.evaluateConsensus: object expected");
+                message.evaluateConsensus = $root.p2p.EvaluateConsensusRequest.fromObject(object.evaluateConsensus);
+            }
+            if (object.inspectBlock != null) {
+                if (typeof object.inspectBlock !== "object")
+                    throw TypeError(".p2p.JSToRust_Command.inspectBlock: object expected");
+                message.inspectBlock = $root.p2p.InspectBlockRequest.fromObject(object.inspectBlock);
+            }
+            if (object.purgeSideBlocks != null) {
+                if (typeof object.purgeSideBlocks !== "object")
+                    throw TypeError(".p2p.JSToRust_Command.purgeSideBlocks: object expected");
+                message.purgeSideBlocks = $root.p2p.PurgeSideBlocksRequest.fromObject(object.purgeSideBlocks);
+            }
+            if (object.clearSideBlocks != null) {
+                if (typeof object.clearSideBlocks !== "object")
+                    throw TypeError(".p2p.JSToRust_Command.clearSideBlocks: object expected");
+                message.clearSideBlocks = $root.p2p.ClearSideBlocksRequest.fromObject(object.clearSideBlocks);
+            }
+            if (object.verifySupply != null) {
+                if (typeof object.verifySupply !== "object")
+                    throw TypeError(".p2p.JSToRust_Command.verifySupply: object expected");
+                message.verifySupply = $root.p2p.VerifySupplyRequest.fromObject(object.verifySupply);
+            }
+            if (object.auditDetailed != null) {
+                if (typeof object.auditDetailed !== "object")
+                    throw TypeError(".p2p.JSToRust_Command.auditDetailed: object expected");
+                message.auditDetailed = $root.p2p.AuditDetailedRequest.fromObject(object.auditDetailed);
             }
             return message;
         };
@@ -12994,6 +13297,41 @@ $root.p2p = (function() {
                 object.channelClose = $root.p2p.ChannelCloseRequest.toObject(message.channelClose, options);
                 if (options.oneofs)
                     object.command = "channelClose";
+            }
+            if (message.submitCandidate != null && message.hasOwnProperty("submitCandidate")) {
+                object.submitCandidate = $root.p2p.SubmitMiningCandidate.toObject(message.submitCandidate, options);
+                if (options.oneofs)
+                    object.command = "submitCandidate";
+            }
+            if (message.evaluateConsensus != null && message.hasOwnProperty("evaluateConsensus")) {
+                object.evaluateConsensus = $root.p2p.EvaluateConsensusRequest.toObject(message.evaluateConsensus, options);
+                if (options.oneofs)
+                    object.command = "evaluateConsensus";
+            }
+            if (message.inspectBlock != null && message.hasOwnProperty("inspectBlock")) {
+                object.inspectBlock = $root.p2p.InspectBlockRequest.toObject(message.inspectBlock, options);
+                if (options.oneofs)
+                    object.command = "inspectBlock";
+            }
+            if (message.purgeSideBlocks != null && message.hasOwnProperty("purgeSideBlocks")) {
+                object.purgeSideBlocks = $root.p2p.PurgeSideBlocksRequest.toObject(message.purgeSideBlocks, options);
+                if (options.oneofs)
+                    object.command = "purgeSideBlocks";
+            }
+            if (message.clearSideBlocks != null && message.hasOwnProperty("clearSideBlocks")) {
+                object.clearSideBlocks = $root.p2p.ClearSideBlocksRequest.toObject(message.clearSideBlocks, options);
+                if (options.oneofs)
+                    object.command = "clearSideBlocks";
+            }
+            if (message.verifySupply != null && message.hasOwnProperty("verifySupply")) {
+                object.verifySupply = $root.p2p.VerifySupplyRequest.toObject(message.verifySupply, options);
+                if (options.oneofs)
+                    object.command = "verifySupply";
+            }
+            if (message.auditDetailed != null && message.hasOwnProperty("auditDetailed")) {
+                object.auditDetailed = $root.p2p.AuditDetailedRequest.toObject(message.auditDetailed, options);
+                if (options.oneofs)
+                    object.command = "auditDetailed";
             }
             return object;
         };
@@ -14033,6 +14371,7 @@ $root.p2p = (function() {
          * @property {p2p.IPublishP2pMessage|null} [p2pPublish] RustCommand p2pPublish
          * @property {p2p.ISendDirectP2pMessage|null} [p2pSendDirect] RustCommand p2pSendDirect
          * @property {p2p.IHangUpPeer|null} [p2pHangUp] RustCommand p2pHangUp
+         * @property {p2p.IDialPeer|null} [dialPeer] RustCommand dialPeer
          * @property {p2p.IUpdateUiBalance|null} [updateUiBalance] RustCommand updateUiBalance
          * @property {p2p.IUpdateUiMinerStatus|null} [updateUiMinerStatus] RustCommand updateUiMinerStatus
          * @property {p2p.IUpdateUiSyncProgress|null} [updateUiSyncProgress] RustCommand updateUiSyncProgress
@@ -14089,6 +14428,14 @@ $root.p2p = (function() {
          * @instance
          */
         RustCommand.prototype.p2pHangUp = null;
+
+        /**
+         * RustCommand dialPeer.
+         * @member {p2p.IDialPeer|null|undefined} dialPeer
+         * @memberof p2p.RustCommand
+         * @instance
+         */
+        RustCommand.prototype.dialPeer = null;
 
         /**
          * RustCommand updateUiBalance.
@@ -14159,12 +14506,12 @@ $root.p2p = (function() {
 
         /**
          * RustCommand command.
-         * @member {"logMessage"|"p2pPublish"|"p2pSendDirect"|"p2pHangUp"|"updateUiBalance"|"updateUiMinerStatus"|"updateUiSyncProgress"|"uiNetworkInitialized"|"uiWalletLoaded"|"uiPeerList"|"uiTotalSupply"|"controlMining"|undefined} command
+         * @member {"logMessage"|"p2pPublish"|"p2pSendDirect"|"p2pHangUp"|"dialPeer"|"updateUiBalance"|"updateUiMinerStatus"|"updateUiSyncProgress"|"uiNetworkInitialized"|"uiWalletLoaded"|"uiPeerList"|"uiTotalSupply"|"controlMining"|undefined} command
          * @memberof p2p.RustCommand
          * @instance
          */
         Object.defineProperty(RustCommand.prototype, "command", {
-            get: $util.oneOfGetter($oneOfFields = ["logMessage", "p2pPublish", "p2pSendDirect", "p2pHangUp", "updateUiBalance", "updateUiMinerStatus", "updateUiSyncProgress", "uiNetworkInitialized", "uiWalletLoaded", "uiPeerList", "uiTotalSupply", "controlMining"]),
+            get: $util.oneOfGetter($oneOfFields = ["logMessage", "p2pPublish", "p2pSendDirect", "p2pHangUp", "dialPeer", "updateUiBalance", "updateUiMinerStatus", "updateUiSyncProgress", "uiNetworkInitialized", "uiWalletLoaded", "uiPeerList", "uiTotalSupply", "controlMining"]),
             set: $util.oneOfSetter($oneOfFields)
         });
 
@@ -14216,6 +14563,8 @@ $root.p2p = (function() {
                 $root.p2p.UiTotalSupply.encode(message.uiTotalSupply, writer.uint32(/* id 11, wireType 2 =*/90).fork()).ldelim();
             if (message.controlMining != null && Object.hasOwnProperty.call(message, "controlMining"))
                 $root.p2p.ControlMining.encode(message.controlMining, writer.uint32(/* id 12, wireType 2 =*/98).fork()).ldelim();
+            if (message.dialPeer != null && Object.hasOwnProperty.call(message, "dialPeer"))
+                $root.p2p.DialPeer.encode(message.dialPeer, writer.uint32(/* id 13, wireType 2 =*/106).fork()).ldelim();
             return writer;
         };
 
@@ -14266,6 +14615,10 @@ $root.p2p = (function() {
                     }
                 case 4: {
                         message.p2pHangUp = $root.p2p.HangUpPeer.decode(reader, reader.uint32());
+                        break;
+                    }
+                case 13: {
+                        message.dialPeer = $root.p2p.DialPeer.decode(reader, reader.uint32());
                         break;
                     }
                 case 5: {
@@ -14372,6 +14725,16 @@ $root.p2p = (function() {
                     var error = $root.p2p.HangUpPeer.verify(message.p2pHangUp);
                     if (error)
                         return "p2pHangUp." + error;
+                }
+            }
+            if (message.dialPeer != null && message.hasOwnProperty("dialPeer")) {
+                if (properties.command === 1)
+                    return "command: multiple values";
+                properties.command = 1;
+                {
+                    var error = $root.p2p.DialPeer.verify(message.dialPeer);
+                    if (error)
+                        return "dialPeer." + error;
                 }
             }
             if (message.updateUiBalance != null && message.hasOwnProperty("updateUiBalance")) {
@@ -14489,6 +14852,11 @@ $root.p2p = (function() {
                     throw TypeError(".p2p.RustCommand.p2pHangUp: object expected");
                 message.p2pHangUp = $root.p2p.HangUpPeer.fromObject(object.p2pHangUp);
             }
+            if (object.dialPeer != null) {
+                if (typeof object.dialPeer !== "object")
+                    throw TypeError(".p2p.RustCommand.dialPeer: object expected");
+                message.dialPeer = $root.p2p.DialPeer.fromObject(object.dialPeer);
+            }
             if (object.updateUiBalance != null) {
                 if (typeof object.updateUiBalance !== "object")
                     throw TypeError(".p2p.RustCommand.updateUiBalance: object expected");
@@ -14605,6 +14973,11 @@ $root.p2p = (function() {
                 if (options.oneofs)
                     object.command = "controlMining";
             }
+            if (message.dialPeer != null && message.hasOwnProperty("dialPeer")) {
+                object.dialPeer = $root.p2p.DialPeer.toObject(message.dialPeer, options);
+                if (options.oneofs)
+                    object.command = "dialPeer";
+            }
             return object;
         };
 
@@ -14637,12 +15010,219 @@ $root.p2p = (function() {
         return RustCommand;
     })();
 
+    p2p.DialPeer = (function() {
+
+        /**
+         * Properties of a DialPeer.
+         * @memberof p2p
+         * @interface IDialPeer
+         * @property {string|null} [multiaddr] DialPeer multiaddr
+         */
+
+        /**
+         * Constructs a new DialPeer.
+         * @memberof p2p
+         * @classdesc Represents a DialPeer.
+         * @implements IDialPeer
+         * @constructor
+         * @param {p2p.IDialPeer=} [properties] Properties to set
+         */
+        function DialPeer(properties) {
+            if (properties)
+                for (var keys = Object.keys(properties), i = 0; i < keys.length; ++i)
+                    if (properties[keys[i]] != null)
+                        this[keys[i]] = properties[keys[i]];
+        }
+
+        /**
+         * DialPeer multiaddr.
+         * @member {string} multiaddr
+         * @memberof p2p.DialPeer
+         * @instance
+         */
+        DialPeer.prototype.multiaddr = "";
+
+        /**
+         * Creates a new DialPeer instance using the specified properties.
+         * @function create
+         * @memberof p2p.DialPeer
+         * @static
+         * @param {p2p.IDialPeer=} [properties] Properties to set
+         * @returns {p2p.DialPeer} DialPeer instance
+         */
+        DialPeer.create = function create(properties) {
+            return new DialPeer(properties);
+        };
+
+        /**
+         * Encodes the specified DialPeer message. Does not implicitly {@link p2p.DialPeer.verify|verify} messages.
+         * @function encode
+         * @memberof p2p.DialPeer
+         * @static
+         * @param {p2p.IDialPeer} message DialPeer message or plain object to encode
+         * @param {$protobuf.Writer} [writer] Writer to encode to
+         * @returns {$protobuf.Writer} Writer
+         */
+        DialPeer.encode = function encode(message, writer) {
+            if (!writer)
+                writer = $Writer.create();
+            if (message.multiaddr != null && Object.hasOwnProperty.call(message, "multiaddr"))
+                writer.uint32(/* id 1, wireType 2 =*/10).string(message.multiaddr);
+            return writer;
+        };
+
+        /**
+         * Encodes the specified DialPeer message, length delimited. Does not implicitly {@link p2p.DialPeer.verify|verify} messages.
+         * @function encodeDelimited
+         * @memberof p2p.DialPeer
+         * @static
+         * @param {p2p.IDialPeer} message DialPeer message or plain object to encode
+         * @param {$protobuf.Writer} [writer] Writer to encode to
+         * @returns {$protobuf.Writer} Writer
+         */
+        DialPeer.encodeDelimited = function encodeDelimited(message, writer) {
+            return this.encode(message, writer).ldelim();
+        };
+
+        /**
+         * Decodes a DialPeer message from the specified reader or buffer.
+         * @function decode
+         * @memberof p2p.DialPeer
+         * @static
+         * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
+         * @param {number} [length] Message length if known beforehand
+         * @returns {p2p.DialPeer} DialPeer
+         * @throws {Error} If the payload is not a reader or valid buffer
+         * @throws {$protobuf.util.ProtocolError} If required fields are missing
+         */
+        DialPeer.decode = function decode(reader, length, error) {
+            if (!(reader instanceof $Reader))
+                reader = $Reader.create(reader);
+            var end = length === undefined ? reader.len : reader.pos + length, message = new $root.p2p.DialPeer();
+            while (reader.pos < end) {
+                var tag = reader.uint32();
+                if (tag === error)
+                    break;
+                switch (tag >>> 3) {
+                case 1: {
+                        message.multiaddr = reader.string();
+                        break;
+                    }
+                default:
+                    reader.skipType(tag & 7);
+                    break;
+                }
+            }
+            return message;
+        };
+
+        /**
+         * Decodes a DialPeer message from the specified reader or buffer, length delimited.
+         * @function decodeDelimited
+         * @memberof p2p.DialPeer
+         * @static
+         * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
+         * @returns {p2p.DialPeer} DialPeer
+         * @throws {Error} If the payload is not a reader or valid buffer
+         * @throws {$protobuf.util.ProtocolError} If required fields are missing
+         */
+        DialPeer.decodeDelimited = function decodeDelimited(reader) {
+            if (!(reader instanceof $Reader))
+                reader = new $Reader(reader);
+            return this.decode(reader, reader.uint32());
+        };
+
+        /**
+         * Verifies a DialPeer message.
+         * @function verify
+         * @memberof p2p.DialPeer
+         * @static
+         * @param {Object.<string,*>} message Plain object to verify
+         * @returns {string|null} `null` if valid, otherwise the reason why it is not
+         */
+        DialPeer.verify = function verify(message) {
+            if (typeof message !== "object" || message === null)
+                return "object expected";
+            if (message.multiaddr != null && message.hasOwnProperty("multiaddr"))
+                if (!$util.isString(message.multiaddr))
+                    return "multiaddr: string expected";
+            return null;
+        };
+
+        /**
+         * Creates a DialPeer message from a plain object. Also converts values to their respective internal types.
+         * @function fromObject
+         * @memberof p2p.DialPeer
+         * @static
+         * @param {Object.<string,*>} object Plain object
+         * @returns {p2p.DialPeer} DialPeer
+         */
+        DialPeer.fromObject = function fromObject(object) {
+            if (object instanceof $root.p2p.DialPeer)
+                return object;
+            var message = new $root.p2p.DialPeer();
+            if (object.multiaddr != null)
+                message.multiaddr = String(object.multiaddr);
+            return message;
+        };
+
+        /**
+         * Creates a plain object from a DialPeer message. Also converts values to other types if specified.
+         * @function toObject
+         * @memberof p2p.DialPeer
+         * @static
+         * @param {p2p.DialPeer} message DialPeer
+         * @param {$protobuf.IConversionOptions} [options] Conversion options
+         * @returns {Object.<string,*>} Plain object
+         */
+        DialPeer.toObject = function toObject(message, options) {
+            if (!options)
+                options = {};
+            var object = {};
+            if (options.defaults)
+                object.multiaddr = "";
+            if (message.multiaddr != null && message.hasOwnProperty("multiaddr"))
+                object.multiaddr = message.multiaddr;
+            return object;
+        };
+
+        /**
+         * Converts this DialPeer to JSON.
+         * @function toJSON
+         * @memberof p2p.DialPeer
+         * @instance
+         * @returns {Object.<string,*>} JSON object
+         */
+        DialPeer.prototype.toJSON = function toJSON() {
+            return this.constructor.toObject(this, $protobuf.util.toJSONOptions);
+        };
+
+        /**
+         * Gets the default type url for DialPeer
+         * @function getTypeUrl
+         * @memberof p2p.DialPeer
+         * @static
+         * @param {string} [typeUrlPrefix] your custom typeUrlPrefix(default "type.googleapis.com")
+         * @returns {string} The default type url
+         */
+        DialPeer.getTypeUrl = function getTypeUrl(typeUrlPrefix) {
+            if (typeUrlPrefix === undefined) {
+                typeUrlPrefix = "type.googleapis.com";
+            }
+            return typeUrlPrefix + "/p2p.DialPeer";
+        };
+
+        return DialPeer;
+    })();
+
     p2p.InitializeRequest = (function() {
 
         /**
          * Properties of an InitializeRequest.
          * @memberof p2p
          * @interface IInitializeRequest
+         * @property {string|null} [network] InitializeRequest network
+         * @property {string|null} [ourPeerId] InitializeRequest ourPeerId
          */
 
         /**
@@ -14659,6 +15239,22 @@ $root.p2p = (function() {
                     if (properties[keys[i]] != null)
                         this[keys[i]] = properties[keys[i]];
         }
+
+        /**
+         * InitializeRequest network.
+         * @member {string} network
+         * @memberof p2p.InitializeRequest
+         * @instance
+         */
+        InitializeRequest.prototype.network = "";
+
+        /**
+         * InitializeRequest ourPeerId.
+         * @member {string} ourPeerId
+         * @memberof p2p.InitializeRequest
+         * @instance
+         */
+        InitializeRequest.prototype.ourPeerId = "";
 
         /**
          * Creates a new InitializeRequest instance using the specified properties.
@@ -14684,6 +15280,10 @@ $root.p2p = (function() {
         InitializeRequest.encode = function encode(message, writer) {
             if (!writer)
                 writer = $Writer.create();
+            if (message.network != null && Object.hasOwnProperty.call(message, "network"))
+                writer.uint32(/* id 1, wireType 2 =*/10).string(message.network);
+            if (message.ourPeerId != null && Object.hasOwnProperty.call(message, "ourPeerId"))
+                writer.uint32(/* id 2, wireType 2 =*/18).string(message.ourPeerId);
             return writer;
         };
 
@@ -14720,6 +15320,14 @@ $root.p2p = (function() {
                 if (tag === error)
                     break;
                 switch (tag >>> 3) {
+                case 1: {
+                        message.network = reader.string();
+                        break;
+                    }
+                case 2: {
+                        message.ourPeerId = reader.string();
+                        break;
+                    }
                 default:
                     reader.skipType(tag & 7);
                     break;
@@ -14755,6 +15363,12 @@ $root.p2p = (function() {
         InitializeRequest.verify = function verify(message) {
             if (typeof message !== "object" || message === null)
                 return "object expected";
+            if (message.network != null && message.hasOwnProperty("network"))
+                if (!$util.isString(message.network))
+                    return "network: string expected";
+            if (message.ourPeerId != null && message.hasOwnProperty("ourPeerId"))
+                if (!$util.isString(message.ourPeerId))
+                    return "ourPeerId: string expected";
             return null;
         };
 
@@ -14769,7 +15383,12 @@ $root.p2p = (function() {
         InitializeRequest.fromObject = function fromObject(object) {
             if (object instanceof $root.p2p.InitializeRequest)
                 return object;
-            return new $root.p2p.InitializeRequest();
+            var message = new $root.p2p.InitializeRequest();
+            if (object.network != null)
+                message.network = String(object.network);
+            if (object.ourPeerId != null)
+                message.ourPeerId = String(object.ourPeerId);
+            return message;
         };
 
         /**
@@ -14781,8 +15400,19 @@ $root.p2p = (function() {
          * @param {$protobuf.IConversionOptions} [options] Conversion options
          * @returns {Object.<string,*>} Plain object
          */
-        InitializeRequest.toObject = function toObject() {
-            return {};
+        InitializeRequest.toObject = function toObject(message, options) {
+            if (!options)
+                options = {};
+            var object = {};
+            if (options.defaults) {
+                object.network = "";
+                object.ourPeerId = "";
+            }
+            if (message.network != null && message.hasOwnProperty("network"))
+                object.network = message.network;
+            if (message.ourPeerId != null && message.hasOwnProperty("ourPeerId"))
+                object.ourPeerId = message.ourPeerId;
+            return object;
         };
 
         /**
@@ -21649,6 +22279,7 @@ $root.p2p = (function() {
          * @interface IUpdateUiBalance
          * @property {string|null} [walletId] UpdateUiBalance walletId
          * @property {string|null} [balanceString] UpdateUiBalance balanceString
+         * @property {string|null} [address] UpdateUiBalance address
          */
 
         /**
@@ -21683,6 +22314,14 @@ $root.p2p = (function() {
         UpdateUiBalance.prototype.balanceString = "";
 
         /**
+         * UpdateUiBalance address.
+         * @member {string} address
+         * @memberof p2p.UpdateUiBalance
+         * @instance
+         */
+        UpdateUiBalance.prototype.address = "";
+
+        /**
          * Creates a new UpdateUiBalance instance using the specified properties.
          * @function create
          * @memberof p2p.UpdateUiBalance
@@ -21710,6 +22349,8 @@ $root.p2p = (function() {
                 writer.uint32(/* id 1, wireType 2 =*/10).string(message.walletId);
             if (message.balanceString != null && Object.hasOwnProperty.call(message, "balanceString"))
                 writer.uint32(/* id 2, wireType 2 =*/18).string(message.balanceString);
+            if (message.address != null && Object.hasOwnProperty.call(message, "address"))
+                writer.uint32(/* id 3, wireType 2 =*/26).string(message.address);
             return writer;
         };
 
@@ -21754,6 +22395,10 @@ $root.p2p = (function() {
                         message.balanceString = reader.string();
                         break;
                     }
+                case 3: {
+                        message.address = reader.string();
+                        break;
+                    }
                 default:
                     reader.skipType(tag & 7);
                     break;
@@ -21795,6 +22440,9 @@ $root.p2p = (function() {
             if (message.balanceString != null && message.hasOwnProperty("balanceString"))
                 if (!$util.isString(message.balanceString))
                     return "balanceString: string expected";
+            if (message.address != null && message.hasOwnProperty("address"))
+                if (!$util.isString(message.address))
+                    return "address: string expected";
             return null;
         };
 
@@ -21814,6 +22462,8 @@ $root.p2p = (function() {
                 message.walletId = String(object.walletId);
             if (object.balanceString != null)
                 message.balanceString = String(object.balanceString);
+            if (object.address != null)
+                message.address = String(object.address);
             return message;
         };
 
@@ -21833,11 +22483,14 @@ $root.p2p = (function() {
             if (options.defaults) {
                 object.walletId = "";
                 object.balanceString = "";
+                object.address = "";
             }
             if (message.walletId != null && message.hasOwnProperty("walletId"))
                 object.walletId = message.walletId;
             if (message.balanceString != null && message.hasOwnProperty("balanceString"))
                 object.balanceString = message.balanceString;
+            if (message.address != null && message.hasOwnProperty("address"))
+                object.address = message.address;
             return object;
         };
 
@@ -23222,6 +23875,3026 @@ $root.p2p = (function() {
         };
 
         return UiTotalSupply;
+    })();
+
+    p2p.SubmitMiningCandidate = (function() {
+
+        /**
+         * Properties of a SubmitMiningCandidate.
+         * @memberof p2p
+         * @interface ISubmitMiningCandidate
+         * @property {number|Long|null} [nonce] SubmitMiningCandidate nonce
+         * @property {p2p.IVrfProofData|null} [vrfProof] SubmitMiningCandidate vrfProof
+         * @property {p2p.IVdfProofData|null} [vdfProof] SubmitMiningCandidate vdfProof
+         * @property {number|Long|null} [height] SubmitMiningCandidate height
+         * @property {string|null} [prevHash] SubmitMiningCandidate prevHash
+         * @property {Uint8Array|null} [minerPubkey] SubmitMiningCandidate minerPubkey
+         * @property {Uint8Array|null} [vrfThreshold] SubmitMiningCandidate vrfThreshold
+         * @property {number|Long|null} [vdfIterations] SubmitMiningCandidate vdfIterations
+         * @property {number|Long|null} [jobId] SubmitMiningCandidate jobId
+         */
+
+        /**
+         * Constructs a new SubmitMiningCandidate.
+         * @memberof p2p
+         * @classdesc Represents a SubmitMiningCandidate.
+         * @implements ISubmitMiningCandidate
+         * @constructor
+         * @param {p2p.ISubmitMiningCandidate=} [properties] Properties to set
+         */
+        function SubmitMiningCandidate(properties) {
+            if (properties)
+                for (var keys = Object.keys(properties), i = 0; i < keys.length; ++i)
+                    if (properties[keys[i]] != null)
+                        this[keys[i]] = properties[keys[i]];
+        }
+
+        /**
+         * SubmitMiningCandidate nonce.
+         * @member {number|Long} nonce
+         * @memberof p2p.SubmitMiningCandidate
+         * @instance
+         */
+        SubmitMiningCandidate.prototype.nonce = $util.Long ? $util.Long.fromBits(0,0,true) : 0;
+
+        /**
+         * SubmitMiningCandidate vrfProof.
+         * @member {p2p.IVrfProofData|null|undefined} vrfProof
+         * @memberof p2p.SubmitMiningCandidate
+         * @instance
+         */
+        SubmitMiningCandidate.prototype.vrfProof = null;
+
+        /**
+         * SubmitMiningCandidate vdfProof.
+         * @member {p2p.IVdfProofData|null|undefined} vdfProof
+         * @memberof p2p.SubmitMiningCandidate
+         * @instance
+         */
+        SubmitMiningCandidate.prototype.vdfProof = null;
+
+        /**
+         * SubmitMiningCandidate height.
+         * @member {number|Long} height
+         * @memberof p2p.SubmitMiningCandidate
+         * @instance
+         */
+        SubmitMiningCandidate.prototype.height = $util.Long ? $util.Long.fromBits(0,0,true) : 0;
+
+        /**
+         * SubmitMiningCandidate prevHash.
+         * @member {string} prevHash
+         * @memberof p2p.SubmitMiningCandidate
+         * @instance
+         */
+        SubmitMiningCandidate.prototype.prevHash = "";
+
+        /**
+         * SubmitMiningCandidate minerPubkey.
+         * @member {Uint8Array} minerPubkey
+         * @memberof p2p.SubmitMiningCandidate
+         * @instance
+         */
+        SubmitMiningCandidate.prototype.minerPubkey = $util.newBuffer([]);
+
+        /**
+         * SubmitMiningCandidate vrfThreshold.
+         * @member {Uint8Array} vrfThreshold
+         * @memberof p2p.SubmitMiningCandidate
+         * @instance
+         */
+        SubmitMiningCandidate.prototype.vrfThreshold = $util.newBuffer([]);
+
+        /**
+         * SubmitMiningCandidate vdfIterations.
+         * @member {number|Long} vdfIterations
+         * @memberof p2p.SubmitMiningCandidate
+         * @instance
+         */
+        SubmitMiningCandidate.prototype.vdfIterations = $util.Long ? $util.Long.fromBits(0,0,true) : 0;
+
+        /**
+         * SubmitMiningCandidate jobId.
+         * @member {number|Long} jobId
+         * @memberof p2p.SubmitMiningCandidate
+         * @instance
+         */
+        SubmitMiningCandidate.prototype.jobId = $util.Long ? $util.Long.fromBits(0,0,true) : 0;
+
+        /**
+         * Creates a new SubmitMiningCandidate instance using the specified properties.
+         * @function create
+         * @memberof p2p.SubmitMiningCandidate
+         * @static
+         * @param {p2p.ISubmitMiningCandidate=} [properties] Properties to set
+         * @returns {p2p.SubmitMiningCandidate} SubmitMiningCandidate instance
+         */
+        SubmitMiningCandidate.create = function create(properties) {
+            return new SubmitMiningCandidate(properties);
+        };
+
+        /**
+         * Encodes the specified SubmitMiningCandidate message. Does not implicitly {@link p2p.SubmitMiningCandidate.verify|verify} messages.
+         * @function encode
+         * @memberof p2p.SubmitMiningCandidate
+         * @static
+         * @param {p2p.ISubmitMiningCandidate} message SubmitMiningCandidate message or plain object to encode
+         * @param {$protobuf.Writer} [writer] Writer to encode to
+         * @returns {$protobuf.Writer} Writer
+         */
+        SubmitMiningCandidate.encode = function encode(message, writer) {
+            if (!writer)
+                writer = $Writer.create();
+            if (message.nonce != null && Object.hasOwnProperty.call(message, "nonce"))
+                writer.uint32(/* id 1, wireType 0 =*/8).uint64(message.nonce);
+            if (message.vrfProof != null && Object.hasOwnProperty.call(message, "vrfProof"))
+                $root.p2p.VrfProofData.encode(message.vrfProof, writer.uint32(/* id 2, wireType 2 =*/18).fork()).ldelim();
+            if (message.vdfProof != null && Object.hasOwnProperty.call(message, "vdfProof"))
+                $root.p2p.VdfProofData.encode(message.vdfProof, writer.uint32(/* id 3, wireType 2 =*/26).fork()).ldelim();
+            if (message.height != null && Object.hasOwnProperty.call(message, "height"))
+                writer.uint32(/* id 4, wireType 0 =*/32).uint64(message.height);
+            if (message.prevHash != null && Object.hasOwnProperty.call(message, "prevHash"))
+                writer.uint32(/* id 5, wireType 2 =*/42).string(message.prevHash);
+            if (message.minerPubkey != null && Object.hasOwnProperty.call(message, "minerPubkey"))
+                writer.uint32(/* id 6, wireType 2 =*/50).bytes(message.minerPubkey);
+            if (message.vrfThreshold != null && Object.hasOwnProperty.call(message, "vrfThreshold"))
+                writer.uint32(/* id 7, wireType 2 =*/58).bytes(message.vrfThreshold);
+            if (message.vdfIterations != null && Object.hasOwnProperty.call(message, "vdfIterations"))
+                writer.uint32(/* id 8, wireType 0 =*/64).uint64(message.vdfIterations);
+            if (message.jobId != null && Object.hasOwnProperty.call(message, "jobId"))
+                writer.uint32(/* id 9, wireType 0 =*/72).uint64(message.jobId);
+            return writer;
+        };
+
+        /**
+         * Encodes the specified SubmitMiningCandidate message, length delimited. Does not implicitly {@link p2p.SubmitMiningCandidate.verify|verify} messages.
+         * @function encodeDelimited
+         * @memberof p2p.SubmitMiningCandidate
+         * @static
+         * @param {p2p.ISubmitMiningCandidate} message SubmitMiningCandidate message or plain object to encode
+         * @param {$protobuf.Writer} [writer] Writer to encode to
+         * @returns {$protobuf.Writer} Writer
+         */
+        SubmitMiningCandidate.encodeDelimited = function encodeDelimited(message, writer) {
+            return this.encode(message, writer).ldelim();
+        };
+
+        /**
+         * Decodes a SubmitMiningCandidate message from the specified reader or buffer.
+         * @function decode
+         * @memberof p2p.SubmitMiningCandidate
+         * @static
+         * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
+         * @param {number} [length] Message length if known beforehand
+         * @returns {p2p.SubmitMiningCandidate} SubmitMiningCandidate
+         * @throws {Error} If the payload is not a reader or valid buffer
+         * @throws {$protobuf.util.ProtocolError} If required fields are missing
+         */
+        SubmitMiningCandidate.decode = function decode(reader, length, error) {
+            if (!(reader instanceof $Reader))
+                reader = $Reader.create(reader);
+            var end = length === undefined ? reader.len : reader.pos + length, message = new $root.p2p.SubmitMiningCandidate();
+            while (reader.pos < end) {
+                var tag = reader.uint32();
+                if (tag === error)
+                    break;
+                switch (tag >>> 3) {
+                case 1: {
+                        message.nonce = reader.uint64();
+                        break;
+                    }
+                case 2: {
+                        message.vrfProof = $root.p2p.VrfProofData.decode(reader, reader.uint32());
+                        break;
+                    }
+                case 3: {
+                        message.vdfProof = $root.p2p.VdfProofData.decode(reader, reader.uint32());
+                        break;
+                    }
+                case 4: {
+                        message.height = reader.uint64();
+                        break;
+                    }
+                case 5: {
+                        message.prevHash = reader.string();
+                        break;
+                    }
+                case 6: {
+                        message.minerPubkey = reader.bytes();
+                        break;
+                    }
+                case 7: {
+                        message.vrfThreshold = reader.bytes();
+                        break;
+                    }
+                case 8: {
+                        message.vdfIterations = reader.uint64();
+                        break;
+                    }
+                case 9: {
+                        message.jobId = reader.uint64();
+                        break;
+                    }
+                default:
+                    reader.skipType(tag & 7);
+                    break;
+                }
+            }
+            return message;
+        };
+
+        /**
+         * Decodes a SubmitMiningCandidate message from the specified reader or buffer, length delimited.
+         * @function decodeDelimited
+         * @memberof p2p.SubmitMiningCandidate
+         * @static
+         * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
+         * @returns {p2p.SubmitMiningCandidate} SubmitMiningCandidate
+         * @throws {Error} If the payload is not a reader or valid buffer
+         * @throws {$protobuf.util.ProtocolError} If required fields are missing
+         */
+        SubmitMiningCandidate.decodeDelimited = function decodeDelimited(reader) {
+            if (!(reader instanceof $Reader))
+                reader = new $Reader(reader);
+            return this.decode(reader, reader.uint32());
+        };
+
+        /**
+         * Verifies a SubmitMiningCandidate message.
+         * @function verify
+         * @memberof p2p.SubmitMiningCandidate
+         * @static
+         * @param {Object.<string,*>} message Plain object to verify
+         * @returns {string|null} `null` if valid, otherwise the reason why it is not
+         */
+        SubmitMiningCandidate.verify = function verify(message) {
+            if (typeof message !== "object" || message === null)
+                return "object expected";
+            if (message.nonce != null && message.hasOwnProperty("nonce"))
+                if (!$util.isInteger(message.nonce) && !(message.nonce && $util.isInteger(message.nonce.low) && $util.isInteger(message.nonce.high)))
+                    return "nonce: integer|Long expected";
+            if (message.vrfProof != null && message.hasOwnProperty("vrfProof")) {
+                var error = $root.p2p.VrfProofData.verify(message.vrfProof);
+                if (error)
+                    return "vrfProof." + error;
+            }
+            if (message.vdfProof != null && message.hasOwnProperty("vdfProof")) {
+                var error = $root.p2p.VdfProofData.verify(message.vdfProof);
+                if (error)
+                    return "vdfProof." + error;
+            }
+            if (message.height != null && message.hasOwnProperty("height"))
+                if (!$util.isInteger(message.height) && !(message.height && $util.isInteger(message.height.low) && $util.isInteger(message.height.high)))
+                    return "height: integer|Long expected";
+            if (message.prevHash != null && message.hasOwnProperty("prevHash"))
+                if (!$util.isString(message.prevHash))
+                    return "prevHash: string expected";
+            if (message.minerPubkey != null && message.hasOwnProperty("minerPubkey"))
+                if (!(message.minerPubkey && typeof message.minerPubkey.length === "number" || $util.isString(message.minerPubkey)))
+                    return "minerPubkey: buffer expected";
+            if (message.vrfThreshold != null && message.hasOwnProperty("vrfThreshold"))
+                if (!(message.vrfThreshold && typeof message.vrfThreshold.length === "number" || $util.isString(message.vrfThreshold)))
+                    return "vrfThreshold: buffer expected";
+            if (message.vdfIterations != null && message.hasOwnProperty("vdfIterations"))
+                if (!$util.isInteger(message.vdfIterations) && !(message.vdfIterations && $util.isInteger(message.vdfIterations.low) && $util.isInteger(message.vdfIterations.high)))
+                    return "vdfIterations: integer|Long expected";
+            if (message.jobId != null && message.hasOwnProperty("jobId"))
+                if (!$util.isInteger(message.jobId) && !(message.jobId && $util.isInteger(message.jobId.low) && $util.isInteger(message.jobId.high)))
+                    return "jobId: integer|Long expected";
+            return null;
+        };
+
+        /**
+         * Creates a SubmitMiningCandidate message from a plain object. Also converts values to their respective internal types.
+         * @function fromObject
+         * @memberof p2p.SubmitMiningCandidate
+         * @static
+         * @param {Object.<string,*>} object Plain object
+         * @returns {p2p.SubmitMiningCandidate} SubmitMiningCandidate
+         */
+        SubmitMiningCandidate.fromObject = function fromObject(object) {
+            if (object instanceof $root.p2p.SubmitMiningCandidate)
+                return object;
+            var message = new $root.p2p.SubmitMiningCandidate();
+            if (object.nonce != null)
+                if ($util.Long)
+                    (message.nonce = $util.Long.fromValue(object.nonce)).unsigned = true;
+                else if (typeof object.nonce === "string")
+                    message.nonce = parseInt(object.nonce, 10);
+                else if (typeof object.nonce === "number")
+                    message.nonce = object.nonce;
+                else if (typeof object.nonce === "object")
+                    message.nonce = new $util.LongBits(object.nonce.low >>> 0, object.nonce.high >>> 0).toNumber(true);
+            if (object.vrfProof != null) {
+                if (typeof object.vrfProof !== "object")
+                    throw TypeError(".p2p.SubmitMiningCandidate.vrfProof: object expected");
+                message.vrfProof = $root.p2p.VrfProofData.fromObject(object.vrfProof);
+            }
+            if (object.vdfProof != null) {
+                if (typeof object.vdfProof !== "object")
+                    throw TypeError(".p2p.SubmitMiningCandidate.vdfProof: object expected");
+                message.vdfProof = $root.p2p.VdfProofData.fromObject(object.vdfProof);
+            }
+            if (object.height != null)
+                if ($util.Long)
+                    (message.height = $util.Long.fromValue(object.height)).unsigned = true;
+                else if (typeof object.height === "string")
+                    message.height = parseInt(object.height, 10);
+                else if (typeof object.height === "number")
+                    message.height = object.height;
+                else if (typeof object.height === "object")
+                    message.height = new $util.LongBits(object.height.low >>> 0, object.height.high >>> 0).toNumber(true);
+            if (object.prevHash != null)
+                message.prevHash = String(object.prevHash);
+            if (object.minerPubkey != null)
+                if (typeof object.minerPubkey === "string")
+                    $util.base64.decode(object.minerPubkey, message.minerPubkey = $util.newBuffer($util.base64.length(object.minerPubkey)), 0);
+                else if (object.minerPubkey.length >= 0)
+                    message.minerPubkey = object.minerPubkey;
+            if (object.vrfThreshold != null)
+                if (typeof object.vrfThreshold === "string")
+                    $util.base64.decode(object.vrfThreshold, message.vrfThreshold = $util.newBuffer($util.base64.length(object.vrfThreshold)), 0);
+                else if (object.vrfThreshold.length >= 0)
+                    message.vrfThreshold = object.vrfThreshold;
+            if (object.vdfIterations != null)
+                if ($util.Long)
+                    (message.vdfIterations = $util.Long.fromValue(object.vdfIterations)).unsigned = true;
+                else if (typeof object.vdfIterations === "string")
+                    message.vdfIterations = parseInt(object.vdfIterations, 10);
+                else if (typeof object.vdfIterations === "number")
+                    message.vdfIterations = object.vdfIterations;
+                else if (typeof object.vdfIterations === "object")
+                    message.vdfIterations = new $util.LongBits(object.vdfIterations.low >>> 0, object.vdfIterations.high >>> 0).toNumber(true);
+            if (object.jobId != null)
+                if ($util.Long)
+                    (message.jobId = $util.Long.fromValue(object.jobId)).unsigned = true;
+                else if (typeof object.jobId === "string")
+                    message.jobId = parseInt(object.jobId, 10);
+                else if (typeof object.jobId === "number")
+                    message.jobId = object.jobId;
+                else if (typeof object.jobId === "object")
+                    message.jobId = new $util.LongBits(object.jobId.low >>> 0, object.jobId.high >>> 0).toNumber(true);
+            return message;
+        };
+
+        /**
+         * Creates a plain object from a SubmitMiningCandidate message. Also converts values to other types if specified.
+         * @function toObject
+         * @memberof p2p.SubmitMiningCandidate
+         * @static
+         * @param {p2p.SubmitMiningCandidate} message SubmitMiningCandidate
+         * @param {$protobuf.IConversionOptions} [options] Conversion options
+         * @returns {Object.<string,*>} Plain object
+         */
+        SubmitMiningCandidate.toObject = function toObject(message, options) {
+            if (!options)
+                options = {};
+            var object = {};
+            if (options.defaults) {
+                if ($util.Long) {
+                    var long = new $util.Long(0, 0, true);
+                    object.nonce = options.longs === String ? long.toString() : options.longs === Number ? long.toNumber() : long;
+                } else
+                    object.nonce = options.longs === String ? "0" : 0;
+                object.vrfProof = null;
+                object.vdfProof = null;
+                if ($util.Long) {
+                    var long = new $util.Long(0, 0, true);
+                    object.height = options.longs === String ? long.toString() : options.longs === Number ? long.toNumber() : long;
+                } else
+                    object.height = options.longs === String ? "0" : 0;
+                object.prevHash = "";
+                if (options.bytes === String)
+                    object.minerPubkey = "";
+                else {
+                    object.minerPubkey = [];
+                    if (options.bytes !== Array)
+                        object.minerPubkey = $util.newBuffer(object.minerPubkey);
+                }
+                if (options.bytes === String)
+                    object.vrfThreshold = "";
+                else {
+                    object.vrfThreshold = [];
+                    if (options.bytes !== Array)
+                        object.vrfThreshold = $util.newBuffer(object.vrfThreshold);
+                }
+                if ($util.Long) {
+                    var long = new $util.Long(0, 0, true);
+                    object.vdfIterations = options.longs === String ? long.toString() : options.longs === Number ? long.toNumber() : long;
+                } else
+                    object.vdfIterations = options.longs === String ? "0" : 0;
+                if ($util.Long) {
+                    var long = new $util.Long(0, 0, true);
+                    object.jobId = options.longs === String ? long.toString() : options.longs === Number ? long.toNumber() : long;
+                } else
+                    object.jobId = options.longs === String ? "0" : 0;
+            }
+            if (message.nonce != null && message.hasOwnProperty("nonce"))
+                if (typeof message.nonce === "number")
+                    object.nonce = options.longs === String ? String(message.nonce) : message.nonce;
+                else
+                    object.nonce = options.longs === String ? $util.Long.prototype.toString.call(message.nonce) : options.longs === Number ? new $util.LongBits(message.nonce.low >>> 0, message.nonce.high >>> 0).toNumber(true) : message.nonce;
+            if (message.vrfProof != null && message.hasOwnProperty("vrfProof"))
+                object.vrfProof = $root.p2p.VrfProofData.toObject(message.vrfProof, options);
+            if (message.vdfProof != null && message.hasOwnProperty("vdfProof"))
+                object.vdfProof = $root.p2p.VdfProofData.toObject(message.vdfProof, options);
+            if (message.height != null && message.hasOwnProperty("height"))
+                if (typeof message.height === "number")
+                    object.height = options.longs === String ? String(message.height) : message.height;
+                else
+                    object.height = options.longs === String ? $util.Long.prototype.toString.call(message.height) : options.longs === Number ? new $util.LongBits(message.height.low >>> 0, message.height.high >>> 0).toNumber(true) : message.height;
+            if (message.prevHash != null && message.hasOwnProperty("prevHash"))
+                object.prevHash = message.prevHash;
+            if (message.minerPubkey != null && message.hasOwnProperty("minerPubkey"))
+                object.minerPubkey = options.bytes === String ? $util.base64.encode(message.minerPubkey, 0, message.minerPubkey.length) : options.bytes === Array ? Array.prototype.slice.call(message.minerPubkey) : message.minerPubkey;
+            if (message.vrfThreshold != null && message.hasOwnProperty("vrfThreshold"))
+                object.vrfThreshold = options.bytes === String ? $util.base64.encode(message.vrfThreshold, 0, message.vrfThreshold.length) : options.bytes === Array ? Array.prototype.slice.call(message.vrfThreshold) : message.vrfThreshold;
+            if (message.vdfIterations != null && message.hasOwnProperty("vdfIterations"))
+                if (typeof message.vdfIterations === "number")
+                    object.vdfIterations = options.longs === String ? String(message.vdfIterations) : message.vdfIterations;
+                else
+                    object.vdfIterations = options.longs === String ? $util.Long.prototype.toString.call(message.vdfIterations) : options.longs === Number ? new $util.LongBits(message.vdfIterations.low >>> 0, message.vdfIterations.high >>> 0).toNumber(true) : message.vdfIterations;
+            if (message.jobId != null && message.hasOwnProperty("jobId"))
+                if (typeof message.jobId === "number")
+                    object.jobId = options.longs === String ? String(message.jobId) : message.jobId;
+                else
+                    object.jobId = options.longs === String ? $util.Long.prototype.toString.call(message.jobId) : options.longs === Number ? new $util.LongBits(message.jobId.low >>> 0, message.jobId.high >>> 0).toNumber(true) : message.jobId;
+            return object;
+        };
+
+        /**
+         * Converts this SubmitMiningCandidate to JSON.
+         * @function toJSON
+         * @memberof p2p.SubmitMiningCandidate
+         * @instance
+         * @returns {Object.<string,*>} JSON object
+         */
+        SubmitMiningCandidate.prototype.toJSON = function toJSON() {
+            return this.constructor.toObject(this, $protobuf.util.toJSONOptions);
+        };
+
+        /**
+         * Gets the default type url for SubmitMiningCandidate
+         * @function getTypeUrl
+         * @memberof p2p.SubmitMiningCandidate
+         * @static
+         * @param {string} [typeUrlPrefix] your custom typeUrlPrefix(default "type.googleapis.com")
+         * @returns {string} The default type url
+         */
+        SubmitMiningCandidate.getTypeUrl = function getTypeUrl(typeUrlPrefix) {
+            if (typeUrlPrefix === undefined) {
+                typeUrlPrefix = "type.googleapis.com";
+            }
+            return typeUrlPrefix + "/p2p.SubmitMiningCandidate";
+        };
+
+        return SubmitMiningCandidate;
+    })();
+
+    p2p.VrfProofData = (function() {
+
+        /**
+         * Properties of a VrfProofData.
+         * @memberof p2p
+         * @interface IVrfProofData
+         * @property {Uint8Array|null} [gamma] VrfProofData gamma
+         * @property {Uint8Array|null} [c] VrfProofData c
+         * @property {Uint8Array|null} [s] VrfProofData s
+         * @property {Uint8Array|null} [output] VrfProofData output
+         */
+
+        /**
+         * Constructs a new VrfProofData.
+         * @memberof p2p
+         * @classdesc Represents a VrfProofData.
+         * @implements IVrfProofData
+         * @constructor
+         * @param {p2p.IVrfProofData=} [properties] Properties to set
+         */
+        function VrfProofData(properties) {
+            if (properties)
+                for (var keys = Object.keys(properties), i = 0; i < keys.length; ++i)
+                    if (properties[keys[i]] != null)
+                        this[keys[i]] = properties[keys[i]];
+        }
+
+        /**
+         * VrfProofData gamma.
+         * @member {Uint8Array} gamma
+         * @memberof p2p.VrfProofData
+         * @instance
+         */
+        VrfProofData.prototype.gamma = $util.newBuffer([]);
+
+        /**
+         * VrfProofData c.
+         * @member {Uint8Array} c
+         * @memberof p2p.VrfProofData
+         * @instance
+         */
+        VrfProofData.prototype.c = $util.newBuffer([]);
+
+        /**
+         * VrfProofData s.
+         * @member {Uint8Array} s
+         * @memberof p2p.VrfProofData
+         * @instance
+         */
+        VrfProofData.prototype.s = $util.newBuffer([]);
+
+        /**
+         * VrfProofData output.
+         * @member {Uint8Array} output
+         * @memberof p2p.VrfProofData
+         * @instance
+         */
+        VrfProofData.prototype.output = $util.newBuffer([]);
+
+        /**
+         * Creates a new VrfProofData instance using the specified properties.
+         * @function create
+         * @memberof p2p.VrfProofData
+         * @static
+         * @param {p2p.IVrfProofData=} [properties] Properties to set
+         * @returns {p2p.VrfProofData} VrfProofData instance
+         */
+        VrfProofData.create = function create(properties) {
+            return new VrfProofData(properties);
+        };
+
+        /**
+         * Encodes the specified VrfProofData message. Does not implicitly {@link p2p.VrfProofData.verify|verify} messages.
+         * @function encode
+         * @memberof p2p.VrfProofData
+         * @static
+         * @param {p2p.IVrfProofData} message VrfProofData message or plain object to encode
+         * @param {$protobuf.Writer} [writer] Writer to encode to
+         * @returns {$protobuf.Writer} Writer
+         */
+        VrfProofData.encode = function encode(message, writer) {
+            if (!writer)
+                writer = $Writer.create();
+            if (message.gamma != null && Object.hasOwnProperty.call(message, "gamma"))
+                writer.uint32(/* id 1, wireType 2 =*/10).bytes(message.gamma);
+            if (message.c != null && Object.hasOwnProperty.call(message, "c"))
+                writer.uint32(/* id 2, wireType 2 =*/18).bytes(message.c);
+            if (message.s != null && Object.hasOwnProperty.call(message, "s"))
+                writer.uint32(/* id 3, wireType 2 =*/26).bytes(message.s);
+            if (message.output != null && Object.hasOwnProperty.call(message, "output"))
+                writer.uint32(/* id 4, wireType 2 =*/34).bytes(message.output);
+            return writer;
+        };
+
+        /**
+         * Encodes the specified VrfProofData message, length delimited. Does not implicitly {@link p2p.VrfProofData.verify|verify} messages.
+         * @function encodeDelimited
+         * @memberof p2p.VrfProofData
+         * @static
+         * @param {p2p.IVrfProofData} message VrfProofData message or plain object to encode
+         * @param {$protobuf.Writer} [writer] Writer to encode to
+         * @returns {$protobuf.Writer} Writer
+         */
+        VrfProofData.encodeDelimited = function encodeDelimited(message, writer) {
+            return this.encode(message, writer).ldelim();
+        };
+
+        /**
+         * Decodes a VrfProofData message from the specified reader or buffer.
+         * @function decode
+         * @memberof p2p.VrfProofData
+         * @static
+         * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
+         * @param {number} [length] Message length if known beforehand
+         * @returns {p2p.VrfProofData} VrfProofData
+         * @throws {Error} If the payload is not a reader or valid buffer
+         * @throws {$protobuf.util.ProtocolError} If required fields are missing
+         */
+        VrfProofData.decode = function decode(reader, length, error) {
+            if (!(reader instanceof $Reader))
+                reader = $Reader.create(reader);
+            var end = length === undefined ? reader.len : reader.pos + length, message = new $root.p2p.VrfProofData();
+            while (reader.pos < end) {
+                var tag = reader.uint32();
+                if (tag === error)
+                    break;
+                switch (tag >>> 3) {
+                case 1: {
+                        message.gamma = reader.bytes();
+                        break;
+                    }
+                case 2: {
+                        message.c = reader.bytes();
+                        break;
+                    }
+                case 3: {
+                        message.s = reader.bytes();
+                        break;
+                    }
+                case 4: {
+                        message.output = reader.bytes();
+                        break;
+                    }
+                default:
+                    reader.skipType(tag & 7);
+                    break;
+                }
+            }
+            return message;
+        };
+
+        /**
+         * Decodes a VrfProofData message from the specified reader or buffer, length delimited.
+         * @function decodeDelimited
+         * @memberof p2p.VrfProofData
+         * @static
+         * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
+         * @returns {p2p.VrfProofData} VrfProofData
+         * @throws {Error} If the payload is not a reader or valid buffer
+         * @throws {$protobuf.util.ProtocolError} If required fields are missing
+         */
+        VrfProofData.decodeDelimited = function decodeDelimited(reader) {
+            if (!(reader instanceof $Reader))
+                reader = new $Reader(reader);
+            return this.decode(reader, reader.uint32());
+        };
+
+        /**
+         * Verifies a VrfProofData message.
+         * @function verify
+         * @memberof p2p.VrfProofData
+         * @static
+         * @param {Object.<string,*>} message Plain object to verify
+         * @returns {string|null} `null` if valid, otherwise the reason why it is not
+         */
+        VrfProofData.verify = function verify(message) {
+            if (typeof message !== "object" || message === null)
+                return "object expected";
+            if (message.gamma != null && message.hasOwnProperty("gamma"))
+                if (!(message.gamma && typeof message.gamma.length === "number" || $util.isString(message.gamma)))
+                    return "gamma: buffer expected";
+            if (message.c != null && message.hasOwnProperty("c"))
+                if (!(message.c && typeof message.c.length === "number" || $util.isString(message.c)))
+                    return "c: buffer expected";
+            if (message.s != null && message.hasOwnProperty("s"))
+                if (!(message.s && typeof message.s.length === "number" || $util.isString(message.s)))
+                    return "s: buffer expected";
+            if (message.output != null && message.hasOwnProperty("output"))
+                if (!(message.output && typeof message.output.length === "number" || $util.isString(message.output)))
+                    return "output: buffer expected";
+            return null;
+        };
+
+        /**
+         * Creates a VrfProofData message from a plain object. Also converts values to their respective internal types.
+         * @function fromObject
+         * @memberof p2p.VrfProofData
+         * @static
+         * @param {Object.<string,*>} object Plain object
+         * @returns {p2p.VrfProofData} VrfProofData
+         */
+        VrfProofData.fromObject = function fromObject(object) {
+            if (object instanceof $root.p2p.VrfProofData)
+                return object;
+            var message = new $root.p2p.VrfProofData();
+            if (object.gamma != null)
+                if (typeof object.gamma === "string")
+                    $util.base64.decode(object.gamma, message.gamma = $util.newBuffer($util.base64.length(object.gamma)), 0);
+                else if (object.gamma.length >= 0)
+                    message.gamma = object.gamma;
+            if (object.c != null)
+                if (typeof object.c === "string")
+                    $util.base64.decode(object.c, message.c = $util.newBuffer($util.base64.length(object.c)), 0);
+                else if (object.c.length >= 0)
+                    message.c = object.c;
+            if (object.s != null)
+                if (typeof object.s === "string")
+                    $util.base64.decode(object.s, message.s = $util.newBuffer($util.base64.length(object.s)), 0);
+                else if (object.s.length >= 0)
+                    message.s = object.s;
+            if (object.output != null)
+                if (typeof object.output === "string")
+                    $util.base64.decode(object.output, message.output = $util.newBuffer($util.base64.length(object.output)), 0);
+                else if (object.output.length >= 0)
+                    message.output = object.output;
+            return message;
+        };
+
+        /**
+         * Creates a plain object from a VrfProofData message. Also converts values to other types if specified.
+         * @function toObject
+         * @memberof p2p.VrfProofData
+         * @static
+         * @param {p2p.VrfProofData} message VrfProofData
+         * @param {$protobuf.IConversionOptions} [options] Conversion options
+         * @returns {Object.<string,*>} Plain object
+         */
+        VrfProofData.toObject = function toObject(message, options) {
+            if (!options)
+                options = {};
+            var object = {};
+            if (options.defaults) {
+                if (options.bytes === String)
+                    object.gamma = "";
+                else {
+                    object.gamma = [];
+                    if (options.bytes !== Array)
+                        object.gamma = $util.newBuffer(object.gamma);
+                }
+                if (options.bytes === String)
+                    object.c = "";
+                else {
+                    object.c = [];
+                    if (options.bytes !== Array)
+                        object.c = $util.newBuffer(object.c);
+                }
+                if (options.bytes === String)
+                    object.s = "";
+                else {
+                    object.s = [];
+                    if (options.bytes !== Array)
+                        object.s = $util.newBuffer(object.s);
+                }
+                if (options.bytes === String)
+                    object.output = "";
+                else {
+                    object.output = [];
+                    if (options.bytes !== Array)
+                        object.output = $util.newBuffer(object.output);
+                }
+            }
+            if (message.gamma != null && message.hasOwnProperty("gamma"))
+                object.gamma = options.bytes === String ? $util.base64.encode(message.gamma, 0, message.gamma.length) : options.bytes === Array ? Array.prototype.slice.call(message.gamma) : message.gamma;
+            if (message.c != null && message.hasOwnProperty("c"))
+                object.c = options.bytes === String ? $util.base64.encode(message.c, 0, message.c.length) : options.bytes === Array ? Array.prototype.slice.call(message.c) : message.c;
+            if (message.s != null && message.hasOwnProperty("s"))
+                object.s = options.bytes === String ? $util.base64.encode(message.s, 0, message.s.length) : options.bytes === Array ? Array.prototype.slice.call(message.s) : message.s;
+            if (message.output != null && message.hasOwnProperty("output"))
+                object.output = options.bytes === String ? $util.base64.encode(message.output, 0, message.output.length) : options.bytes === Array ? Array.prototype.slice.call(message.output) : message.output;
+            return object;
+        };
+
+        /**
+         * Converts this VrfProofData to JSON.
+         * @function toJSON
+         * @memberof p2p.VrfProofData
+         * @instance
+         * @returns {Object.<string,*>} JSON object
+         */
+        VrfProofData.prototype.toJSON = function toJSON() {
+            return this.constructor.toObject(this, $protobuf.util.toJSONOptions);
+        };
+
+        /**
+         * Gets the default type url for VrfProofData
+         * @function getTypeUrl
+         * @memberof p2p.VrfProofData
+         * @static
+         * @param {string} [typeUrlPrefix] your custom typeUrlPrefix(default "type.googleapis.com")
+         * @returns {string} The default type url
+         */
+        VrfProofData.getTypeUrl = function getTypeUrl(typeUrlPrefix) {
+            if (typeUrlPrefix === undefined) {
+                typeUrlPrefix = "type.googleapis.com";
+            }
+            return typeUrlPrefix + "/p2p.VrfProofData";
+        };
+
+        return VrfProofData;
+    })();
+
+    p2p.VdfProofData = (function() {
+
+        /**
+         * Properties of a VdfProofData.
+         * @memberof p2p
+         * @interface IVdfProofData
+         * @property {Uint8Array|null} [y] VdfProofData y
+         * @property {Uint8Array|null} [pi] VdfProofData pi
+         * @property {Uint8Array|null} [l] VdfProofData l
+         * @property {Uint8Array|null} [r] VdfProofData r
+         * @property {number|Long|null} [iterations] VdfProofData iterations
+         */
+
+        /**
+         * Constructs a new VdfProofData.
+         * @memberof p2p
+         * @classdesc Represents a VdfProofData.
+         * @implements IVdfProofData
+         * @constructor
+         * @param {p2p.IVdfProofData=} [properties] Properties to set
+         */
+        function VdfProofData(properties) {
+            if (properties)
+                for (var keys = Object.keys(properties), i = 0; i < keys.length; ++i)
+                    if (properties[keys[i]] != null)
+                        this[keys[i]] = properties[keys[i]];
+        }
+
+        /**
+         * VdfProofData y.
+         * @member {Uint8Array} y
+         * @memberof p2p.VdfProofData
+         * @instance
+         */
+        VdfProofData.prototype.y = $util.newBuffer([]);
+
+        /**
+         * VdfProofData pi.
+         * @member {Uint8Array} pi
+         * @memberof p2p.VdfProofData
+         * @instance
+         */
+        VdfProofData.prototype.pi = $util.newBuffer([]);
+
+        /**
+         * VdfProofData l.
+         * @member {Uint8Array} l
+         * @memberof p2p.VdfProofData
+         * @instance
+         */
+        VdfProofData.prototype.l = $util.newBuffer([]);
+
+        /**
+         * VdfProofData r.
+         * @member {Uint8Array} r
+         * @memberof p2p.VdfProofData
+         * @instance
+         */
+        VdfProofData.prototype.r = $util.newBuffer([]);
+
+        /**
+         * VdfProofData iterations.
+         * @member {number|Long} iterations
+         * @memberof p2p.VdfProofData
+         * @instance
+         */
+        VdfProofData.prototype.iterations = $util.Long ? $util.Long.fromBits(0,0,true) : 0;
+
+        /**
+         * Creates a new VdfProofData instance using the specified properties.
+         * @function create
+         * @memberof p2p.VdfProofData
+         * @static
+         * @param {p2p.IVdfProofData=} [properties] Properties to set
+         * @returns {p2p.VdfProofData} VdfProofData instance
+         */
+        VdfProofData.create = function create(properties) {
+            return new VdfProofData(properties);
+        };
+
+        /**
+         * Encodes the specified VdfProofData message. Does not implicitly {@link p2p.VdfProofData.verify|verify} messages.
+         * @function encode
+         * @memberof p2p.VdfProofData
+         * @static
+         * @param {p2p.IVdfProofData} message VdfProofData message or plain object to encode
+         * @param {$protobuf.Writer} [writer] Writer to encode to
+         * @returns {$protobuf.Writer} Writer
+         */
+        VdfProofData.encode = function encode(message, writer) {
+            if (!writer)
+                writer = $Writer.create();
+            if (message.y != null && Object.hasOwnProperty.call(message, "y"))
+                writer.uint32(/* id 1, wireType 2 =*/10).bytes(message.y);
+            if (message.pi != null && Object.hasOwnProperty.call(message, "pi"))
+                writer.uint32(/* id 2, wireType 2 =*/18).bytes(message.pi);
+            if (message.l != null && Object.hasOwnProperty.call(message, "l"))
+                writer.uint32(/* id 3, wireType 2 =*/26).bytes(message.l);
+            if (message.r != null && Object.hasOwnProperty.call(message, "r"))
+                writer.uint32(/* id 4, wireType 2 =*/34).bytes(message.r);
+            if (message.iterations != null && Object.hasOwnProperty.call(message, "iterations"))
+                writer.uint32(/* id 5, wireType 0 =*/40).uint64(message.iterations);
+            return writer;
+        };
+
+        /**
+         * Encodes the specified VdfProofData message, length delimited. Does not implicitly {@link p2p.VdfProofData.verify|verify} messages.
+         * @function encodeDelimited
+         * @memberof p2p.VdfProofData
+         * @static
+         * @param {p2p.IVdfProofData} message VdfProofData message or plain object to encode
+         * @param {$protobuf.Writer} [writer] Writer to encode to
+         * @returns {$protobuf.Writer} Writer
+         */
+        VdfProofData.encodeDelimited = function encodeDelimited(message, writer) {
+            return this.encode(message, writer).ldelim();
+        };
+
+        /**
+         * Decodes a VdfProofData message from the specified reader or buffer.
+         * @function decode
+         * @memberof p2p.VdfProofData
+         * @static
+         * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
+         * @param {number} [length] Message length if known beforehand
+         * @returns {p2p.VdfProofData} VdfProofData
+         * @throws {Error} If the payload is not a reader or valid buffer
+         * @throws {$protobuf.util.ProtocolError} If required fields are missing
+         */
+        VdfProofData.decode = function decode(reader, length, error) {
+            if (!(reader instanceof $Reader))
+                reader = $Reader.create(reader);
+            var end = length === undefined ? reader.len : reader.pos + length, message = new $root.p2p.VdfProofData();
+            while (reader.pos < end) {
+                var tag = reader.uint32();
+                if (tag === error)
+                    break;
+                switch (tag >>> 3) {
+                case 1: {
+                        message.y = reader.bytes();
+                        break;
+                    }
+                case 2: {
+                        message.pi = reader.bytes();
+                        break;
+                    }
+                case 3: {
+                        message.l = reader.bytes();
+                        break;
+                    }
+                case 4: {
+                        message.r = reader.bytes();
+                        break;
+                    }
+                case 5: {
+                        message.iterations = reader.uint64();
+                        break;
+                    }
+                default:
+                    reader.skipType(tag & 7);
+                    break;
+                }
+            }
+            return message;
+        };
+
+        /**
+         * Decodes a VdfProofData message from the specified reader or buffer, length delimited.
+         * @function decodeDelimited
+         * @memberof p2p.VdfProofData
+         * @static
+         * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
+         * @returns {p2p.VdfProofData} VdfProofData
+         * @throws {Error} If the payload is not a reader or valid buffer
+         * @throws {$protobuf.util.ProtocolError} If required fields are missing
+         */
+        VdfProofData.decodeDelimited = function decodeDelimited(reader) {
+            if (!(reader instanceof $Reader))
+                reader = new $Reader(reader);
+            return this.decode(reader, reader.uint32());
+        };
+
+        /**
+         * Verifies a VdfProofData message.
+         * @function verify
+         * @memberof p2p.VdfProofData
+         * @static
+         * @param {Object.<string,*>} message Plain object to verify
+         * @returns {string|null} `null` if valid, otherwise the reason why it is not
+         */
+        VdfProofData.verify = function verify(message) {
+            if (typeof message !== "object" || message === null)
+                return "object expected";
+            if (message.y != null && message.hasOwnProperty("y"))
+                if (!(message.y && typeof message.y.length === "number" || $util.isString(message.y)))
+                    return "y: buffer expected";
+            if (message.pi != null && message.hasOwnProperty("pi"))
+                if (!(message.pi && typeof message.pi.length === "number" || $util.isString(message.pi)))
+                    return "pi: buffer expected";
+            if (message.l != null && message.hasOwnProperty("l"))
+                if (!(message.l && typeof message.l.length === "number" || $util.isString(message.l)))
+                    return "l: buffer expected";
+            if (message.r != null && message.hasOwnProperty("r"))
+                if (!(message.r && typeof message.r.length === "number" || $util.isString(message.r)))
+                    return "r: buffer expected";
+            if (message.iterations != null && message.hasOwnProperty("iterations"))
+                if (!$util.isInteger(message.iterations) && !(message.iterations && $util.isInteger(message.iterations.low) && $util.isInteger(message.iterations.high)))
+                    return "iterations: integer|Long expected";
+            return null;
+        };
+
+        /**
+         * Creates a VdfProofData message from a plain object. Also converts values to their respective internal types.
+         * @function fromObject
+         * @memberof p2p.VdfProofData
+         * @static
+         * @param {Object.<string,*>} object Plain object
+         * @returns {p2p.VdfProofData} VdfProofData
+         */
+        VdfProofData.fromObject = function fromObject(object) {
+            if (object instanceof $root.p2p.VdfProofData)
+                return object;
+            var message = new $root.p2p.VdfProofData();
+            if (object.y != null)
+                if (typeof object.y === "string")
+                    $util.base64.decode(object.y, message.y = $util.newBuffer($util.base64.length(object.y)), 0);
+                else if (object.y.length >= 0)
+                    message.y = object.y;
+            if (object.pi != null)
+                if (typeof object.pi === "string")
+                    $util.base64.decode(object.pi, message.pi = $util.newBuffer($util.base64.length(object.pi)), 0);
+                else if (object.pi.length >= 0)
+                    message.pi = object.pi;
+            if (object.l != null)
+                if (typeof object.l === "string")
+                    $util.base64.decode(object.l, message.l = $util.newBuffer($util.base64.length(object.l)), 0);
+                else if (object.l.length >= 0)
+                    message.l = object.l;
+            if (object.r != null)
+                if (typeof object.r === "string")
+                    $util.base64.decode(object.r, message.r = $util.newBuffer($util.base64.length(object.r)), 0);
+                else if (object.r.length >= 0)
+                    message.r = object.r;
+            if (object.iterations != null)
+                if ($util.Long)
+                    (message.iterations = $util.Long.fromValue(object.iterations)).unsigned = true;
+                else if (typeof object.iterations === "string")
+                    message.iterations = parseInt(object.iterations, 10);
+                else if (typeof object.iterations === "number")
+                    message.iterations = object.iterations;
+                else if (typeof object.iterations === "object")
+                    message.iterations = new $util.LongBits(object.iterations.low >>> 0, object.iterations.high >>> 0).toNumber(true);
+            return message;
+        };
+
+        /**
+         * Creates a plain object from a VdfProofData message. Also converts values to other types if specified.
+         * @function toObject
+         * @memberof p2p.VdfProofData
+         * @static
+         * @param {p2p.VdfProofData} message VdfProofData
+         * @param {$protobuf.IConversionOptions} [options] Conversion options
+         * @returns {Object.<string,*>} Plain object
+         */
+        VdfProofData.toObject = function toObject(message, options) {
+            if (!options)
+                options = {};
+            var object = {};
+            if (options.defaults) {
+                if (options.bytes === String)
+                    object.y = "";
+                else {
+                    object.y = [];
+                    if (options.bytes !== Array)
+                        object.y = $util.newBuffer(object.y);
+                }
+                if (options.bytes === String)
+                    object.pi = "";
+                else {
+                    object.pi = [];
+                    if (options.bytes !== Array)
+                        object.pi = $util.newBuffer(object.pi);
+                }
+                if (options.bytes === String)
+                    object.l = "";
+                else {
+                    object.l = [];
+                    if (options.bytes !== Array)
+                        object.l = $util.newBuffer(object.l);
+                }
+                if (options.bytes === String)
+                    object.r = "";
+                else {
+                    object.r = [];
+                    if (options.bytes !== Array)
+                        object.r = $util.newBuffer(object.r);
+                }
+                if ($util.Long) {
+                    var long = new $util.Long(0, 0, true);
+                    object.iterations = options.longs === String ? long.toString() : options.longs === Number ? long.toNumber() : long;
+                } else
+                    object.iterations = options.longs === String ? "0" : 0;
+            }
+            if (message.y != null && message.hasOwnProperty("y"))
+                object.y = options.bytes === String ? $util.base64.encode(message.y, 0, message.y.length) : options.bytes === Array ? Array.prototype.slice.call(message.y) : message.y;
+            if (message.pi != null && message.hasOwnProperty("pi"))
+                object.pi = options.bytes === String ? $util.base64.encode(message.pi, 0, message.pi.length) : options.bytes === Array ? Array.prototype.slice.call(message.pi) : message.pi;
+            if (message.l != null && message.hasOwnProperty("l"))
+                object.l = options.bytes === String ? $util.base64.encode(message.l, 0, message.l.length) : options.bytes === Array ? Array.prototype.slice.call(message.l) : message.l;
+            if (message.r != null && message.hasOwnProperty("r"))
+                object.r = options.bytes === String ? $util.base64.encode(message.r, 0, message.r.length) : options.bytes === Array ? Array.prototype.slice.call(message.r) : message.r;
+            if (message.iterations != null && message.hasOwnProperty("iterations"))
+                if (typeof message.iterations === "number")
+                    object.iterations = options.longs === String ? String(message.iterations) : message.iterations;
+                else
+                    object.iterations = options.longs === String ? $util.Long.prototype.toString.call(message.iterations) : options.longs === Number ? new $util.LongBits(message.iterations.low >>> 0, message.iterations.high >>> 0).toNumber(true) : message.iterations;
+            return object;
+        };
+
+        /**
+         * Converts this VdfProofData to JSON.
+         * @function toJSON
+         * @memberof p2p.VdfProofData
+         * @instance
+         * @returns {Object.<string,*>} JSON object
+         */
+        VdfProofData.prototype.toJSON = function toJSON() {
+            return this.constructor.toObject(this, $protobuf.util.toJSONOptions);
+        };
+
+        /**
+         * Gets the default type url for VdfProofData
+         * @function getTypeUrl
+         * @memberof p2p.VdfProofData
+         * @static
+         * @param {string} [typeUrlPrefix] your custom typeUrlPrefix(default "type.googleapis.com")
+         * @returns {string} The default type url
+         */
+        VdfProofData.getTypeUrl = function getTypeUrl(typeUrlPrefix) {
+            if (typeUrlPrefix === undefined) {
+                typeUrlPrefix = "type.googleapis.com";
+            }
+            return typeUrlPrefix + "/p2p.VdfProofData";
+        };
+
+        return VdfProofData;
+    })();
+
+    p2p.EvaluateConsensusRequest = (function() {
+
+        /**
+         * Properties of an EvaluateConsensusRequest.
+         * @memberof p2p
+         * @interface IEvaluateConsensusRequest
+         */
+
+        /**
+         * Constructs a new EvaluateConsensusRequest.
+         * @memberof p2p
+         * @classdesc Represents an EvaluateConsensusRequest.
+         * @implements IEvaluateConsensusRequest
+         * @constructor
+         * @param {p2p.IEvaluateConsensusRequest=} [properties] Properties to set
+         */
+        function EvaluateConsensusRequest(properties) {
+            if (properties)
+                for (var keys = Object.keys(properties), i = 0; i < keys.length; ++i)
+                    if (properties[keys[i]] != null)
+                        this[keys[i]] = properties[keys[i]];
+        }
+
+        /**
+         * Creates a new EvaluateConsensusRequest instance using the specified properties.
+         * @function create
+         * @memberof p2p.EvaluateConsensusRequest
+         * @static
+         * @param {p2p.IEvaluateConsensusRequest=} [properties] Properties to set
+         * @returns {p2p.EvaluateConsensusRequest} EvaluateConsensusRequest instance
+         */
+        EvaluateConsensusRequest.create = function create(properties) {
+            return new EvaluateConsensusRequest(properties);
+        };
+
+        /**
+         * Encodes the specified EvaluateConsensusRequest message. Does not implicitly {@link p2p.EvaluateConsensusRequest.verify|verify} messages.
+         * @function encode
+         * @memberof p2p.EvaluateConsensusRequest
+         * @static
+         * @param {p2p.IEvaluateConsensusRequest} message EvaluateConsensusRequest message or plain object to encode
+         * @param {$protobuf.Writer} [writer] Writer to encode to
+         * @returns {$protobuf.Writer} Writer
+         */
+        EvaluateConsensusRequest.encode = function encode(message, writer) {
+            if (!writer)
+                writer = $Writer.create();
+            return writer;
+        };
+
+        /**
+         * Encodes the specified EvaluateConsensusRequest message, length delimited. Does not implicitly {@link p2p.EvaluateConsensusRequest.verify|verify} messages.
+         * @function encodeDelimited
+         * @memberof p2p.EvaluateConsensusRequest
+         * @static
+         * @param {p2p.IEvaluateConsensusRequest} message EvaluateConsensusRequest message or plain object to encode
+         * @param {$protobuf.Writer} [writer] Writer to encode to
+         * @returns {$protobuf.Writer} Writer
+         */
+        EvaluateConsensusRequest.encodeDelimited = function encodeDelimited(message, writer) {
+            return this.encode(message, writer).ldelim();
+        };
+
+        /**
+         * Decodes an EvaluateConsensusRequest message from the specified reader or buffer.
+         * @function decode
+         * @memberof p2p.EvaluateConsensusRequest
+         * @static
+         * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
+         * @param {number} [length] Message length if known beforehand
+         * @returns {p2p.EvaluateConsensusRequest} EvaluateConsensusRequest
+         * @throws {Error} If the payload is not a reader or valid buffer
+         * @throws {$protobuf.util.ProtocolError} If required fields are missing
+         */
+        EvaluateConsensusRequest.decode = function decode(reader, length, error) {
+            if (!(reader instanceof $Reader))
+                reader = $Reader.create(reader);
+            var end = length === undefined ? reader.len : reader.pos + length, message = new $root.p2p.EvaluateConsensusRequest();
+            while (reader.pos < end) {
+                var tag = reader.uint32();
+                if (tag === error)
+                    break;
+                switch (tag >>> 3) {
+                default:
+                    reader.skipType(tag & 7);
+                    break;
+                }
+            }
+            return message;
+        };
+
+        /**
+         * Decodes an EvaluateConsensusRequest message from the specified reader or buffer, length delimited.
+         * @function decodeDelimited
+         * @memberof p2p.EvaluateConsensusRequest
+         * @static
+         * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
+         * @returns {p2p.EvaluateConsensusRequest} EvaluateConsensusRequest
+         * @throws {Error} If the payload is not a reader or valid buffer
+         * @throws {$protobuf.util.ProtocolError} If required fields are missing
+         */
+        EvaluateConsensusRequest.decodeDelimited = function decodeDelimited(reader) {
+            if (!(reader instanceof $Reader))
+                reader = new $Reader(reader);
+            return this.decode(reader, reader.uint32());
+        };
+
+        /**
+         * Verifies an EvaluateConsensusRequest message.
+         * @function verify
+         * @memberof p2p.EvaluateConsensusRequest
+         * @static
+         * @param {Object.<string,*>} message Plain object to verify
+         * @returns {string|null} `null` if valid, otherwise the reason why it is not
+         */
+        EvaluateConsensusRequest.verify = function verify(message) {
+            if (typeof message !== "object" || message === null)
+                return "object expected";
+            return null;
+        };
+
+        /**
+         * Creates an EvaluateConsensusRequest message from a plain object. Also converts values to their respective internal types.
+         * @function fromObject
+         * @memberof p2p.EvaluateConsensusRequest
+         * @static
+         * @param {Object.<string,*>} object Plain object
+         * @returns {p2p.EvaluateConsensusRequest} EvaluateConsensusRequest
+         */
+        EvaluateConsensusRequest.fromObject = function fromObject(object) {
+            if (object instanceof $root.p2p.EvaluateConsensusRequest)
+                return object;
+            return new $root.p2p.EvaluateConsensusRequest();
+        };
+
+        /**
+         * Creates a plain object from an EvaluateConsensusRequest message. Also converts values to other types if specified.
+         * @function toObject
+         * @memberof p2p.EvaluateConsensusRequest
+         * @static
+         * @param {p2p.EvaluateConsensusRequest} message EvaluateConsensusRequest
+         * @param {$protobuf.IConversionOptions} [options] Conversion options
+         * @returns {Object.<string,*>} Plain object
+         */
+        EvaluateConsensusRequest.toObject = function toObject() {
+            return {};
+        };
+
+        /**
+         * Converts this EvaluateConsensusRequest to JSON.
+         * @function toJSON
+         * @memberof p2p.EvaluateConsensusRequest
+         * @instance
+         * @returns {Object.<string,*>} JSON object
+         */
+        EvaluateConsensusRequest.prototype.toJSON = function toJSON() {
+            return this.constructor.toObject(this, $protobuf.util.toJSONOptions);
+        };
+
+        /**
+         * Gets the default type url for EvaluateConsensusRequest
+         * @function getTypeUrl
+         * @memberof p2p.EvaluateConsensusRequest
+         * @static
+         * @param {string} [typeUrlPrefix] your custom typeUrlPrefix(default "type.googleapis.com")
+         * @returns {string} The default type url
+         */
+        EvaluateConsensusRequest.getTypeUrl = function getTypeUrl(typeUrlPrefix) {
+            if (typeUrlPrefix === undefined) {
+                typeUrlPrefix = "type.googleapis.com";
+            }
+            return typeUrlPrefix + "/p2p.EvaluateConsensusRequest";
+        };
+
+        return EvaluateConsensusRequest;
+    })();
+
+    p2p.UiSwapProposal = (function() {
+
+        /**
+         * Properties of an UiSwapProposal.
+         * @memberof p2p
+         * @interface IUiSwapProposal
+         * @property {string|null} [proposalId] UiSwapProposal proposalId
+         * @property {string|null} [fromPeer] UiSwapProposal fromPeer
+         * @property {number|Long|null} [plbAmount] UiSwapProposal plbAmount
+         * @property {number|Long|null} [btcAmount] UiSwapProposal btcAmount
+         */
+
+        /**
+         * Constructs a new UiSwapProposal.
+         * @memberof p2p
+         * @classdesc Represents an UiSwapProposal.
+         * @implements IUiSwapProposal
+         * @constructor
+         * @param {p2p.IUiSwapProposal=} [properties] Properties to set
+         */
+        function UiSwapProposal(properties) {
+            if (properties)
+                for (var keys = Object.keys(properties), i = 0; i < keys.length; ++i)
+                    if (properties[keys[i]] != null)
+                        this[keys[i]] = properties[keys[i]];
+        }
+
+        /**
+         * UiSwapProposal proposalId.
+         * @member {string} proposalId
+         * @memberof p2p.UiSwapProposal
+         * @instance
+         */
+        UiSwapProposal.prototype.proposalId = "";
+
+        /**
+         * UiSwapProposal fromPeer.
+         * @member {string} fromPeer
+         * @memberof p2p.UiSwapProposal
+         * @instance
+         */
+        UiSwapProposal.prototype.fromPeer = "";
+
+        /**
+         * UiSwapProposal plbAmount.
+         * @member {number|Long} plbAmount
+         * @memberof p2p.UiSwapProposal
+         * @instance
+         */
+        UiSwapProposal.prototype.plbAmount = $util.Long ? $util.Long.fromBits(0,0,true) : 0;
+
+        /**
+         * UiSwapProposal btcAmount.
+         * @member {number|Long} btcAmount
+         * @memberof p2p.UiSwapProposal
+         * @instance
+         */
+        UiSwapProposal.prototype.btcAmount = $util.Long ? $util.Long.fromBits(0,0,true) : 0;
+
+        /**
+         * Creates a new UiSwapProposal instance using the specified properties.
+         * @function create
+         * @memberof p2p.UiSwapProposal
+         * @static
+         * @param {p2p.IUiSwapProposal=} [properties] Properties to set
+         * @returns {p2p.UiSwapProposal} UiSwapProposal instance
+         */
+        UiSwapProposal.create = function create(properties) {
+            return new UiSwapProposal(properties);
+        };
+
+        /**
+         * Encodes the specified UiSwapProposal message. Does not implicitly {@link p2p.UiSwapProposal.verify|verify} messages.
+         * @function encode
+         * @memberof p2p.UiSwapProposal
+         * @static
+         * @param {p2p.IUiSwapProposal} message UiSwapProposal message or plain object to encode
+         * @param {$protobuf.Writer} [writer] Writer to encode to
+         * @returns {$protobuf.Writer} Writer
+         */
+        UiSwapProposal.encode = function encode(message, writer) {
+            if (!writer)
+                writer = $Writer.create();
+            if (message.proposalId != null && Object.hasOwnProperty.call(message, "proposalId"))
+                writer.uint32(/* id 1, wireType 2 =*/10).string(message.proposalId);
+            if (message.fromPeer != null && Object.hasOwnProperty.call(message, "fromPeer"))
+                writer.uint32(/* id 2, wireType 2 =*/18).string(message.fromPeer);
+            if (message.plbAmount != null && Object.hasOwnProperty.call(message, "plbAmount"))
+                writer.uint32(/* id 3, wireType 0 =*/24).uint64(message.plbAmount);
+            if (message.btcAmount != null && Object.hasOwnProperty.call(message, "btcAmount"))
+                writer.uint32(/* id 4, wireType 0 =*/32).uint64(message.btcAmount);
+            return writer;
+        };
+
+        /**
+         * Encodes the specified UiSwapProposal message, length delimited. Does not implicitly {@link p2p.UiSwapProposal.verify|verify} messages.
+         * @function encodeDelimited
+         * @memberof p2p.UiSwapProposal
+         * @static
+         * @param {p2p.IUiSwapProposal} message UiSwapProposal message or plain object to encode
+         * @param {$protobuf.Writer} [writer] Writer to encode to
+         * @returns {$protobuf.Writer} Writer
+         */
+        UiSwapProposal.encodeDelimited = function encodeDelimited(message, writer) {
+            return this.encode(message, writer).ldelim();
+        };
+
+        /**
+         * Decodes an UiSwapProposal message from the specified reader or buffer.
+         * @function decode
+         * @memberof p2p.UiSwapProposal
+         * @static
+         * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
+         * @param {number} [length] Message length if known beforehand
+         * @returns {p2p.UiSwapProposal} UiSwapProposal
+         * @throws {Error} If the payload is not a reader or valid buffer
+         * @throws {$protobuf.util.ProtocolError} If required fields are missing
+         */
+        UiSwapProposal.decode = function decode(reader, length, error) {
+            if (!(reader instanceof $Reader))
+                reader = $Reader.create(reader);
+            var end = length === undefined ? reader.len : reader.pos + length, message = new $root.p2p.UiSwapProposal();
+            while (reader.pos < end) {
+                var tag = reader.uint32();
+                if (tag === error)
+                    break;
+                switch (tag >>> 3) {
+                case 1: {
+                        message.proposalId = reader.string();
+                        break;
+                    }
+                case 2: {
+                        message.fromPeer = reader.string();
+                        break;
+                    }
+                case 3: {
+                        message.plbAmount = reader.uint64();
+                        break;
+                    }
+                case 4: {
+                        message.btcAmount = reader.uint64();
+                        break;
+                    }
+                default:
+                    reader.skipType(tag & 7);
+                    break;
+                }
+            }
+            return message;
+        };
+
+        /**
+         * Decodes an UiSwapProposal message from the specified reader or buffer, length delimited.
+         * @function decodeDelimited
+         * @memberof p2p.UiSwapProposal
+         * @static
+         * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
+         * @returns {p2p.UiSwapProposal} UiSwapProposal
+         * @throws {Error} If the payload is not a reader or valid buffer
+         * @throws {$protobuf.util.ProtocolError} If required fields are missing
+         */
+        UiSwapProposal.decodeDelimited = function decodeDelimited(reader) {
+            if (!(reader instanceof $Reader))
+                reader = new $Reader(reader);
+            return this.decode(reader, reader.uint32());
+        };
+
+        /**
+         * Verifies an UiSwapProposal message.
+         * @function verify
+         * @memberof p2p.UiSwapProposal
+         * @static
+         * @param {Object.<string,*>} message Plain object to verify
+         * @returns {string|null} `null` if valid, otherwise the reason why it is not
+         */
+        UiSwapProposal.verify = function verify(message) {
+            if (typeof message !== "object" || message === null)
+                return "object expected";
+            if (message.proposalId != null && message.hasOwnProperty("proposalId"))
+                if (!$util.isString(message.proposalId))
+                    return "proposalId: string expected";
+            if (message.fromPeer != null && message.hasOwnProperty("fromPeer"))
+                if (!$util.isString(message.fromPeer))
+                    return "fromPeer: string expected";
+            if (message.plbAmount != null && message.hasOwnProperty("plbAmount"))
+                if (!$util.isInteger(message.plbAmount) && !(message.plbAmount && $util.isInteger(message.plbAmount.low) && $util.isInteger(message.plbAmount.high)))
+                    return "plbAmount: integer|Long expected";
+            if (message.btcAmount != null && message.hasOwnProperty("btcAmount"))
+                if (!$util.isInteger(message.btcAmount) && !(message.btcAmount && $util.isInteger(message.btcAmount.low) && $util.isInteger(message.btcAmount.high)))
+                    return "btcAmount: integer|Long expected";
+            return null;
+        };
+
+        /**
+         * Creates an UiSwapProposal message from a plain object. Also converts values to their respective internal types.
+         * @function fromObject
+         * @memberof p2p.UiSwapProposal
+         * @static
+         * @param {Object.<string,*>} object Plain object
+         * @returns {p2p.UiSwapProposal} UiSwapProposal
+         */
+        UiSwapProposal.fromObject = function fromObject(object) {
+            if (object instanceof $root.p2p.UiSwapProposal)
+                return object;
+            var message = new $root.p2p.UiSwapProposal();
+            if (object.proposalId != null)
+                message.proposalId = String(object.proposalId);
+            if (object.fromPeer != null)
+                message.fromPeer = String(object.fromPeer);
+            if (object.plbAmount != null)
+                if ($util.Long)
+                    (message.plbAmount = $util.Long.fromValue(object.plbAmount)).unsigned = true;
+                else if (typeof object.plbAmount === "string")
+                    message.plbAmount = parseInt(object.plbAmount, 10);
+                else if (typeof object.plbAmount === "number")
+                    message.plbAmount = object.plbAmount;
+                else if (typeof object.plbAmount === "object")
+                    message.plbAmount = new $util.LongBits(object.plbAmount.low >>> 0, object.plbAmount.high >>> 0).toNumber(true);
+            if (object.btcAmount != null)
+                if ($util.Long)
+                    (message.btcAmount = $util.Long.fromValue(object.btcAmount)).unsigned = true;
+                else if (typeof object.btcAmount === "string")
+                    message.btcAmount = parseInt(object.btcAmount, 10);
+                else if (typeof object.btcAmount === "number")
+                    message.btcAmount = object.btcAmount;
+                else if (typeof object.btcAmount === "object")
+                    message.btcAmount = new $util.LongBits(object.btcAmount.low >>> 0, object.btcAmount.high >>> 0).toNumber(true);
+            return message;
+        };
+
+        /**
+         * Creates a plain object from an UiSwapProposal message. Also converts values to other types if specified.
+         * @function toObject
+         * @memberof p2p.UiSwapProposal
+         * @static
+         * @param {p2p.UiSwapProposal} message UiSwapProposal
+         * @param {$protobuf.IConversionOptions} [options] Conversion options
+         * @returns {Object.<string,*>} Plain object
+         */
+        UiSwapProposal.toObject = function toObject(message, options) {
+            if (!options)
+                options = {};
+            var object = {};
+            if (options.defaults) {
+                object.proposalId = "";
+                object.fromPeer = "";
+                if ($util.Long) {
+                    var long = new $util.Long(0, 0, true);
+                    object.plbAmount = options.longs === String ? long.toString() : options.longs === Number ? long.toNumber() : long;
+                } else
+                    object.plbAmount = options.longs === String ? "0" : 0;
+                if ($util.Long) {
+                    var long = new $util.Long(0, 0, true);
+                    object.btcAmount = options.longs === String ? long.toString() : options.longs === Number ? long.toNumber() : long;
+                } else
+                    object.btcAmount = options.longs === String ? "0" : 0;
+            }
+            if (message.proposalId != null && message.hasOwnProperty("proposalId"))
+                object.proposalId = message.proposalId;
+            if (message.fromPeer != null && message.hasOwnProperty("fromPeer"))
+                object.fromPeer = message.fromPeer;
+            if (message.plbAmount != null && message.hasOwnProperty("plbAmount"))
+                if (typeof message.plbAmount === "number")
+                    object.plbAmount = options.longs === String ? String(message.plbAmount) : message.plbAmount;
+                else
+                    object.plbAmount = options.longs === String ? $util.Long.prototype.toString.call(message.plbAmount) : options.longs === Number ? new $util.LongBits(message.plbAmount.low >>> 0, message.plbAmount.high >>> 0).toNumber(true) : message.plbAmount;
+            if (message.btcAmount != null && message.hasOwnProperty("btcAmount"))
+                if (typeof message.btcAmount === "number")
+                    object.btcAmount = options.longs === String ? String(message.btcAmount) : message.btcAmount;
+                else
+                    object.btcAmount = options.longs === String ? $util.Long.prototype.toString.call(message.btcAmount) : options.longs === Number ? new $util.LongBits(message.btcAmount.low >>> 0, message.btcAmount.high >>> 0).toNumber(true) : message.btcAmount;
+            return object;
+        };
+
+        /**
+         * Converts this UiSwapProposal to JSON.
+         * @function toJSON
+         * @memberof p2p.UiSwapProposal
+         * @instance
+         * @returns {Object.<string,*>} JSON object
+         */
+        UiSwapProposal.prototype.toJSON = function toJSON() {
+            return this.constructor.toObject(this, $protobuf.util.toJSONOptions);
+        };
+
+        /**
+         * Gets the default type url for UiSwapProposal
+         * @function getTypeUrl
+         * @memberof p2p.UiSwapProposal
+         * @static
+         * @param {string} [typeUrlPrefix] your custom typeUrlPrefix(default "type.googleapis.com")
+         * @returns {string} The default type url
+         */
+        UiSwapProposal.getTypeUrl = function getTypeUrl(typeUrlPrefix) {
+            if (typeUrlPrefix === undefined) {
+                typeUrlPrefix = "type.googleapis.com";
+            }
+            return typeUrlPrefix + "/p2p.UiSwapProposal";
+        };
+
+        return UiSwapProposal;
+    })();
+
+    p2p.UiChannelProposal = (function() {
+
+        /**
+         * Properties of an UiChannelProposal.
+         * @memberof p2p
+         * @interface IUiChannelProposal
+         * @property {string|null} [proposalId] UiChannelProposal proposalId
+         * @property {string|null} [fromPeer] UiChannelProposal fromPeer
+         * @property {number|Long|null} [theirAmount] UiChannelProposal theirAmount
+         * @property {number|Long|null} [myAmount] UiChannelProposal myAmount
+         */
+
+        /**
+         * Constructs a new UiChannelProposal.
+         * @memberof p2p
+         * @classdesc Represents an UiChannelProposal.
+         * @implements IUiChannelProposal
+         * @constructor
+         * @param {p2p.IUiChannelProposal=} [properties] Properties to set
+         */
+        function UiChannelProposal(properties) {
+            if (properties)
+                for (var keys = Object.keys(properties), i = 0; i < keys.length; ++i)
+                    if (properties[keys[i]] != null)
+                        this[keys[i]] = properties[keys[i]];
+        }
+
+        /**
+         * UiChannelProposal proposalId.
+         * @member {string} proposalId
+         * @memberof p2p.UiChannelProposal
+         * @instance
+         */
+        UiChannelProposal.prototype.proposalId = "";
+
+        /**
+         * UiChannelProposal fromPeer.
+         * @member {string} fromPeer
+         * @memberof p2p.UiChannelProposal
+         * @instance
+         */
+        UiChannelProposal.prototype.fromPeer = "";
+
+        /**
+         * UiChannelProposal theirAmount.
+         * @member {number|Long} theirAmount
+         * @memberof p2p.UiChannelProposal
+         * @instance
+         */
+        UiChannelProposal.prototype.theirAmount = $util.Long ? $util.Long.fromBits(0,0,true) : 0;
+
+        /**
+         * UiChannelProposal myAmount.
+         * @member {number|Long} myAmount
+         * @memberof p2p.UiChannelProposal
+         * @instance
+         */
+        UiChannelProposal.prototype.myAmount = $util.Long ? $util.Long.fromBits(0,0,true) : 0;
+
+        /**
+         * Creates a new UiChannelProposal instance using the specified properties.
+         * @function create
+         * @memberof p2p.UiChannelProposal
+         * @static
+         * @param {p2p.IUiChannelProposal=} [properties] Properties to set
+         * @returns {p2p.UiChannelProposal} UiChannelProposal instance
+         */
+        UiChannelProposal.create = function create(properties) {
+            return new UiChannelProposal(properties);
+        };
+
+        /**
+         * Encodes the specified UiChannelProposal message. Does not implicitly {@link p2p.UiChannelProposal.verify|verify} messages.
+         * @function encode
+         * @memberof p2p.UiChannelProposal
+         * @static
+         * @param {p2p.IUiChannelProposal} message UiChannelProposal message or plain object to encode
+         * @param {$protobuf.Writer} [writer] Writer to encode to
+         * @returns {$protobuf.Writer} Writer
+         */
+        UiChannelProposal.encode = function encode(message, writer) {
+            if (!writer)
+                writer = $Writer.create();
+            if (message.proposalId != null && Object.hasOwnProperty.call(message, "proposalId"))
+                writer.uint32(/* id 1, wireType 2 =*/10).string(message.proposalId);
+            if (message.fromPeer != null && Object.hasOwnProperty.call(message, "fromPeer"))
+                writer.uint32(/* id 2, wireType 2 =*/18).string(message.fromPeer);
+            if (message.theirAmount != null && Object.hasOwnProperty.call(message, "theirAmount"))
+                writer.uint32(/* id 3, wireType 0 =*/24).uint64(message.theirAmount);
+            if (message.myAmount != null && Object.hasOwnProperty.call(message, "myAmount"))
+                writer.uint32(/* id 4, wireType 0 =*/32).uint64(message.myAmount);
+            return writer;
+        };
+
+        /**
+         * Encodes the specified UiChannelProposal message, length delimited. Does not implicitly {@link p2p.UiChannelProposal.verify|verify} messages.
+         * @function encodeDelimited
+         * @memberof p2p.UiChannelProposal
+         * @static
+         * @param {p2p.IUiChannelProposal} message UiChannelProposal message or plain object to encode
+         * @param {$protobuf.Writer} [writer] Writer to encode to
+         * @returns {$protobuf.Writer} Writer
+         */
+        UiChannelProposal.encodeDelimited = function encodeDelimited(message, writer) {
+            return this.encode(message, writer).ldelim();
+        };
+
+        /**
+         * Decodes an UiChannelProposal message from the specified reader or buffer.
+         * @function decode
+         * @memberof p2p.UiChannelProposal
+         * @static
+         * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
+         * @param {number} [length] Message length if known beforehand
+         * @returns {p2p.UiChannelProposal} UiChannelProposal
+         * @throws {Error} If the payload is not a reader or valid buffer
+         * @throws {$protobuf.util.ProtocolError} If required fields are missing
+         */
+        UiChannelProposal.decode = function decode(reader, length, error) {
+            if (!(reader instanceof $Reader))
+                reader = $Reader.create(reader);
+            var end = length === undefined ? reader.len : reader.pos + length, message = new $root.p2p.UiChannelProposal();
+            while (reader.pos < end) {
+                var tag = reader.uint32();
+                if (tag === error)
+                    break;
+                switch (tag >>> 3) {
+                case 1: {
+                        message.proposalId = reader.string();
+                        break;
+                    }
+                case 2: {
+                        message.fromPeer = reader.string();
+                        break;
+                    }
+                case 3: {
+                        message.theirAmount = reader.uint64();
+                        break;
+                    }
+                case 4: {
+                        message.myAmount = reader.uint64();
+                        break;
+                    }
+                default:
+                    reader.skipType(tag & 7);
+                    break;
+                }
+            }
+            return message;
+        };
+
+        /**
+         * Decodes an UiChannelProposal message from the specified reader or buffer, length delimited.
+         * @function decodeDelimited
+         * @memberof p2p.UiChannelProposal
+         * @static
+         * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
+         * @returns {p2p.UiChannelProposal} UiChannelProposal
+         * @throws {Error} If the payload is not a reader or valid buffer
+         * @throws {$protobuf.util.ProtocolError} If required fields are missing
+         */
+        UiChannelProposal.decodeDelimited = function decodeDelimited(reader) {
+            if (!(reader instanceof $Reader))
+                reader = new $Reader(reader);
+            return this.decode(reader, reader.uint32());
+        };
+
+        /**
+         * Verifies an UiChannelProposal message.
+         * @function verify
+         * @memberof p2p.UiChannelProposal
+         * @static
+         * @param {Object.<string,*>} message Plain object to verify
+         * @returns {string|null} `null` if valid, otherwise the reason why it is not
+         */
+        UiChannelProposal.verify = function verify(message) {
+            if (typeof message !== "object" || message === null)
+                return "object expected";
+            if (message.proposalId != null && message.hasOwnProperty("proposalId"))
+                if (!$util.isString(message.proposalId))
+                    return "proposalId: string expected";
+            if (message.fromPeer != null && message.hasOwnProperty("fromPeer"))
+                if (!$util.isString(message.fromPeer))
+                    return "fromPeer: string expected";
+            if (message.theirAmount != null && message.hasOwnProperty("theirAmount"))
+                if (!$util.isInteger(message.theirAmount) && !(message.theirAmount && $util.isInteger(message.theirAmount.low) && $util.isInteger(message.theirAmount.high)))
+                    return "theirAmount: integer|Long expected";
+            if (message.myAmount != null && message.hasOwnProperty("myAmount"))
+                if (!$util.isInteger(message.myAmount) && !(message.myAmount && $util.isInteger(message.myAmount.low) && $util.isInteger(message.myAmount.high)))
+                    return "myAmount: integer|Long expected";
+            return null;
+        };
+
+        /**
+         * Creates an UiChannelProposal message from a plain object. Also converts values to their respective internal types.
+         * @function fromObject
+         * @memberof p2p.UiChannelProposal
+         * @static
+         * @param {Object.<string,*>} object Plain object
+         * @returns {p2p.UiChannelProposal} UiChannelProposal
+         */
+        UiChannelProposal.fromObject = function fromObject(object) {
+            if (object instanceof $root.p2p.UiChannelProposal)
+                return object;
+            var message = new $root.p2p.UiChannelProposal();
+            if (object.proposalId != null)
+                message.proposalId = String(object.proposalId);
+            if (object.fromPeer != null)
+                message.fromPeer = String(object.fromPeer);
+            if (object.theirAmount != null)
+                if ($util.Long)
+                    (message.theirAmount = $util.Long.fromValue(object.theirAmount)).unsigned = true;
+                else if (typeof object.theirAmount === "string")
+                    message.theirAmount = parseInt(object.theirAmount, 10);
+                else if (typeof object.theirAmount === "number")
+                    message.theirAmount = object.theirAmount;
+                else if (typeof object.theirAmount === "object")
+                    message.theirAmount = new $util.LongBits(object.theirAmount.low >>> 0, object.theirAmount.high >>> 0).toNumber(true);
+            if (object.myAmount != null)
+                if ($util.Long)
+                    (message.myAmount = $util.Long.fromValue(object.myAmount)).unsigned = true;
+                else if (typeof object.myAmount === "string")
+                    message.myAmount = parseInt(object.myAmount, 10);
+                else if (typeof object.myAmount === "number")
+                    message.myAmount = object.myAmount;
+                else if (typeof object.myAmount === "object")
+                    message.myAmount = new $util.LongBits(object.myAmount.low >>> 0, object.myAmount.high >>> 0).toNumber(true);
+            return message;
+        };
+
+        /**
+         * Creates a plain object from an UiChannelProposal message. Also converts values to other types if specified.
+         * @function toObject
+         * @memberof p2p.UiChannelProposal
+         * @static
+         * @param {p2p.UiChannelProposal} message UiChannelProposal
+         * @param {$protobuf.IConversionOptions} [options] Conversion options
+         * @returns {Object.<string,*>} Plain object
+         */
+        UiChannelProposal.toObject = function toObject(message, options) {
+            if (!options)
+                options = {};
+            var object = {};
+            if (options.defaults) {
+                object.proposalId = "";
+                object.fromPeer = "";
+                if ($util.Long) {
+                    var long = new $util.Long(0, 0, true);
+                    object.theirAmount = options.longs === String ? long.toString() : options.longs === Number ? long.toNumber() : long;
+                } else
+                    object.theirAmount = options.longs === String ? "0" : 0;
+                if ($util.Long) {
+                    var long = new $util.Long(0, 0, true);
+                    object.myAmount = options.longs === String ? long.toString() : options.longs === Number ? long.toNumber() : long;
+                } else
+                    object.myAmount = options.longs === String ? "0" : 0;
+            }
+            if (message.proposalId != null && message.hasOwnProperty("proposalId"))
+                object.proposalId = message.proposalId;
+            if (message.fromPeer != null && message.hasOwnProperty("fromPeer"))
+                object.fromPeer = message.fromPeer;
+            if (message.theirAmount != null && message.hasOwnProperty("theirAmount"))
+                if (typeof message.theirAmount === "number")
+                    object.theirAmount = options.longs === String ? String(message.theirAmount) : message.theirAmount;
+                else
+                    object.theirAmount = options.longs === String ? $util.Long.prototype.toString.call(message.theirAmount) : options.longs === Number ? new $util.LongBits(message.theirAmount.low >>> 0, message.theirAmount.high >>> 0).toNumber(true) : message.theirAmount;
+            if (message.myAmount != null && message.hasOwnProperty("myAmount"))
+                if (typeof message.myAmount === "number")
+                    object.myAmount = options.longs === String ? String(message.myAmount) : message.myAmount;
+                else
+                    object.myAmount = options.longs === String ? $util.Long.prototype.toString.call(message.myAmount) : options.longs === Number ? new $util.LongBits(message.myAmount.low >>> 0, message.myAmount.high >>> 0).toNumber(true) : message.myAmount;
+            return object;
+        };
+
+        /**
+         * Converts this UiChannelProposal to JSON.
+         * @function toJSON
+         * @memberof p2p.UiChannelProposal
+         * @instance
+         * @returns {Object.<string,*>} JSON object
+         */
+        UiChannelProposal.prototype.toJSON = function toJSON() {
+            return this.constructor.toObject(this, $protobuf.util.toJSONOptions);
+        };
+
+        /**
+         * Gets the default type url for UiChannelProposal
+         * @function getTypeUrl
+         * @memberof p2p.UiChannelProposal
+         * @static
+         * @param {string} [typeUrlPrefix] your custom typeUrlPrefix(default "type.googleapis.com")
+         * @returns {string} The default type url
+         */
+        UiChannelProposal.getTypeUrl = function getTypeUrl(typeUrlPrefix) {
+            if (typeUrlPrefix === undefined) {
+                typeUrlPrefix = "type.googleapis.com";
+            }
+            return typeUrlPrefix + "/p2p.UiChannelProposal";
+        };
+
+        return UiChannelProposal;
+    })();
+
+    p2p.MiningCandidate = (function() {
+
+        /**
+         * Properties of a MiningCandidate.
+         * @memberof p2p
+         * @interface IMiningCandidate
+         */
+
+        /**
+         * Constructs a new MiningCandidate.
+         * @memberof p2p
+         * @classdesc Represents a MiningCandidate.
+         * @implements IMiningCandidate
+         * @constructor
+         * @param {p2p.IMiningCandidate=} [properties] Properties to set
+         */
+        function MiningCandidate(properties) {
+            if (properties)
+                for (var keys = Object.keys(properties), i = 0; i < keys.length; ++i)
+                    if (properties[keys[i]] != null)
+                        this[keys[i]] = properties[keys[i]];
+        }
+
+        /**
+         * Creates a new MiningCandidate instance using the specified properties.
+         * @function create
+         * @memberof p2p.MiningCandidate
+         * @static
+         * @param {p2p.IMiningCandidate=} [properties] Properties to set
+         * @returns {p2p.MiningCandidate} MiningCandidate instance
+         */
+        MiningCandidate.create = function create(properties) {
+            return new MiningCandidate(properties);
+        };
+
+        /**
+         * Encodes the specified MiningCandidate message. Does not implicitly {@link p2p.MiningCandidate.verify|verify} messages.
+         * @function encode
+         * @memberof p2p.MiningCandidate
+         * @static
+         * @param {p2p.IMiningCandidate} message MiningCandidate message or plain object to encode
+         * @param {$protobuf.Writer} [writer] Writer to encode to
+         * @returns {$protobuf.Writer} Writer
+         */
+        MiningCandidate.encode = function encode(message, writer) {
+            if (!writer)
+                writer = $Writer.create();
+            return writer;
+        };
+
+        /**
+         * Encodes the specified MiningCandidate message, length delimited. Does not implicitly {@link p2p.MiningCandidate.verify|verify} messages.
+         * @function encodeDelimited
+         * @memberof p2p.MiningCandidate
+         * @static
+         * @param {p2p.IMiningCandidate} message MiningCandidate message or plain object to encode
+         * @param {$protobuf.Writer} [writer] Writer to encode to
+         * @returns {$protobuf.Writer} Writer
+         */
+        MiningCandidate.encodeDelimited = function encodeDelimited(message, writer) {
+            return this.encode(message, writer).ldelim();
+        };
+
+        /**
+         * Decodes a MiningCandidate message from the specified reader or buffer.
+         * @function decode
+         * @memberof p2p.MiningCandidate
+         * @static
+         * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
+         * @param {number} [length] Message length if known beforehand
+         * @returns {p2p.MiningCandidate} MiningCandidate
+         * @throws {Error} If the payload is not a reader or valid buffer
+         * @throws {$protobuf.util.ProtocolError} If required fields are missing
+         */
+        MiningCandidate.decode = function decode(reader, length, error) {
+            if (!(reader instanceof $Reader))
+                reader = $Reader.create(reader);
+            var end = length === undefined ? reader.len : reader.pos + length, message = new $root.p2p.MiningCandidate();
+            while (reader.pos < end) {
+                var tag = reader.uint32();
+                if (tag === error)
+                    break;
+                switch (tag >>> 3) {
+                default:
+                    reader.skipType(tag & 7);
+                    break;
+                }
+            }
+            return message;
+        };
+
+        /**
+         * Decodes a MiningCandidate message from the specified reader or buffer, length delimited.
+         * @function decodeDelimited
+         * @memberof p2p.MiningCandidate
+         * @static
+         * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
+         * @returns {p2p.MiningCandidate} MiningCandidate
+         * @throws {Error} If the payload is not a reader or valid buffer
+         * @throws {$protobuf.util.ProtocolError} If required fields are missing
+         */
+        MiningCandidate.decodeDelimited = function decodeDelimited(reader) {
+            if (!(reader instanceof $Reader))
+                reader = new $Reader(reader);
+            return this.decode(reader, reader.uint32());
+        };
+
+        /**
+         * Verifies a MiningCandidate message.
+         * @function verify
+         * @memberof p2p.MiningCandidate
+         * @static
+         * @param {Object.<string,*>} message Plain object to verify
+         * @returns {string|null} `null` if valid, otherwise the reason why it is not
+         */
+        MiningCandidate.verify = function verify(message) {
+            if (typeof message !== "object" || message === null)
+                return "object expected";
+            return null;
+        };
+
+        /**
+         * Creates a MiningCandidate message from a plain object. Also converts values to their respective internal types.
+         * @function fromObject
+         * @memberof p2p.MiningCandidate
+         * @static
+         * @param {Object.<string,*>} object Plain object
+         * @returns {p2p.MiningCandidate} MiningCandidate
+         */
+        MiningCandidate.fromObject = function fromObject(object) {
+            if (object instanceof $root.p2p.MiningCandidate)
+                return object;
+            return new $root.p2p.MiningCandidate();
+        };
+
+        /**
+         * Creates a plain object from a MiningCandidate message. Also converts values to other types if specified.
+         * @function toObject
+         * @memberof p2p.MiningCandidate
+         * @static
+         * @param {p2p.MiningCandidate} message MiningCandidate
+         * @param {$protobuf.IConversionOptions} [options] Conversion options
+         * @returns {Object.<string,*>} Plain object
+         */
+        MiningCandidate.toObject = function toObject() {
+            return {};
+        };
+
+        /**
+         * Converts this MiningCandidate to JSON.
+         * @function toJSON
+         * @memberof p2p.MiningCandidate
+         * @instance
+         * @returns {Object.<string,*>} JSON object
+         */
+        MiningCandidate.prototype.toJSON = function toJSON() {
+            return this.constructor.toObject(this, $protobuf.util.toJSONOptions);
+        };
+
+        /**
+         * Gets the default type url for MiningCandidate
+         * @function getTypeUrl
+         * @memberof p2p.MiningCandidate
+         * @static
+         * @param {string} [typeUrlPrefix] your custom typeUrlPrefix(default "type.googleapis.com")
+         * @returns {string} The default type url
+         */
+        MiningCandidate.getTypeUrl = function getTypeUrl(typeUrlPrefix) {
+            if (typeUrlPrefix === undefined) {
+                typeUrlPrefix = "type.googleapis.com";
+            }
+            return typeUrlPrefix + "/p2p.MiningCandidate";
+        };
+
+        return MiningCandidate;
+    })();
+
+    p2p.InspectBlockRequest = (function() {
+
+        /**
+         * Properties of an InspectBlockRequest.
+         * @memberof p2p
+         * @interface IInspectBlockRequest
+         * @property {number|Long|null} [height] InspectBlockRequest height
+         */
+
+        /**
+         * Constructs a new InspectBlockRequest.
+         * @memberof p2p
+         * @classdesc Represents an InspectBlockRequest.
+         * @implements IInspectBlockRequest
+         * @constructor
+         * @param {p2p.IInspectBlockRequest=} [properties] Properties to set
+         */
+        function InspectBlockRequest(properties) {
+            if (properties)
+                for (var keys = Object.keys(properties), i = 0; i < keys.length; ++i)
+                    if (properties[keys[i]] != null)
+                        this[keys[i]] = properties[keys[i]];
+        }
+
+        /**
+         * InspectBlockRequest height.
+         * @member {number|Long} height
+         * @memberof p2p.InspectBlockRequest
+         * @instance
+         */
+        InspectBlockRequest.prototype.height = $util.Long ? $util.Long.fromBits(0,0,true) : 0;
+
+        /**
+         * Creates a new InspectBlockRequest instance using the specified properties.
+         * @function create
+         * @memberof p2p.InspectBlockRequest
+         * @static
+         * @param {p2p.IInspectBlockRequest=} [properties] Properties to set
+         * @returns {p2p.InspectBlockRequest} InspectBlockRequest instance
+         */
+        InspectBlockRequest.create = function create(properties) {
+            return new InspectBlockRequest(properties);
+        };
+
+        /**
+         * Encodes the specified InspectBlockRequest message. Does not implicitly {@link p2p.InspectBlockRequest.verify|verify} messages.
+         * @function encode
+         * @memberof p2p.InspectBlockRequest
+         * @static
+         * @param {p2p.IInspectBlockRequest} message InspectBlockRequest message or plain object to encode
+         * @param {$protobuf.Writer} [writer] Writer to encode to
+         * @returns {$protobuf.Writer} Writer
+         */
+        InspectBlockRequest.encode = function encode(message, writer) {
+            if (!writer)
+                writer = $Writer.create();
+            if (message.height != null && Object.hasOwnProperty.call(message, "height"))
+                writer.uint32(/* id 1, wireType 0 =*/8).uint64(message.height);
+            return writer;
+        };
+
+        /**
+         * Encodes the specified InspectBlockRequest message, length delimited. Does not implicitly {@link p2p.InspectBlockRequest.verify|verify} messages.
+         * @function encodeDelimited
+         * @memberof p2p.InspectBlockRequest
+         * @static
+         * @param {p2p.IInspectBlockRequest} message InspectBlockRequest message or plain object to encode
+         * @param {$protobuf.Writer} [writer] Writer to encode to
+         * @returns {$protobuf.Writer} Writer
+         */
+        InspectBlockRequest.encodeDelimited = function encodeDelimited(message, writer) {
+            return this.encode(message, writer).ldelim();
+        };
+
+        /**
+         * Decodes an InspectBlockRequest message from the specified reader or buffer.
+         * @function decode
+         * @memberof p2p.InspectBlockRequest
+         * @static
+         * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
+         * @param {number} [length] Message length if known beforehand
+         * @returns {p2p.InspectBlockRequest} InspectBlockRequest
+         * @throws {Error} If the payload is not a reader or valid buffer
+         * @throws {$protobuf.util.ProtocolError} If required fields are missing
+         */
+        InspectBlockRequest.decode = function decode(reader, length, error) {
+            if (!(reader instanceof $Reader))
+                reader = $Reader.create(reader);
+            var end = length === undefined ? reader.len : reader.pos + length, message = new $root.p2p.InspectBlockRequest();
+            while (reader.pos < end) {
+                var tag = reader.uint32();
+                if (tag === error)
+                    break;
+                switch (tag >>> 3) {
+                case 1: {
+                        message.height = reader.uint64();
+                        break;
+                    }
+                default:
+                    reader.skipType(tag & 7);
+                    break;
+                }
+            }
+            return message;
+        };
+
+        /**
+         * Decodes an InspectBlockRequest message from the specified reader or buffer, length delimited.
+         * @function decodeDelimited
+         * @memberof p2p.InspectBlockRequest
+         * @static
+         * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
+         * @returns {p2p.InspectBlockRequest} InspectBlockRequest
+         * @throws {Error} If the payload is not a reader or valid buffer
+         * @throws {$protobuf.util.ProtocolError} If required fields are missing
+         */
+        InspectBlockRequest.decodeDelimited = function decodeDelimited(reader) {
+            if (!(reader instanceof $Reader))
+                reader = new $Reader(reader);
+            return this.decode(reader, reader.uint32());
+        };
+
+        /**
+         * Verifies an InspectBlockRequest message.
+         * @function verify
+         * @memberof p2p.InspectBlockRequest
+         * @static
+         * @param {Object.<string,*>} message Plain object to verify
+         * @returns {string|null} `null` if valid, otherwise the reason why it is not
+         */
+        InspectBlockRequest.verify = function verify(message) {
+            if (typeof message !== "object" || message === null)
+                return "object expected";
+            if (message.height != null && message.hasOwnProperty("height"))
+                if (!$util.isInteger(message.height) && !(message.height && $util.isInteger(message.height.low) && $util.isInteger(message.height.high)))
+                    return "height: integer|Long expected";
+            return null;
+        };
+
+        /**
+         * Creates an InspectBlockRequest message from a plain object. Also converts values to their respective internal types.
+         * @function fromObject
+         * @memberof p2p.InspectBlockRequest
+         * @static
+         * @param {Object.<string,*>} object Plain object
+         * @returns {p2p.InspectBlockRequest} InspectBlockRequest
+         */
+        InspectBlockRequest.fromObject = function fromObject(object) {
+            if (object instanceof $root.p2p.InspectBlockRequest)
+                return object;
+            var message = new $root.p2p.InspectBlockRequest();
+            if (object.height != null)
+                if ($util.Long)
+                    (message.height = $util.Long.fromValue(object.height)).unsigned = true;
+                else if (typeof object.height === "string")
+                    message.height = parseInt(object.height, 10);
+                else if (typeof object.height === "number")
+                    message.height = object.height;
+                else if (typeof object.height === "object")
+                    message.height = new $util.LongBits(object.height.low >>> 0, object.height.high >>> 0).toNumber(true);
+            return message;
+        };
+
+        /**
+         * Creates a plain object from an InspectBlockRequest message. Also converts values to other types if specified.
+         * @function toObject
+         * @memberof p2p.InspectBlockRequest
+         * @static
+         * @param {p2p.InspectBlockRequest} message InspectBlockRequest
+         * @param {$protobuf.IConversionOptions} [options] Conversion options
+         * @returns {Object.<string,*>} Plain object
+         */
+        InspectBlockRequest.toObject = function toObject(message, options) {
+            if (!options)
+                options = {};
+            var object = {};
+            if (options.defaults)
+                if ($util.Long) {
+                    var long = new $util.Long(0, 0, true);
+                    object.height = options.longs === String ? long.toString() : options.longs === Number ? long.toNumber() : long;
+                } else
+                    object.height = options.longs === String ? "0" : 0;
+            if (message.height != null && message.hasOwnProperty("height"))
+                if (typeof message.height === "number")
+                    object.height = options.longs === String ? String(message.height) : message.height;
+                else
+                    object.height = options.longs === String ? $util.Long.prototype.toString.call(message.height) : options.longs === Number ? new $util.LongBits(message.height.low >>> 0, message.height.high >>> 0).toNumber(true) : message.height;
+            return object;
+        };
+
+        /**
+         * Converts this InspectBlockRequest to JSON.
+         * @function toJSON
+         * @memberof p2p.InspectBlockRequest
+         * @instance
+         * @returns {Object.<string,*>} JSON object
+         */
+        InspectBlockRequest.prototype.toJSON = function toJSON() {
+            return this.constructor.toObject(this, $protobuf.util.toJSONOptions);
+        };
+
+        /**
+         * Gets the default type url for InspectBlockRequest
+         * @function getTypeUrl
+         * @memberof p2p.InspectBlockRequest
+         * @static
+         * @param {string} [typeUrlPrefix] your custom typeUrlPrefix(default "type.googleapis.com")
+         * @returns {string} The default type url
+         */
+        InspectBlockRequest.getTypeUrl = function getTypeUrl(typeUrlPrefix) {
+            if (typeUrlPrefix === undefined) {
+                typeUrlPrefix = "type.googleapis.com";
+            }
+            return typeUrlPrefix + "/p2p.InspectBlockRequest";
+        };
+
+        return InspectBlockRequest;
+    })();
+
+    p2p.PurgeSideBlocksRequest = (function() {
+
+        /**
+         * Properties of a PurgeSideBlocksRequest.
+         * @memberof p2p
+         * @interface IPurgeSideBlocksRequest
+         */
+
+        /**
+         * Constructs a new PurgeSideBlocksRequest.
+         * @memberof p2p
+         * @classdesc Represents a PurgeSideBlocksRequest.
+         * @implements IPurgeSideBlocksRequest
+         * @constructor
+         * @param {p2p.IPurgeSideBlocksRequest=} [properties] Properties to set
+         */
+        function PurgeSideBlocksRequest(properties) {
+            if (properties)
+                for (var keys = Object.keys(properties), i = 0; i < keys.length; ++i)
+                    if (properties[keys[i]] != null)
+                        this[keys[i]] = properties[keys[i]];
+        }
+
+        /**
+         * Creates a new PurgeSideBlocksRequest instance using the specified properties.
+         * @function create
+         * @memberof p2p.PurgeSideBlocksRequest
+         * @static
+         * @param {p2p.IPurgeSideBlocksRequest=} [properties] Properties to set
+         * @returns {p2p.PurgeSideBlocksRequest} PurgeSideBlocksRequest instance
+         */
+        PurgeSideBlocksRequest.create = function create(properties) {
+            return new PurgeSideBlocksRequest(properties);
+        };
+
+        /**
+         * Encodes the specified PurgeSideBlocksRequest message. Does not implicitly {@link p2p.PurgeSideBlocksRequest.verify|verify} messages.
+         * @function encode
+         * @memberof p2p.PurgeSideBlocksRequest
+         * @static
+         * @param {p2p.IPurgeSideBlocksRequest} message PurgeSideBlocksRequest message or plain object to encode
+         * @param {$protobuf.Writer} [writer] Writer to encode to
+         * @returns {$protobuf.Writer} Writer
+         */
+        PurgeSideBlocksRequest.encode = function encode(message, writer) {
+            if (!writer)
+                writer = $Writer.create();
+            return writer;
+        };
+
+        /**
+         * Encodes the specified PurgeSideBlocksRequest message, length delimited. Does not implicitly {@link p2p.PurgeSideBlocksRequest.verify|verify} messages.
+         * @function encodeDelimited
+         * @memberof p2p.PurgeSideBlocksRequest
+         * @static
+         * @param {p2p.IPurgeSideBlocksRequest} message PurgeSideBlocksRequest message or plain object to encode
+         * @param {$protobuf.Writer} [writer] Writer to encode to
+         * @returns {$protobuf.Writer} Writer
+         */
+        PurgeSideBlocksRequest.encodeDelimited = function encodeDelimited(message, writer) {
+            return this.encode(message, writer).ldelim();
+        };
+
+        /**
+         * Decodes a PurgeSideBlocksRequest message from the specified reader or buffer.
+         * @function decode
+         * @memberof p2p.PurgeSideBlocksRequest
+         * @static
+         * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
+         * @param {number} [length] Message length if known beforehand
+         * @returns {p2p.PurgeSideBlocksRequest} PurgeSideBlocksRequest
+         * @throws {Error} If the payload is not a reader or valid buffer
+         * @throws {$protobuf.util.ProtocolError} If required fields are missing
+         */
+        PurgeSideBlocksRequest.decode = function decode(reader, length, error) {
+            if (!(reader instanceof $Reader))
+                reader = $Reader.create(reader);
+            var end = length === undefined ? reader.len : reader.pos + length, message = new $root.p2p.PurgeSideBlocksRequest();
+            while (reader.pos < end) {
+                var tag = reader.uint32();
+                if (tag === error)
+                    break;
+                switch (tag >>> 3) {
+                default:
+                    reader.skipType(tag & 7);
+                    break;
+                }
+            }
+            return message;
+        };
+
+        /**
+         * Decodes a PurgeSideBlocksRequest message from the specified reader or buffer, length delimited.
+         * @function decodeDelimited
+         * @memberof p2p.PurgeSideBlocksRequest
+         * @static
+         * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
+         * @returns {p2p.PurgeSideBlocksRequest} PurgeSideBlocksRequest
+         * @throws {Error} If the payload is not a reader or valid buffer
+         * @throws {$protobuf.util.ProtocolError} If required fields are missing
+         */
+        PurgeSideBlocksRequest.decodeDelimited = function decodeDelimited(reader) {
+            if (!(reader instanceof $Reader))
+                reader = new $Reader(reader);
+            return this.decode(reader, reader.uint32());
+        };
+
+        /**
+         * Verifies a PurgeSideBlocksRequest message.
+         * @function verify
+         * @memberof p2p.PurgeSideBlocksRequest
+         * @static
+         * @param {Object.<string,*>} message Plain object to verify
+         * @returns {string|null} `null` if valid, otherwise the reason why it is not
+         */
+        PurgeSideBlocksRequest.verify = function verify(message) {
+            if (typeof message !== "object" || message === null)
+                return "object expected";
+            return null;
+        };
+
+        /**
+         * Creates a PurgeSideBlocksRequest message from a plain object. Also converts values to their respective internal types.
+         * @function fromObject
+         * @memberof p2p.PurgeSideBlocksRequest
+         * @static
+         * @param {Object.<string,*>} object Plain object
+         * @returns {p2p.PurgeSideBlocksRequest} PurgeSideBlocksRequest
+         */
+        PurgeSideBlocksRequest.fromObject = function fromObject(object) {
+            if (object instanceof $root.p2p.PurgeSideBlocksRequest)
+                return object;
+            return new $root.p2p.PurgeSideBlocksRequest();
+        };
+
+        /**
+         * Creates a plain object from a PurgeSideBlocksRequest message. Also converts values to other types if specified.
+         * @function toObject
+         * @memberof p2p.PurgeSideBlocksRequest
+         * @static
+         * @param {p2p.PurgeSideBlocksRequest} message PurgeSideBlocksRequest
+         * @param {$protobuf.IConversionOptions} [options] Conversion options
+         * @returns {Object.<string,*>} Plain object
+         */
+        PurgeSideBlocksRequest.toObject = function toObject() {
+            return {};
+        };
+
+        /**
+         * Converts this PurgeSideBlocksRequest to JSON.
+         * @function toJSON
+         * @memberof p2p.PurgeSideBlocksRequest
+         * @instance
+         * @returns {Object.<string,*>} JSON object
+         */
+        PurgeSideBlocksRequest.prototype.toJSON = function toJSON() {
+            return this.constructor.toObject(this, $protobuf.util.toJSONOptions);
+        };
+
+        /**
+         * Gets the default type url for PurgeSideBlocksRequest
+         * @function getTypeUrl
+         * @memberof p2p.PurgeSideBlocksRequest
+         * @static
+         * @param {string} [typeUrlPrefix] your custom typeUrlPrefix(default "type.googleapis.com")
+         * @returns {string} The default type url
+         */
+        PurgeSideBlocksRequest.getTypeUrl = function getTypeUrl(typeUrlPrefix) {
+            if (typeUrlPrefix === undefined) {
+                typeUrlPrefix = "type.googleapis.com";
+            }
+            return typeUrlPrefix + "/p2p.PurgeSideBlocksRequest";
+        };
+
+        return PurgeSideBlocksRequest;
+    })();
+
+    p2p.ClearSideBlocksRequest = (function() {
+
+        /**
+         * Properties of a ClearSideBlocksRequest.
+         * @memberof p2p
+         * @interface IClearSideBlocksRequest
+         */
+
+        /**
+         * Constructs a new ClearSideBlocksRequest.
+         * @memberof p2p
+         * @classdesc Represents a ClearSideBlocksRequest.
+         * @implements IClearSideBlocksRequest
+         * @constructor
+         * @param {p2p.IClearSideBlocksRequest=} [properties] Properties to set
+         */
+        function ClearSideBlocksRequest(properties) {
+            if (properties)
+                for (var keys = Object.keys(properties), i = 0; i < keys.length; ++i)
+                    if (properties[keys[i]] != null)
+                        this[keys[i]] = properties[keys[i]];
+        }
+
+        /**
+         * Creates a new ClearSideBlocksRequest instance using the specified properties.
+         * @function create
+         * @memberof p2p.ClearSideBlocksRequest
+         * @static
+         * @param {p2p.IClearSideBlocksRequest=} [properties] Properties to set
+         * @returns {p2p.ClearSideBlocksRequest} ClearSideBlocksRequest instance
+         */
+        ClearSideBlocksRequest.create = function create(properties) {
+            return new ClearSideBlocksRequest(properties);
+        };
+
+        /**
+         * Encodes the specified ClearSideBlocksRequest message. Does not implicitly {@link p2p.ClearSideBlocksRequest.verify|verify} messages.
+         * @function encode
+         * @memberof p2p.ClearSideBlocksRequest
+         * @static
+         * @param {p2p.IClearSideBlocksRequest} message ClearSideBlocksRequest message or plain object to encode
+         * @param {$protobuf.Writer} [writer] Writer to encode to
+         * @returns {$protobuf.Writer} Writer
+         */
+        ClearSideBlocksRequest.encode = function encode(message, writer) {
+            if (!writer)
+                writer = $Writer.create();
+            return writer;
+        };
+
+        /**
+         * Encodes the specified ClearSideBlocksRequest message, length delimited. Does not implicitly {@link p2p.ClearSideBlocksRequest.verify|verify} messages.
+         * @function encodeDelimited
+         * @memberof p2p.ClearSideBlocksRequest
+         * @static
+         * @param {p2p.IClearSideBlocksRequest} message ClearSideBlocksRequest message or plain object to encode
+         * @param {$protobuf.Writer} [writer] Writer to encode to
+         * @returns {$protobuf.Writer} Writer
+         */
+        ClearSideBlocksRequest.encodeDelimited = function encodeDelimited(message, writer) {
+            return this.encode(message, writer).ldelim();
+        };
+
+        /**
+         * Decodes a ClearSideBlocksRequest message from the specified reader or buffer.
+         * @function decode
+         * @memberof p2p.ClearSideBlocksRequest
+         * @static
+         * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
+         * @param {number} [length] Message length if known beforehand
+         * @returns {p2p.ClearSideBlocksRequest} ClearSideBlocksRequest
+         * @throws {Error} If the payload is not a reader or valid buffer
+         * @throws {$protobuf.util.ProtocolError} If required fields are missing
+         */
+        ClearSideBlocksRequest.decode = function decode(reader, length, error) {
+            if (!(reader instanceof $Reader))
+                reader = $Reader.create(reader);
+            var end = length === undefined ? reader.len : reader.pos + length, message = new $root.p2p.ClearSideBlocksRequest();
+            while (reader.pos < end) {
+                var tag = reader.uint32();
+                if (tag === error)
+                    break;
+                switch (tag >>> 3) {
+                default:
+                    reader.skipType(tag & 7);
+                    break;
+                }
+            }
+            return message;
+        };
+
+        /**
+         * Decodes a ClearSideBlocksRequest message from the specified reader or buffer, length delimited.
+         * @function decodeDelimited
+         * @memberof p2p.ClearSideBlocksRequest
+         * @static
+         * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
+         * @returns {p2p.ClearSideBlocksRequest} ClearSideBlocksRequest
+         * @throws {Error} If the payload is not a reader or valid buffer
+         * @throws {$protobuf.util.ProtocolError} If required fields are missing
+         */
+        ClearSideBlocksRequest.decodeDelimited = function decodeDelimited(reader) {
+            if (!(reader instanceof $Reader))
+                reader = new $Reader(reader);
+            return this.decode(reader, reader.uint32());
+        };
+
+        /**
+         * Verifies a ClearSideBlocksRequest message.
+         * @function verify
+         * @memberof p2p.ClearSideBlocksRequest
+         * @static
+         * @param {Object.<string,*>} message Plain object to verify
+         * @returns {string|null} `null` if valid, otherwise the reason why it is not
+         */
+        ClearSideBlocksRequest.verify = function verify(message) {
+            if (typeof message !== "object" || message === null)
+                return "object expected";
+            return null;
+        };
+
+        /**
+         * Creates a ClearSideBlocksRequest message from a plain object. Also converts values to their respective internal types.
+         * @function fromObject
+         * @memberof p2p.ClearSideBlocksRequest
+         * @static
+         * @param {Object.<string,*>} object Plain object
+         * @returns {p2p.ClearSideBlocksRequest} ClearSideBlocksRequest
+         */
+        ClearSideBlocksRequest.fromObject = function fromObject(object) {
+            if (object instanceof $root.p2p.ClearSideBlocksRequest)
+                return object;
+            return new $root.p2p.ClearSideBlocksRequest();
+        };
+
+        /**
+         * Creates a plain object from a ClearSideBlocksRequest message. Also converts values to other types if specified.
+         * @function toObject
+         * @memberof p2p.ClearSideBlocksRequest
+         * @static
+         * @param {p2p.ClearSideBlocksRequest} message ClearSideBlocksRequest
+         * @param {$protobuf.IConversionOptions} [options] Conversion options
+         * @returns {Object.<string,*>} Plain object
+         */
+        ClearSideBlocksRequest.toObject = function toObject() {
+            return {};
+        };
+
+        /**
+         * Converts this ClearSideBlocksRequest to JSON.
+         * @function toJSON
+         * @memberof p2p.ClearSideBlocksRequest
+         * @instance
+         * @returns {Object.<string,*>} JSON object
+         */
+        ClearSideBlocksRequest.prototype.toJSON = function toJSON() {
+            return this.constructor.toObject(this, $protobuf.util.toJSONOptions);
+        };
+
+        /**
+         * Gets the default type url for ClearSideBlocksRequest
+         * @function getTypeUrl
+         * @memberof p2p.ClearSideBlocksRequest
+         * @static
+         * @param {string} [typeUrlPrefix] your custom typeUrlPrefix(default "type.googleapis.com")
+         * @returns {string} The default type url
+         */
+        ClearSideBlocksRequest.getTypeUrl = function getTypeUrl(typeUrlPrefix) {
+            if (typeUrlPrefix === undefined) {
+                typeUrlPrefix = "type.googleapis.com";
+            }
+            return typeUrlPrefix + "/p2p.ClearSideBlocksRequest";
+        };
+
+        return ClearSideBlocksRequest;
+    })();
+
+    p2p.VerifySupplyRequest = (function() {
+
+        /**
+         * Properties of a VerifySupplyRequest.
+         * @memberof p2p
+         * @interface IVerifySupplyRequest
+         */
+
+        /**
+         * Constructs a new VerifySupplyRequest.
+         * @memberof p2p
+         * @classdesc Represents a VerifySupplyRequest.
+         * @implements IVerifySupplyRequest
+         * @constructor
+         * @param {p2p.IVerifySupplyRequest=} [properties] Properties to set
+         */
+        function VerifySupplyRequest(properties) {
+            if (properties)
+                for (var keys = Object.keys(properties), i = 0; i < keys.length; ++i)
+                    if (properties[keys[i]] != null)
+                        this[keys[i]] = properties[keys[i]];
+        }
+
+        /**
+         * Creates a new VerifySupplyRequest instance using the specified properties.
+         * @function create
+         * @memberof p2p.VerifySupplyRequest
+         * @static
+         * @param {p2p.IVerifySupplyRequest=} [properties] Properties to set
+         * @returns {p2p.VerifySupplyRequest} VerifySupplyRequest instance
+         */
+        VerifySupplyRequest.create = function create(properties) {
+            return new VerifySupplyRequest(properties);
+        };
+
+        /**
+         * Encodes the specified VerifySupplyRequest message. Does not implicitly {@link p2p.VerifySupplyRequest.verify|verify} messages.
+         * @function encode
+         * @memberof p2p.VerifySupplyRequest
+         * @static
+         * @param {p2p.IVerifySupplyRequest} message VerifySupplyRequest message or plain object to encode
+         * @param {$protobuf.Writer} [writer] Writer to encode to
+         * @returns {$protobuf.Writer} Writer
+         */
+        VerifySupplyRequest.encode = function encode(message, writer) {
+            if (!writer)
+                writer = $Writer.create();
+            return writer;
+        };
+
+        /**
+         * Encodes the specified VerifySupplyRequest message, length delimited. Does not implicitly {@link p2p.VerifySupplyRequest.verify|verify} messages.
+         * @function encodeDelimited
+         * @memberof p2p.VerifySupplyRequest
+         * @static
+         * @param {p2p.IVerifySupplyRequest} message VerifySupplyRequest message or plain object to encode
+         * @param {$protobuf.Writer} [writer] Writer to encode to
+         * @returns {$protobuf.Writer} Writer
+         */
+        VerifySupplyRequest.encodeDelimited = function encodeDelimited(message, writer) {
+            return this.encode(message, writer).ldelim();
+        };
+
+        /**
+         * Decodes a VerifySupplyRequest message from the specified reader or buffer.
+         * @function decode
+         * @memberof p2p.VerifySupplyRequest
+         * @static
+         * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
+         * @param {number} [length] Message length if known beforehand
+         * @returns {p2p.VerifySupplyRequest} VerifySupplyRequest
+         * @throws {Error} If the payload is not a reader or valid buffer
+         * @throws {$protobuf.util.ProtocolError} If required fields are missing
+         */
+        VerifySupplyRequest.decode = function decode(reader, length, error) {
+            if (!(reader instanceof $Reader))
+                reader = $Reader.create(reader);
+            var end = length === undefined ? reader.len : reader.pos + length, message = new $root.p2p.VerifySupplyRequest();
+            while (reader.pos < end) {
+                var tag = reader.uint32();
+                if (tag === error)
+                    break;
+                switch (tag >>> 3) {
+                default:
+                    reader.skipType(tag & 7);
+                    break;
+                }
+            }
+            return message;
+        };
+
+        /**
+         * Decodes a VerifySupplyRequest message from the specified reader or buffer, length delimited.
+         * @function decodeDelimited
+         * @memberof p2p.VerifySupplyRequest
+         * @static
+         * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
+         * @returns {p2p.VerifySupplyRequest} VerifySupplyRequest
+         * @throws {Error} If the payload is not a reader or valid buffer
+         * @throws {$protobuf.util.ProtocolError} If required fields are missing
+         */
+        VerifySupplyRequest.decodeDelimited = function decodeDelimited(reader) {
+            if (!(reader instanceof $Reader))
+                reader = new $Reader(reader);
+            return this.decode(reader, reader.uint32());
+        };
+
+        /**
+         * Verifies a VerifySupplyRequest message.
+         * @function verify
+         * @memberof p2p.VerifySupplyRequest
+         * @static
+         * @param {Object.<string,*>} message Plain object to verify
+         * @returns {string|null} `null` if valid, otherwise the reason why it is not
+         */
+        VerifySupplyRequest.verify = function verify(message) {
+            if (typeof message !== "object" || message === null)
+                return "object expected";
+            return null;
+        };
+
+        /**
+         * Creates a VerifySupplyRequest message from a plain object. Also converts values to their respective internal types.
+         * @function fromObject
+         * @memberof p2p.VerifySupplyRequest
+         * @static
+         * @param {Object.<string,*>} object Plain object
+         * @returns {p2p.VerifySupplyRequest} VerifySupplyRequest
+         */
+        VerifySupplyRequest.fromObject = function fromObject(object) {
+            if (object instanceof $root.p2p.VerifySupplyRequest)
+                return object;
+            return new $root.p2p.VerifySupplyRequest();
+        };
+
+        /**
+         * Creates a plain object from a VerifySupplyRequest message. Also converts values to other types if specified.
+         * @function toObject
+         * @memberof p2p.VerifySupplyRequest
+         * @static
+         * @param {p2p.VerifySupplyRequest} message VerifySupplyRequest
+         * @param {$protobuf.IConversionOptions} [options] Conversion options
+         * @returns {Object.<string,*>} Plain object
+         */
+        VerifySupplyRequest.toObject = function toObject() {
+            return {};
+        };
+
+        /**
+         * Converts this VerifySupplyRequest to JSON.
+         * @function toJSON
+         * @memberof p2p.VerifySupplyRequest
+         * @instance
+         * @returns {Object.<string,*>} JSON object
+         */
+        VerifySupplyRequest.prototype.toJSON = function toJSON() {
+            return this.constructor.toObject(this, $protobuf.util.toJSONOptions);
+        };
+
+        /**
+         * Gets the default type url for VerifySupplyRequest
+         * @function getTypeUrl
+         * @memberof p2p.VerifySupplyRequest
+         * @static
+         * @param {string} [typeUrlPrefix] your custom typeUrlPrefix(default "type.googleapis.com")
+         * @returns {string} The default type url
+         */
+        VerifySupplyRequest.getTypeUrl = function getTypeUrl(typeUrlPrefix) {
+            if (typeUrlPrefix === undefined) {
+                typeUrlPrefix = "type.googleapis.com";
+            }
+            return typeUrlPrefix + "/p2p.VerifySupplyRequest";
+        };
+
+        return VerifySupplyRequest;
+    })();
+
+    p2p.AuditDetailedRequest = (function() {
+
+        /**
+         * Properties of an AuditDetailedRequest.
+         * @memberof p2p
+         * @interface IAuditDetailedRequest
+         */
+
+        /**
+         * Constructs a new AuditDetailedRequest.
+         * @memberof p2p
+         * @classdesc Represents an AuditDetailedRequest.
+         * @implements IAuditDetailedRequest
+         * @constructor
+         * @param {p2p.IAuditDetailedRequest=} [properties] Properties to set
+         */
+        function AuditDetailedRequest(properties) {
+            if (properties)
+                for (var keys = Object.keys(properties), i = 0; i < keys.length; ++i)
+                    if (properties[keys[i]] != null)
+                        this[keys[i]] = properties[keys[i]];
+        }
+
+        /**
+         * Creates a new AuditDetailedRequest instance using the specified properties.
+         * @function create
+         * @memberof p2p.AuditDetailedRequest
+         * @static
+         * @param {p2p.IAuditDetailedRequest=} [properties] Properties to set
+         * @returns {p2p.AuditDetailedRequest} AuditDetailedRequest instance
+         */
+        AuditDetailedRequest.create = function create(properties) {
+            return new AuditDetailedRequest(properties);
+        };
+
+        /**
+         * Encodes the specified AuditDetailedRequest message. Does not implicitly {@link p2p.AuditDetailedRequest.verify|verify} messages.
+         * @function encode
+         * @memberof p2p.AuditDetailedRequest
+         * @static
+         * @param {p2p.IAuditDetailedRequest} message AuditDetailedRequest message or plain object to encode
+         * @param {$protobuf.Writer} [writer] Writer to encode to
+         * @returns {$protobuf.Writer} Writer
+         */
+        AuditDetailedRequest.encode = function encode(message, writer) {
+            if (!writer)
+                writer = $Writer.create();
+            return writer;
+        };
+
+        /**
+         * Encodes the specified AuditDetailedRequest message, length delimited. Does not implicitly {@link p2p.AuditDetailedRequest.verify|verify} messages.
+         * @function encodeDelimited
+         * @memberof p2p.AuditDetailedRequest
+         * @static
+         * @param {p2p.IAuditDetailedRequest} message AuditDetailedRequest message or plain object to encode
+         * @param {$protobuf.Writer} [writer] Writer to encode to
+         * @returns {$protobuf.Writer} Writer
+         */
+        AuditDetailedRequest.encodeDelimited = function encodeDelimited(message, writer) {
+            return this.encode(message, writer).ldelim();
+        };
+
+        /**
+         * Decodes an AuditDetailedRequest message from the specified reader or buffer.
+         * @function decode
+         * @memberof p2p.AuditDetailedRequest
+         * @static
+         * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
+         * @param {number} [length] Message length if known beforehand
+         * @returns {p2p.AuditDetailedRequest} AuditDetailedRequest
+         * @throws {Error} If the payload is not a reader or valid buffer
+         * @throws {$protobuf.util.ProtocolError} If required fields are missing
+         */
+        AuditDetailedRequest.decode = function decode(reader, length, error) {
+            if (!(reader instanceof $Reader))
+                reader = $Reader.create(reader);
+            var end = length === undefined ? reader.len : reader.pos + length, message = new $root.p2p.AuditDetailedRequest();
+            while (reader.pos < end) {
+                var tag = reader.uint32();
+                if (tag === error)
+                    break;
+                switch (tag >>> 3) {
+                default:
+                    reader.skipType(tag & 7);
+                    break;
+                }
+            }
+            return message;
+        };
+
+        /**
+         * Decodes an AuditDetailedRequest message from the specified reader or buffer, length delimited.
+         * @function decodeDelimited
+         * @memberof p2p.AuditDetailedRequest
+         * @static
+         * @param {$protobuf.Reader|Uint8Array} reader Reader or buffer to decode from
+         * @returns {p2p.AuditDetailedRequest} AuditDetailedRequest
+         * @throws {Error} If the payload is not a reader or valid buffer
+         * @throws {$protobuf.util.ProtocolError} If required fields are missing
+         */
+        AuditDetailedRequest.decodeDelimited = function decodeDelimited(reader) {
+            if (!(reader instanceof $Reader))
+                reader = new $Reader(reader);
+            return this.decode(reader, reader.uint32());
+        };
+
+        /**
+         * Verifies an AuditDetailedRequest message.
+         * @function verify
+         * @memberof p2p.AuditDetailedRequest
+         * @static
+         * @param {Object.<string,*>} message Plain object to verify
+         * @returns {string|null} `null` if valid, otherwise the reason why it is not
+         */
+        AuditDetailedRequest.verify = function verify(message) {
+            if (typeof message !== "object" || message === null)
+                return "object expected";
+            return null;
+        };
+
+        /**
+         * Creates an AuditDetailedRequest message from a plain object. Also converts values to their respective internal types.
+         * @function fromObject
+         * @memberof p2p.AuditDetailedRequest
+         * @static
+         * @param {Object.<string,*>} object Plain object
+         * @returns {p2p.AuditDetailedRequest} AuditDetailedRequest
+         */
+        AuditDetailedRequest.fromObject = function fromObject(object) {
+            if (object instanceof $root.p2p.AuditDetailedRequest)
+                return object;
+            return new $root.p2p.AuditDetailedRequest();
+        };
+
+        /**
+         * Creates a plain object from an AuditDetailedRequest message. Also converts values to other types if specified.
+         * @function toObject
+         * @memberof p2p.AuditDetailedRequest
+         * @static
+         * @param {p2p.AuditDetailedRequest} message AuditDetailedRequest
+         * @param {$protobuf.IConversionOptions} [options] Conversion options
+         * @returns {Object.<string,*>} Plain object
+         */
+        AuditDetailedRequest.toObject = function toObject() {
+            return {};
+        };
+
+        /**
+         * Converts this AuditDetailedRequest to JSON.
+         * @function toJSON
+         * @memberof p2p.AuditDetailedRequest
+         * @instance
+         * @returns {Object.<string,*>} JSON object
+         */
+        AuditDetailedRequest.prototype.toJSON = function toJSON() {
+            return this.constructor.toObject(this, $protobuf.util.toJSONOptions);
+        };
+
+        /**
+         * Gets the default type url for AuditDetailedRequest
+         * @function getTypeUrl
+         * @memberof p2p.AuditDetailedRequest
+         * @static
+         * @param {string} [typeUrlPrefix] your custom typeUrlPrefix(default "type.googleapis.com")
+         * @returns {string} The default type url
+         */
+        AuditDetailedRequest.getTypeUrl = function getTypeUrl(typeUrlPrefix) {
+            if (typeUrlPrefix === undefined) {
+                typeUrlPrefix = "type.googleapis.com";
+            }
+            return typeUrlPrefix + "/p2p.AuditDetailedRequest";
+        };
+
+        return AuditDetailedRequest;
     })();
 
     return p2p;

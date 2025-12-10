@@ -120,3 +120,38 @@ pub const DOMAIN_VRF_CHALLENGE: &[u8]    = b"pluribit_vrf_challenge_v1";
 pub const DOMAIN_VRF_OUTPUT: &[u8]       = b"pluribit_vrf_output_v1";
 pub const DOMAIN_BLOCK_HASH: &[u8]       = b"pluribit_block_v3";
 pub const DOMAIN_TX_HASH: &[u8]          = b"pluribit_tx_v2";
+// ─── P2P Topic Templates ───────────────────────────────────────────────────────
+// The {} placeholder is for the network name (e.g. "mainnet", "testnet")
+// These MUST match the definitions in libp2p-node.js
+
+// Core Chain Topics
+pub const TOPIC_BLOCKS: &str = "/pluribit/{}/blocks/1.0.0.1";
+pub const TOPIC_TRANSACTIONS: &str = "/pluribit/{}/transactions/1.0.0.1";
+pub const TOPIC_BLOCK_ANNOUNCEMENTS: &str = "/pluribit/{}/block-announcements/1.0.0.1";
+
+// Sync & Request Topics
+pub const TOPIC_BLOCK_REQUEST: &str = "/pluribit/{}/block-request/1.0.0.1";
+pub const TOPIC_SYNC: &str = "/pluribit/{}/sync/1.0.0.1";
+pub const TOPIC_GET_HASHES_REQUEST: &str = "/pluribit/{}/get-hashes-request/1.0.0.1";
+pub const TOPIC_HASHES_RESPONSE: &str = "/pluribit/{}/hashes-response/1.0.0.1";
+
+// Dandelion Privacy
+pub const TOPIC_DANDELION_STEM: &str = "/pluribit/{}/dandelion-stem/1.0.0.1";
+
+// Peer Exchange
+pub const PROTOCOL_PEX: &str = "/pluribit/{}/pex/1.0.0.1";
+
+// L2: Payment Channels
+pub const TOPIC_CHANNEL_PROPOSE: &str = "/pluribit/{}/channel-propose/1.0.0.1";
+pub const TOPIC_CHANNEL_ACCEPT: &str = "/pluribit/{}/channel-accept/1.0.0.1";
+pub const TOPIC_CHANNEL_FUND_NONCE: &str = "/pluribit/{}/channel-fund-nonce/1.0.0.1";
+pub const TOPIC_CHANNEL_FUND_SIG: &str = "/pluribit/{}/channel-fund-sig/1.0.0.1";
+pub const TOPIC_CHANNEL_PAY_PROPOSE: &str = "/pluribit/{}/channel-pay-propose/1.0.0.1";
+pub const TOPIC_CHANNEL_PAY_ACCEPT: &str = "/pluribit/{}/channel-pay-accept/1.0.0.1";
+pub const TOPIC_CHANNEL_CLOSE_NONCE: &str = "/pluribit/{}/channel-close-nonce/1.0.0.1";
+pub const TOPIC_CHANNEL_CLOSE_SIG: &str = "/pluribit/{}/channel-close-sig/1.0.0.1";
+
+// L2: Atomic Swaps
+pub const TOPIC_SWAP_PROPOSE: &str = "/pluribit/{}/swap-propose/1.0.0.1";
+pub const TOPIC_SWAP_RESPOND: &str = "/pluribit/{}/swap-respond/1.0.0.1";
+pub const TOPIC_SWAP_ALICE_ADAPTOR_SIG: &str = "/pluribit/{}/swap-alice-sig/1.0.0.1";

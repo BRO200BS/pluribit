@@ -958,6 +958,95 @@ pub fn is_wallet_encrypted(mut cx: FunctionContext) -> JsResult<JsBoolean> {
     Ok(cx.boolean(encrypted))
 }
 
+/// (JS: save_channel(id, data))
+/// Args: 0: id (JsString), 1: data (JsString - JSON serialization)
+pub fn save_channel(mut cx: FunctionContext) -> JsResult<JsUndefined> {
+    let id = cx.argument::<JsString>(0)?.value(&mut cx);
+    let data = cx.argument::<JsString>(1)?.value(&mut cx);
+
+    with_db(|db| {
+        let key = format!("channel:{}", id);
+        db.put(key.as_bytes(), data.as_bytes())
+            .map_err(|e| format!("Failed to save channel: {}", e))
+    }).or_else(|e| cx.throw_error(e))?;
+
+    Ok(cx.undefined())
+}
+
+/// (JS: load_channel(id))
+/// Args: 0: id (JsString)
+pub fn load_channel(mut cx: FunctionContext) -> JsResult<JsValue> {
+    let id = cx.argument::<JsString>(0)?.value(&mut cx);
+
+    let result = with_db(|db| {
+        let key = format!("channel:{}", id);
+        db.get(key.as_bytes())
+            .map_err(|e| format!("Failed to load channel: {}", e))?
+            .ok_or_else(|| "Channel not found".to_string())
+    });
+
+    match result {
+        Ok(data) => {
+            let json_str = String::from_utf8(data).unwrap_or_default();
+            Ok(cx.string(json_str).upcast())
+        },
+        Err(_) => Ok(cx.null().upcast())
+    }
+}
+/// (JS: clear_all_coinbase_indexes())
+/// Deletes all coinbase indexes from the database.
+pub fn clear_all_coinbase_indexes(mut cx: FunctionContext) -> JsResult<JsUndefined> {
+    with_db(|db| {
+        let mut batch = WriteBatch::default();
+        let iter = db.iterator(IteratorMode::From(b"cbidx:", Direction::Forward));
+        
+        for item in iter {
+            let (key, _) = item.map_err(|e| format!("Iterator error: {}", e))?;
+            let key_str = String::from_utf8_lossy(&key);
+            
+            if !key_str.starts_with("cbidx:") {
+                break;
+            }
+            batch.delete(&key);
+        }
+        db.write(batch).map_err(|e| format!("Failed to clear coinbase indexes: {}", e))
+    }).or_else(|e| cx.throw_error(e))?;
+    
+    Ok(cx.undefined())
+}
+/// (JS: save_atomic_swap(id, data))
+pub fn save_atomic_swap(mut cx: FunctionContext) -> JsResult<JsUndefined> {
+    let id = cx.argument::<JsString>(0)?.value(&mut cx);
+    let data = cx.argument::<JsString>(1)?.value(&mut cx);
+
+    with_db(|db| {
+        let key = format!("swap:{}", id);
+        db.put(key.as_bytes(), data.as_bytes())
+            .map_err(|e| format!("Failed to save swap: {}", e))
+    }).or_else(|e| cx.throw_error(e))?;
+
+    Ok(cx.undefined())
+}
+
+/// (JS: load_atomic_swap(id))
+pub fn load_atomic_swap(mut cx: FunctionContext) -> JsResult<JsValue> {
+    let id = cx.argument::<JsString>(0)?.value(&mut cx);
+
+    let result = with_db(|db| {
+        let key = format!("swap:{}", id);
+        db.get(key.as_bytes())
+            .map_err(|e| format!("Failed to load swap: {}", e))?
+            .ok_or_else(|| "Swap not found".to_string())
+    });
+
+    match result {
+        Ok(data) => {
+            let json_str = String::from_utf8(data).unwrap_or_default();
+            Ok(cx.string(json_str).upcast())
+        },
+        Err(_) => Ok(cx.null().upcast())
+    }
+}
 /// (JS: saveDeferredBlock(block))
 /// Saves a deferred block (Protobuf encoded).
 /// Args: 0: block (JsValue object)

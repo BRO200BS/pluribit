@@ -309,6 +309,7 @@ impl From<Block> for p2p::Block {
     }
 }
 
+
 #[cfg(test)]
 mod tests {
     use super::*;
