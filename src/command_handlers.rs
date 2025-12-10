@@ -2245,17 +2245,62 @@ pub async fn handle_swap_claim_internal(req: p2p::SwapClaimRequest) {
 pub async fn handle_inspect_block_internal(req: p2p::InspectBlockRequest) {
     let mut response = p2p::RustToJsCommandBatch::default();
     
-    // Use the existing DB helper
     match load_block_from_db(req.height).await {
         Ok(Some(block)) => {
-            add_log_command(&mut response, "info", "=== Block Inspection ===");
-            add_log_command(&mut response, "info", &format!("Height: {}", block.height));
-            add_log_command(&mut response, "info", &format!("Hash: {}", block.hash));
-            add_log_command(&mut response, "info", &format!("Prev: {}", block.prev_hash));
-            add_log_command(&mut response, "info", &format!("Tx Count: {}", block.transactions.len()));
-            add_log_command(&mut response, "info", &format!("Work: {}", block.total_work));
-            add_log_command(&mut response, "info", &format!("VRF Out: {}", hex::encode(&block.vrf_proof.output)));
-            add_log_command(&mut response, "info", "========================");
+            // --- Derive Miner Details ---
+            let miner_id = crate::address::encode_stealth_address(&block.miner_pubkey)
+                .unwrap_or_else(|_| "Invalid Key".to_string());
+            let miner_hex = hex::encode(&block.miner_pubkey);
+
+            // --- Format Hex Fields ---
+            let vrf_threshold_hex = hex::encode(&block.vrf_threshold);
+            let vrf_output_hex = hex::encode(&block.vrf_proof.output);
+            let merkle_root_hex = hex::encode(&block.tx_merkle_root);
+            
+            // --- Helper for byte size ---
+            let size_approx = block.transactions.iter()
+                .map(|tx| tx.inputs.len() * 32 + tx.outputs.len() * 32 + tx.kernels.len() * 100)
+                .sum::<usize>();
+
+            // --- UI Output ---
+            add_log_command(&mut response, "info", "══════════════════ BLOCK INSPECTION ══════════════════");
+            
+            // Header Info
+            add_log_command(&mut response, "info", &format!("Height:        {}", block.height));
+            add_log_command(&mut response, "info", &format!("Hash:          {}", block.hash));
+            add_log_command(&mut response, "info", &format!("Prev Hash:     {}", block.prev_hash));
+            add_log_command(&mut response, "info", &format!("Timestamp:     {} (ms)", block.timestamp));
+            add_log_command(&mut response, "info", "──────────────────────────────────────────────────────");
+            
+            // Miner / Consensus
+            add_log_command(&mut response, "info", &format!("Miner:         {}", miner_id));
+            add_log_command(&mut response, "info",   &format!("Miner Pubkey:  {}", miner_hex));
+            add_log_command(&mut response, "info",    &format!("Nonce:         {}", block.lottery_nonce));
+            add_log_command(&mut response, "info",    &format!("Total Work:    {}", block.total_work));
+            add_log_command(&mut response, "info", "──────────────────────────────────────────────────────");
+            
+            // Difficulty Parameters
+            add_log_command(&mut response, "info",    &format!("VRF Threshold: {}", vrf_threshold_hex));
+            add_log_command(&mut response, "info",    &format!("VDF Iters:     {}", block.vdf_iterations));
+            add_log_command(&mut response, "info",   &format!("VRF Output:    {}", vrf_output_hex));
+            
+            // Data / Merkle
+            add_log_command(&mut response, "info", "──────────────────────────────────────────────────────");
+            add_log_command(&mut response, "info",    &format!("Merkle Root:   {}", merkle_root_hex));
+            add_log_command(&mut response, "info",    &format!("Transactions:  {}", block.transactions.len()));
+            add_log_command(&mut response, "info",   &format!("Approx Size:   {} bytes", size_approx));
+
+            // Coinbase details (first transaction)
+            if let Some(coinbase) = block.transactions.first() {
+                if coinbase.inputs.is_empty() {
+                    add_log_command(&mut response, "info", &format!("Coinbase Outs: {}", coinbase.outputs.len()));
+                    // Show the kernel excess (public commitment to the reward + fees)
+                    if let Some(kernel) = coinbase.kernels.first() {
+                         add_log_command(&mut response, "info", &format!("Coinbase Kern: {}", hex::encode(&kernel.excess)));
+                    }
+                }
+            }
+            add_log_command(&mut response, "info", "══════════════════════════════════════════════════════");
         }
         Ok(None) => {
             add_log_command(&mut response, "error", &format!("Block at height {} not found in DB.", req.height));

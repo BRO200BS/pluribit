@@ -313,7 +313,11 @@ async function handleCommand(command, args) {
             break;
 
         case 'whodid':
-            worker.postMessage({ action: 'checkMiners' });
+            if (args[0]) {
+                worker.postMessage({ action: 'checkMiners', height: args[0] });
+            } else {
+                console.log('Usage: whodid <height>');
+            }
             break;
 
         case 'create':

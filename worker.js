@@ -522,6 +522,9 @@ async function main() {
         else if (action === 'inspectBlock') {
             cmdObj = { inspectBlock: { height: rest.height.toString() } };
         }
+        else if (action === 'checkMiners') {
+            cmdObj = { inspectBlock: { height: rest.height.toString() } };
+        }
         else if (action === 'purgeSideBlocks') {
             cmdObj = { purgeSideBlocks: {} };
         }
